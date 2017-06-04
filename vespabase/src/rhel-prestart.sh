@@ -71,8 +71,10 @@ fixdir () {
         exit 1
     fi
     mkdir -p "$4"
-    chown $1 "$4"
-    chgrp $2 "$4"
+    if test $(id -u) -eq 0; then
+      chown $1 "$4"
+      chgrp $2 "$4"
+    fi
     chmod $3 "$4"
 }
 
@@ -104,8 +106,10 @@ fixdir ${VESPA_USER} wheel  755  var/vespa/bundlecache/configserver
 fixdir ${VESPA_USER} wheel  755  var/vespa/cache/config/
 fixdir ${VESPA_USER} wheel  775  libexec/vespa/modelplugins
 
-chown -hR ${VESPA_USER} logs/vespa
-chown -hR ${VESPA_USER} var/db/vespa
+if test $(id -u) -eq 0; then
+  chown -hR ${VESPA_USER} logs/vespa
+  chown -hR ${VESPA_USER} var/db/vespa
+fi
 
 # END directory fixups
 
