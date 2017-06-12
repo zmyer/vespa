@@ -10,4 +10,4 @@ VERSION="$1"
 
 mkdir -p ~/rpmbuild/{SOURCES,SPECS}
 GZIP=-1 tar -zcf ~/rpmbuild/SOURCES/vespa-$VERSION.tar.gz --transform "flags=r;s,^,vespa-$VERSION/," *
-sed -e "s,^Version: .*,Version: $VERSION,"  < dist/vespa.spec > ~/rpmbuild/SPECS/vespa-$VERSION.spec
+sed -e "s,^Version: .*,Version: $VERSION,"  < vespa.spec > ~/rpmbuild/SPECS/vespa-$VERSION.spec
