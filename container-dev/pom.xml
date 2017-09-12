@@ -125,6 +125,10 @@
           <groupId>commons-lang</groupId>
           <artifactId>commons-lang</artifactId>
         </exclusion>
+        <exclusion>
+          <groupId>net.jpountz.lz4</groupId>
+          <artifactId>lz4</artifactId>
+        </exclusion>
       </exclusions>
     </dependency>
     <dependency>
@@ -152,6 +156,10 @@
       <artifactId>config-bundle</artifactId>
       <version>${project.version}</version>
       <exclusions>
+        <exclusion>
+          <groupId>net.jpountz.lz4</groupId>
+          <artifactId>lz4</artifactId>
+        </exclusion>
         <exclusion>
           <!-- TODO: Remove exclusion when scala-xml is excluded in config-bundle pom -->
           <groupId>org.scala-lang.modules</groupId>
