@@ -30,6 +30,26 @@ public class MapReader {
     public static final String MAP_VALUE = "value";
     public static final String UPDATE_ELEMENT = "element";
     public static final String UPDATE_MATCH = "match";
+    private final static class AverageSize {
+        private long size = 0;
+        private long count = 1;
+        AverageSize(int initialSize) {
+            size = initialSize;
+        }
+        public void updateAverage(int sz) {
+            size += size;
+            count++;
+        }
+        public int getValue() {
+            return (int)(size/count);
+        }
+    }
+    private static ThreadLocal<AverageSize> averageBufferSize = new ThreadLocal<AverageSize>() {
+        @Override
+        protected AverageSize initialValue() {
+            return new AverageSize(4096);
+        }
+    };
 
     public static void fillMap(TokenBuffer buffer, MapFieldValue parent) {
         if (buffer.currentToken() == JsonToken.START_ARRAY) {
@@ -76,7 +96,7 @@ public class MapReader {
         token = buffer.next();
         DataType keyType = parent.getDataType().getKeyType();
         DataType valueType = parent.getDataType().getValueType();
-        GrowableByteBuffer backing = new GrowableByteBuffer(65536);
+        GrowableByteBuffer backing = new GrowableByteBuffer(averageBufferSize.get().getValue()*2);
         while (buffer.nesting() >= initNesting) {
             FieldValue key = readAtomic(buffer.currentName(), keyType);
             FieldValue value = readSingleValue(buffer, valueType, backing);
@@ -85,6 +105,7 @@ public class MapReader {
             parent.put(key, value);
             token = buffer.next();
         }
+        averageBufferSize.get().updateAverage(backing.position());
         expectObjectEnd(token);
     }
 
