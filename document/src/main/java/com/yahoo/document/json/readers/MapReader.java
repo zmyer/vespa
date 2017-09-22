@@ -37,7 +37,7 @@ public class MapReader {
             size = initialSize;
         }
         public void updateAverage(int sz) {
-            size += size;
+            size += sz;
             count++;
         }
         public int getValue() {
