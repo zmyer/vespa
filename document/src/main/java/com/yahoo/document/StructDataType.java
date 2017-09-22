@@ -6,6 +6,7 @@ import com.yahoo.document.datatypes.FieldValue;
 import com.yahoo.document.datatypes.ImmutableStruct;
 import com.yahoo.document.datatypes.Struct;
 import com.yahoo.document.datatypes.StructuredFieldValue;
+import com.yahoo.io.GrowableByteBuffer;
 import com.yahoo.vespa.objects.Ids;
 
 import java.util.ArrayList;
@@ -34,8 +35,8 @@ public class StructDataType extends BaseStructDataType {
     }
 
     @Override
-    public FieldValue createImmutableFieldValue() {
-        return new ImmutableStruct(this, getFieldCount());
+    public FieldValue createImmutableFieldValue(GrowableByteBuffer backing) {
+        return new ImmutableStruct(this, getFieldCount(), backing);
     }
 
     @Override

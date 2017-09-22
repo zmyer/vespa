@@ -9,6 +9,7 @@ import com.yahoo.document.ReferenceDataType;
 import com.yahoo.document.datatypes.FieldValue;
 import com.yahoo.document.json.TokenBuffer;
 import com.yahoo.document.update.ValueUpdate;
+import com.yahoo.io.GrowableByteBuffer;
 import org.apache.commons.codec.binary.Base64;
 
 import java.util.HashMap;
@@ -40,14 +41,17 @@ public class SingleValueReader {
         arithmeticExpressionPattern = Pattern.compile("^\\$\\w+\\s*([" + validSigns + "])\\s*(\\d+(.\\d+)?)$");
     }
 
-    public static FieldValue readSingleValue(TokenBuffer buffer, DataType expectedType) {
+    public static FieldValue readSingleValue(TokenBuffer buffer, DataType expectedType, GrowableByteBuffer backing) {
         if (buffer.currentToken().isScalarValue()) {
             return readAtomic(buffer.currentText(), expectedType);
         } else {
-            FieldValue fieldValue = expectedType.createImmutableFieldValue();
+            FieldValue fieldValue = expectedType.createImmutableFieldValue(backing);
             CompositeReader.populateComposite(buffer, fieldValue);
             return fieldValue;
         }
+    }
+    public static FieldValue readSingleValue(TokenBuffer buffer, DataType expectedType) {
+        return readSingleValue(buffer, expectedType, null);
     }
 
     @SuppressWarnings("rawtypes")

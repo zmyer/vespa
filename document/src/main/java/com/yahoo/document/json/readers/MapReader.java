@@ -16,6 +16,7 @@ import com.yahoo.document.datatypes.MapFieldValue;
 import com.yahoo.document.json.TokenBuffer;
 import com.yahoo.document.update.MapValueUpdate;
 import com.yahoo.document.update.ValueUpdate;
+import com.yahoo.io.GrowableByteBuffer;
 
 import static com.yahoo.document.json.readers.JsonParserHelpers.expectArrayStart;
 import static com.yahoo.document.json.readers.JsonParserHelpers.expectObjectEnd;
@@ -75,9 +76,10 @@ public class MapReader {
         token = buffer.next();
         DataType keyType = parent.getDataType().getKeyType();
         DataType valueType = parent.getDataType().getValueType();
+        GrowableByteBuffer backing = new GrowableByteBuffer(4096);
         while (buffer.nesting() >= initNesting) {
             FieldValue key = readAtomic(buffer.currentName(), keyType);
-            FieldValue value = readSingleValue(buffer, valueType);
+            FieldValue value = readSingleValue(buffer, valueType, backing);
 
             Preconditions.checkState(key != null && value != null, "Missing key or value for map entry.");
             parent.put(key, value);

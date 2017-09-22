@@ -23,14 +23,16 @@ public final class ImmutableStruct extends StructuredFieldValue {
     private int fieldCount = 0;
     private final Field [] fields;
     private final int [] offsets;
-    private final GrowableByteBuffer buffer = new GrowableByteBuffer(512);
-    private final VespaDocumentSerializerHead serializer = new VespaDocumentSerializerHead(buffer);
+    private final GrowableByteBuffer buffer;
+    private final VespaDocumentSerializerHead serializer;
 
-    public ImmutableStruct(StructDataType dataType, int maxFieldCount) {
+    public ImmutableStruct(StructDataType dataType, int maxFieldCount, GrowableByteBuffer backing) {
         super(dataType);
+        buffer = (backing == null) ? new GrowableByteBuffer(1024) : backing;
+        serializer = new VespaDocumentSerializerHead(buffer);
         fields = new Field[maxFieldCount];
         offsets = new int[maxFieldCount+1];
-        offsets[0] = 0;
+        offsets[0] = buffer.position();
     }
     private int findField(Field id) {
         int index = -1;
@@ -190,7 +192,7 @@ public final class ImmutableStruct extends StructuredFieldValue {
         }
     }
     public GrowableByteBuffer getRawBuffer(List<Integer> fieldIds, List<Integer> fieldLengths) {
-        GrowableByteBuffer buf = new GrowableByteBuffer(4096, 2.0f);
+        GrowableByteBuffer buf = new GrowableByteBuffer(1024, 2.0f);
         Integer [] order = new Integer[fieldCount];
         for (int i = 0; i < fieldCount; i++) {
             order[i] = i;

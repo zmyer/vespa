@@ -13,6 +13,7 @@ import com.yahoo.document.datatypes.PredicateFieldValue;
 import com.yahoo.document.datatypes.Raw;
 import com.yahoo.document.datatypes.StringFieldValue;
 import com.yahoo.document.datatypes.UriFieldValue;
+import com.yahoo.io.GrowableByteBuffer;
 import com.yahoo.tensor.TensorType;
 import com.yahoo.vespa.objects.Identifiable;
 import com.yahoo.vespa.objects.Ids;
@@ -96,7 +97,7 @@ public abstract class DataType extends Identifiable implements Serializable, Com
     /** Creates a new, empty FieldValue of this type */
     public abstract FieldValue createFieldValue();
 
-    public FieldValue createImmutableFieldValue() {
+    public FieldValue createImmutableFieldValue(GrowableByteBuffer buf) {
         return createFieldValue();
     }
 
