@@ -24,6 +24,7 @@ public final class ImmutableStruct extends StructuredFieldValue {
     private final Field [] fields;
     private final int [] offsets;
     private final GrowableByteBuffer buffer = new GrowableByteBuffer(1024);
+    private final VespaDocumentSerializerHead serializer = new VespaDocumentSerializerHead(buffer);
 
     public ImmutableStruct(StructDataType dataType, int maxFieldCount) {
         super(dataType);
@@ -77,7 +78,7 @@ public final class ImmutableStruct extends StructuredFieldValue {
         if (index >= 0) {
             throw new IllegalStateException("Field " + field + " already exist at index " + index);
         }
-        VespaDocumentSerializerHead serializer = new VespaDocumentSerializerHead(buffer);
+
         value.serialize(null, serializer);
         fields[fieldCount++] = field;
         offsets[fieldCount] = buffer.position();
