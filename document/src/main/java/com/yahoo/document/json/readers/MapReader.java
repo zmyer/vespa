@@ -76,7 +76,7 @@ public class MapReader {
         token = buffer.next();
         DataType keyType = parent.getDataType().getKeyType();
         DataType valueType = parent.getDataType().getValueType();
-        GrowableByteBuffer backing = new GrowableByteBuffer(4096);
+        GrowableByteBuffer backing = new GrowableByteBuffer(65536);
         while (buffer.nesting() >= initNesting) {
             FieldValue key = readAtomic(buffer.currentName(), keyType);
             FieldValue value = readSingleValue(buffer, valueType, backing);
