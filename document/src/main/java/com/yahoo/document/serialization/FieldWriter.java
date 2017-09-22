@@ -9,6 +9,7 @@ import com.yahoo.document.datatypes.CollectionFieldValue;
 import com.yahoo.document.datatypes.DoubleFieldValue;
 import com.yahoo.document.datatypes.FieldValue;
 import com.yahoo.document.datatypes.FloatFieldValue;
+import com.yahoo.document.datatypes.ImmutableStruct;
 import com.yahoo.document.datatypes.IntegerFieldValue;
 import com.yahoo.document.datatypes.LongFieldValue;
 import com.yahoo.document.datatypes.MapFieldValue;
@@ -193,6 +194,16 @@ public interface FieldWriter extends Serializer {
      *            field value
      */
     void write(FieldBase field, StructuredFieldValue value);
+
+    /**
+     * Write out the value of structured field
+     *
+     * @param field
+     *            field description (name and data type)
+     * @param value
+     *            field value
+     */
+    void write(FieldBase field, ImmutableStruct value);
 
     /**
      * Write out the value of weighted set field

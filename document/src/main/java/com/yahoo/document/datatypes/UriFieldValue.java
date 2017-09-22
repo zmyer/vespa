@@ -15,7 +15,7 @@ import java.net.URI;
  * Date: 11/2/12
  * Time: 2:37 PM
  */
-public class UriFieldValue extends StringFieldValue {
+public final class UriFieldValue extends StringFieldValue {
     public static class Factory extends PrimitiveDataType.Factory {
         public FieldValue create() {
             return new UriFieldValue();

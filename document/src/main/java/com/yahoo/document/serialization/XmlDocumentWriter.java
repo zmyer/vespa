@@ -12,6 +12,7 @@ import com.yahoo.document.datatypes.CollectionFieldValue;
 import com.yahoo.document.datatypes.DoubleFieldValue;
 import com.yahoo.document.datatypes.FieldValue;
 import com.yahoo.document.datatypes.FloatFieldValue;
+import com.yahoo.document.datatypes.ImmutableStruct;
 import com.yahoo.document.datatypes.IntegerFieldValue;
 import com.yahoo.document.datatypes.LongFieldValue;
 import com.yahoo.document.datatypes.MapFieldValue;
@@ -326,6 +327,11 @@ public final class XmlDocumentWriter implements DocumentWriter {
     public void write(DocumentType type) {
         throw new UnsupportedOperationException("Writing a DocumentId as XML is not implemented.");
 
+    }
+
+    @Override
+    public void write(FieldBase field, ImmutableStruct value) {
+        throw new IllegalArgumentException("Not Implemented");
     }
 
     public String lastRendered() {

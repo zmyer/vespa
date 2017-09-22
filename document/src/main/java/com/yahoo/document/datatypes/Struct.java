@@ -16,7 +16,7 @@ import java.util.*;
  *
  * @author humbe
  */
-public class Struct extends StructuredFieldValue {
+public final class Struct extends StructuredFieldValue {
 
     public static final int classId = registerClass(Ids.document + 33, Struct.class);
     private Hashlet<Integer, FieldValue> values = new Hashlet<>();

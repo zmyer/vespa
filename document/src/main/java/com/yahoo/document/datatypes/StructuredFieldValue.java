@@ -71,7 +71,7 @@ public abstract class StructuredFieldValue extends CompositeFieldValue {
             return removeFieldValue(field);
         }
         DataType type = field.getDataType();
-        if (!type.getValueClass().isAssignableFrom(value.getClass())) {
+        if ((type instanceof PrimitiveDataType) && !type.getValueClass().isAssignableFrom(value.getClass())) {
             FieldValue tmp = type.createFieldValue();
             tmp.assign(value);
             value = tmp;
@@ -105,39 +105,39 @@ public abstract class StructuredFieldValue extends CompositeFieldValue {
     }
 
     public final FieldValue setFieldValue(Field field, Double value) {
-        return setFieldValue(field, new DoubleFieldValue(value));
+        return setFieldValue(field, field.getDataType().createNumber(value));
     }
 
     public final FieldValue setFieldValue(Field field, Integer value) {
-        return setFieldValue(field, new IntegerFieldValue(value));
+        return setFieldValue(field, field.getDataType().createNumber(value));
     }
 
     public final FieldValue setFieldValue(Field field, Long value) {
-        return setFieldValue(field, new LongFieldValue(value));
+        return setFieldValue(field, field.getDataType().createNumber(value));
     }
 
     public final FieldValue setFieldValue(Field field, Byte value) {
-        return setFieldValue(field, new ByteFieldValue(value));
+        return setFieldValue(field, field.getDataType().createNumber(value));
     }
 
     public final FieldValue setFieldValue(String field, String value) {
-        return setFieldValue(field, new StringFieldValue(value));
+        return setFieldValue(getField(field), value);
     }
 
     public final FieldValue setFieldValue(String field, Double value) {
-        return setFieldValue(field, new DoubleFieldValue(value));
+        return setFieldValue(getField(field), value);
     }
 
     public final FieldValue setFieldValue(String field, Integer value) {
-        return setFieldValue(field, new IntegerFieldValue(value));
+        return setFieldValue(getField(field), value);
     }
 
     public final FieldValue setFieldValue(String field, Long value) {
-        return setFieldValue(field, new LongFieldValue(value));
+        return setFieldValue(getField(field), value);
     }
 
     public final FieldValue setFieldValue(String field, Byte value) {
-        return setFieldValue(field, new ByteFieldValue(value));
+        return setFieldValue(getField(field), value);
     }
     /**
      * Removes and returns a field value.

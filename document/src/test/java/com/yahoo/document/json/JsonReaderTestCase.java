@@ -28,6 +28,7 @@ import com.yahoo.document.datatypes.MapFieldValue;
 import com.yahoo.document.datatypes.Raw;
 import com.yahoo.document.datatypes.StringFieldValue;
 import com.yahoo.document.datatypes.Struct;
+import com.yahoo.document.datatypes.StructuredFieldValue;
 import com.yahoo.document.datatypes.TensorFieldValue;
 import com.yahoo.document.datatypes.WeightedSet;
 import com.yahoo.document.json.document.DocumentParser;
@@ -269,8 +270,8 @@ public class JsonReaderTestCase {
         new VespaJsonDocumentReader().readPut(parseInfo.fieldsBuffer, put);
         Document doc = put.getDocument();
         FieldValue f = doc.getFieldValue(doc.getField("skuggsjaa"));
-        assertSame(Struct.class, f.getClass());
-        Struct s = (Struct) f;
+        assertTrue(f instanceof StructuredFieldValue);
+        StructuredFieldValue s = (StructuredFieldValue) f;
         assertEquals("person", ((StringFieldValue) s.getFieldValue("sandra")).getString());
     }
 
@@ -298,8 +299,8 @@ public class JsonReaderTestCase {
         ValueUpdate vu = fu.getValueUpdate(0);
         assertTrue(vu instanceof AssignValueUpdate);
         AssignValueUpdate avu = (AssignValueUpdate) vu;
-        assertTrue(avu.getValue() instanceof Struct);
-        Struct s = (Struct) avu.getValue();
+        assertTrue(avu.getValue() instanceof StructuredFieldValue);
+        StructuredFieldValue s = (StructuredFieldValue) avu.getValue();
         assertEquals(2, s.getFieldCount());
         assertEquals(new StringFieldValue("person"), s.getFieldValue(s.getField("sandra")));
         GrowableByteBuffer buf = new GrowableByteBuffer();
@@ -321,8 +322,8 @@ public class JsonReaderTestCase {
         ValueUpdate vu = fu.getValueUpdate(0);
         assertTrue(vu instanceof AssignValueUpdate);
         AssignValueUpdate avu = (AssignValueUpdate) vu;
-        assertTrue(avu.getValue() instanceof Struct);
-        Struct s = (Struct) avu.getValue();
+        assertTrue(avu.getValue() instanceof StructuredFieldValue);
+        StructuredFieldValue s = (StructuredFieldValue) avu.getValue();
         assertEquals(0, s.getFieldCount());
         GrowableByteBuffer buf = new GrowableByteBuffer();
         DocumentSerializer serializer = DocumentSerializerFactory.createHead(buf);

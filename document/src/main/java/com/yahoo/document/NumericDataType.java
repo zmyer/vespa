@@ -6,7 +6,7 @@ import com.yahoo.vespa.objects.Ids;
 /**
  * @author <a href="mailto:einarmr@yahoo-inc.com">Einar M R Rosenvinge</a>
  */
-public class NumericDataType extends PrimitiveDataType {
+public final class NumericDataType extends PrimitiveDataType {
     // The global class identifier shared with C++.
     public static int classId = registerClass(Ids.document + 52, NumericDataType.class);
     /**
@@ -20,8 +20,10 @@ public class NumericDataType extends PrimitiveDataType {
         super(name, code, type, factory);
     }
 
+
     @Override
     public NumericDataType clone() {
         return (NumericDataType) super.clone();
     }
+
 }

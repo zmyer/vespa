@@ -14,6 +14,7 @@ import com.yahoo.document.datatypes.CollectionFieldValue;
 import com.yahoo.document.datatypes.DoubleFieldValue;
 import com.yahoo.document.datatypes.FieldValue;
 import com.yahoo.document.datatypes.FloatFieldValue;
+import com.yahoo.document.datatypes.ImmutableStruct;
 import com.yahoo.document.datatypes.IntegerFieldValue;
 import com.yahoo.document.datatypes.LongFieldValue;
 import com.yahoo.document.datatypes.MapFieldValue;
@@ -405,6 +406,10 @@ public class DocumentUpdateJsonSerializer
         public Serializer put(FieldBase field, String value) {
             serializeString(generator, field, value);
             return this;
+        }
+        @Override
+        public void write(FieldBase field, ImmutableStruct value) {
+            serializeStructuredField(this, generator, field, value);
         }
     }
 }

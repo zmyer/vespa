@@ -12,7 +12,6 @@ import com.yahoo.document.datatypes.LongFieldValue;
 import com.yahoo.document.datatypes.PredicateFieldValue;
 import com.yahoo.document.datatypes.Raw;
 import com.yahoo.document.datatypes.StringFieldValue;
-import com.yahoo.document.datatypes.TensorFieldValue;
 import com.yahoo.document.datatypes.UriFieldValue;
 import com.yahoo.tensor.TensorType;
 import com.yahoo.vespa.objects.Identifiable;
@@ -96,6 +95,10 @@ public abstract class DataType extends Identifiable implements Serializable, Com
 
     /** Creates a new, empty FieldValue of this type */
     public abstract FieldValue createFieldValue();
+
+    public FieldValue createImmutableFieldValue() {
+        return createFieldValue();
+    }
 
     /**
      * Creates a field value by reflection
@@ -310,5 +313,37 @@ public abstract class DataType extends Identifiable implements Serializable, Com
 
     /** Returns whether this is a multivalue type, i.e either a CollectionDataType or a MapDataType */
     public boolean isMultivalue() { return false; }
+
+    public final FieldValue createNumber(Double arg) {
+        return (getId() == DataType.DOUBLE.getId())
+                ? new DoubleFieldValue(arg)
+                : createByAssign(arg);
+    }
+    public final FieldValue createNumber(Float arg) {
+        return (getId() == DataType.FLOAT.getId())
+                ? new FloatFieldValue(arg)
+                : createByAssign(arg);
+    }
+    public final FieldValue createNumber(Byte arg) {
+        return (getId() == DataType.BYTE.getId())
+                ? new ByteFieldValue(arg)
+                : createByAssign(arg);
+    }
+    public final FieldValue createNumber(Integer arg) {
+        return (getId() == DataType.INT.getId())
+                ? new IntegerFieldValue(arg)
+                : createByAssign(arg);
+    }
+    public final FieldValue createNumber(Long arg) {
+        return (getId() == DataType.LONG.getId())
+                ? new LongFieldValue(arg)
+                : createByAssign(arg);
+    }
+
+    private FieldValue createByAssign(Object arg) {
+        FieldValue fv = createFieldValue();
+        fv.assign(arg);
+        return fv;
+    }
 
 }

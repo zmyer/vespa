@@ -15,7 +15,7 @@ import com.yahoo.vespa.objects.Ids;
  *
  * @author <a href="mailto:einarmr@yahoo-inc.com">Einar M R Rosenvinge</a>
  */
-public class ByteFieldValue extends NumericFieldValue {
+public final class ByteFieldValue extends NumericFieldValue {
     private static class Factory extends PrimitiveDataType.Factory {
         public FieldValue create() {
             return new ByteFieldValue();

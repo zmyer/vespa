@@ -44,7 +44,7 @@ public class SingleValueReader {
         if (buffer.currentToken().isScalarValue()) {
             return readAtomic(buffer.currentText(), expectedType);
         } else {
-            FieldValue fieldValue = expectedType.createFieldValue();
+            FieldValue fieldValue = expectedType.createImmutableFieldValue();
             CompositeReader.populateComposite(buffer, fieldValue);
             return fieldValue;
         }

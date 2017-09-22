@@ -290,25 +290,13 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
         }
     }
 
-    /**
-     * Write out the value of struct field
-     *
-     * @param field - field description (name and data type)
-     * @param s     - field value
-     */
-    public void write(FieldBase field, Struct s) {
-        // Serialize all parts first.. As we need to know length before starting
-        // Serialize all the fields.
-
+    private GrowableByteBuffer getRawBuffer(Struct s, List<Integer> fieldIds, List<Integer> fieldLengths) {
         //keep the buffer we're serializing everything into:
         GrowableByteBuffer bigBuffer = buf;
 
         //create a new buffer and serialize into that for a while:
         GrowableByteBuffer buffer = new GrowableByteBuffer(4096, 2.0f);
         buf = buffer;
-
-        List<Integer> fieldIds = new LinkedList<>();
-        List<java.lang.Integer> fieldLengths = new LinkedList<>();
 
         for (Map.Entry<Field, FieldValue> value : s.getFields()) {
 
@@ -322,10 +310,30 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
         // Switch buffers again:
         buffer.flip();
         buf = bigBuffer;
+        return buffer;
+    }
+
+    /**
+     * Write out the value of struct field
+     *
+     * @param field - field description (name and data type)
+     * @param s     - field value
+     */
+    public void write(FieldBase field, Struct s) {
+        int fieldCount = s.getFieldCount();
+        List<Integer> fieldIds = new ArrayList<>(fieldCount);
+        List<Integer> fieldLengths = new ArrayList<>(fieldCount);
+        GrowableByteBuffer buffer = getRawBuffer(s, fieldIds, fieldLengths);
+        writeStruct(buffer, fieldIds, fieldLengths, s.getDataType());
+    }
+
+    private void writeStruct(GrowableByteBuffer buffer, List<Integer> fieldIds,
+                             List<Integer> fieldLengths, StructDataType dt)
+    {
 
         int uncompressedSize = buffer.remaining();
         Compressor.Compression compression =
-            s.getDataType().getCompressor().compress(buffer.getByteBuffer().array(), buffer.remaining());
+            dt.getCompressor().compress(buffer.getByteBuffer().array(), buffer.remaining());
 
         // Actual serialization starts here.
         int lenPos = buf.position();
@@ -336,9 +344,9 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
             buf.putInt2_4_8Bytes(uncompressedSize);
         }
 
-        buf.putInt1_4Bytes(s.getFieldCount());
+        buf.putInt1_4Bytes(fieldIds.size());
 
-        for (int i = 0; i < s.getFieldCount(); ++i) {
+        for (int i = 0; i < fieldIds.size(); ++i) {
             putInt1_4Bytes(null, fieldIds.get(i));
             putInt2_4_8Bytes(null, fieldLengths.get(i));
         }
@@ -357,14 +365,18 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
         buf.position(posNow);
     }
 
-    /**
-     * Write out the value of structured field
-     *
-     * @param field - field description (name and data type)
-     * @param value - field value
-     */
+    @Override
     public void write(FieldBase field, StructuredFieldValue value) {
         throw new IllegalArgumentException("Not Implemented");
+    }
+
+    @Override
+    public void write(FieldBase field, ImmutableStruct s) {
+        int fieldCount = s.getFieldCount();
+        List<Integer> fieldIds = new ArrayList<>(fieldCount);
+        List<Integer> fieldLengths = new ArrayList<>(fieldCount);
+        GrowableByteBuffer buffer = s.getRawBuffer(fieldIds, fieldLengths);
+        writeStruct(buffer, fieldIds, fieldLengths, s.getDataType());
     }
 
     /**

@@ -3,7 +3,9 @@ package com.yahoo.document;
 
 import com.google.common.collect.ImmutableList;
 import com.yahoo.document.datatypes.FieldValue;
+import com.yahoo.document.datatypes.ImmutableStruct;
 import com.yahoo.document.datatypes.Struct;
+import com.yahoo.document.datatypes.StructuredFieldValue;
 import com.yahoo.vespa.objects.Ids;
 
 import java.util.ArrayList;
@@ -29,6 +31,11 @@ public class StructDataType extends BaseStructDataType {
     @Override
     public Struct createFieldValue() {
         return new Struct(this);
+    }
+
+    @Override
+    public FieldValue createImmutableFieldValue() {
+        return new ImmutableStruct(this, getFieldCount());
     }
 
     @Override
@@ -135,11 +142,11 @@ public class StructDataType extends BaseStructDataType {
 
     @Override
     public boolean isValueCompatible(FieldValue value) {
-        if (!(value instanceof Struct)) {
+        if (!(value instanceof StructuredFieldValue)) {
             return false;
         }
-        Struct structValue = (Struct) value;
-        if (structValue.getDataType().inherits(this)) {
+        DataType dt = value.getDataType();
+        if (((StructDataType)dt).inherits(this)) {
             //the value is of this type; or the supertype of the value is of this type, etc....
             return true;
         }
