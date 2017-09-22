@@ -192,7 +192,7 @@ public final class ImmutableStruct extends StructuredFieldValue {
         }
     }
     public GrowableByteBuffer getRawBuffer(List<Integer> fieldIds, List<Integer> fieldLengths) {
-        GrowableByteBuffer buf = new GrowableByteBuffer(1024, 2.0f);
+        GrowableByteBuffer buf = new GrowableByteBuffer(offsets[fieldCount] - offsets[0], 2.0f);
         Integer [] order = new Integer[fieldCount];
         for (int i = 0; i < fieldCount; i++) {
             order[i] = i;
