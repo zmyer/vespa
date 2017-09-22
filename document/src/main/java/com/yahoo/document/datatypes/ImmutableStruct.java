@@ -23,7 +23,7 @@ public final class ImmutableStruct extends StructuredFieldValue {
     private int fieldCount = 0;
     private final Field [] fields;
     private final int [] offsets;
-    private final GrowableByteBuffer buffer = new GrowableByteBuffer(1024);
+    private final GrowableByteBuffer buffer = new GrowableByteBuffer(512);
     private final VespaDocumentSerializerHead serializer = new VespaDocumentSerializerHead(buffer);
 
     public ImmutableStruct(StructDataType dataType, int maxFieldCount) {
