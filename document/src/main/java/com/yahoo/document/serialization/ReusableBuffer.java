@@ -33,7 +33,7 @@ public abstract class ReusableBuffer<T> {
     public void free(T buffer, int used) {
         if (this.buffer == null) {
             average.updateAverage(used);
-            if (average.getValue() * reuseFactor < used) {
+            if (average.getValue() * reuseFactor > used) {
                 this.buffer = buffer;
             } else {
                 this.buffer = allocate(average.getValue()*2);
