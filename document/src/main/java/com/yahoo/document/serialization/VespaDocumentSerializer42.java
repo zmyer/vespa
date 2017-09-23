@@ -330,17 +330,22 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
     private void writeStruct(GrowableByteBuffer buffer, List<Integer> fieldIds,
                              List<Integer> fieldLengths, StructDataType dt)
     {
-
-        int uncompressedSize = buffer.remaining();
-        Compressor.Compression compression =
-            dt.getCompressor().compress(buffer.getByteBuffer().array(), buffer.remaining());
-
         // Actual serialization starts here.
         int lenPos = buf.position();
         putInt(null, 0); // Move back to this after compression is done.
-        buf.put(compression.type().getCode());
 
-        if (compression.data() != null && compression.type().isCompressed()) {
+        int uncompressedSize = buffer.remaining();
+        Compressor compressor = dt.getCompressor();
+        byte compressorCode = compressor.type().getCode();
+        Compressor.Compression compression = null;
+        if (compressor.type().isCompressed()) {
+            compression = compressor.compress(buffer.getByteBuffer().array(), uncompressedSize);
+            compressorCode = compression.type().getCode();
+        }
+
+        buf.put(compressorCode);
+
+        if (compression != null && compression.data() != null && compression.type().isCompressed()) {
             buf.putInt2_4_8Bytes(uncompressedSize);
         }
 
@@ -352,7 +357,7 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
         }
 
         int pos = buf.position();
-        if (compression.data() != null && compression.type().isCompressed()) {
+        if (compression != null && compression.data() != null && compression.type().isCompressed()) {
             put(null, compression.data());
         } else {
             put(null, buffer.getByteBuffer());
