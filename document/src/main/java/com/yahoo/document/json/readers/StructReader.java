@@ -6,11 +6,12 @@ import com.yahoo.document.datatypes.FieldValue;
 import com.yahoo.document.datatypes.StructuredFieldValue;
 import com.yahoo.document.json.JsonReaderException;
 import com.yahoo.document.json.TokenBuffer;
+import com.yahoo.io.GrowableByteBuffer;
 
 import static com.yahoo.document.json.readers.SingleValueReader.readSingleValue;
 
 public class StructReader {
-    public static void fillStruct(TokenBuffer buffer, StructuredFieldValue parent) {
+    public static void fillStruct(TokenBuffer buffer, StructuredFieldValue parent, GrowableByteBuffer backing) {
         // do note the order of initializing initNesting and token is relevant for empty docs
         int initNesting = buffer.nesting();
         buffer.next();
@@ -18,7 +19,7 @@ public class StructReader {
         while (buffer.nesting() >= initNesting) {
             Field f = getField(buffer, parent);
             try {
-                FieldValue v = readSingleValue(buffer, f.getDataType());
+                FieldValue v = readSingleValue(buffer, f.getDataType(), backing);
                 parent.setFieldValue(f, v);
                 buffer.next();
             } catch (IllegalArgumentException e) {

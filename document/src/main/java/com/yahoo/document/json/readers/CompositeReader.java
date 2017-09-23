@@ -31,12 +31,12 @@ public class CompositeReader {
             if (fieldValue instanceof WeightedSet) {
                 fillWeightedSet(buffer, valueType, (WeightedSet) fieldValue);
             } else {
-                fillArray(buffer, (CollectionFieldValue) fieldValue, valueType);
+                fillArray(buffer, (CollectionFieldValue) fieldValue, valueType, backing);
             }
         } else if (fieldValue instanceof MapFieldValue) {
             MapReader.fillMap(buffer, (MapFieldValue) fieldValue, backing);
         } else if (fieldValue instanceof StructuredFieldValue) {
-            StructReader.fillStruct(buffer, (StructuredFieldValue) fieldValue);
+            StructReader.fillStruct(buffer, (StructuredFieldValue) fieldValue, backing);
         } else if (fieldValue instanceof TensorFieldValue) {
             TensorReader.fillTensor(buffer, (TensorFieldValue) fieldValue);
         } else {

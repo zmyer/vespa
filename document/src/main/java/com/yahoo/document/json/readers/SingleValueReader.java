@@ -50,19 +50,16 @@ public class SingleValueReader {
             return fieldValue;
         }
     }
-    public static FieldValue readSingleValue(TokenBuffer buffer, DataType expectedType) {
-        return readSingleValue(buffer, expectedType, null);
-    }
 
     @SuppressWarnings("rawtypes")
-    public static ValueUpdate readSingleUpdate(TokenBuffer buffer, DataType expectedType, String action) {
+    public static ValueUpdate readSingleUpdate(TokenBuffer buffer, DataType expectedType, String action, GrowableByteBuffer backing) {
         ValueUpdate update;
 
         switch (action) {
             case UPDATE_ASSIGN:
                 update = (buffer.currentToken() == JsonToken.VALUE_NULL)
                         ? ValueUpdate.createClear()
-                        : ValueUpdate.createAssign(readSingleValue(buffer, expectedType));
+                        : ValueUpdate.createAssign(readSingleValue(buffer, expectedType, backing));
                 break;
             // double is silly, but it's what is used internally anyway
             case UPDATE_INCREMENT:

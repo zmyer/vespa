@@ -11,4 +11,9 @@ public class ReuseableGrowableBuffer extends ReusableBuffer<GrowableByteBuffer> 
     protected GrowableByteBuffer allocate(int size) {
         return new GrowableByteBuffer(size);
     }
+    @Override
+    protected GrowableByteBuffer clear(GrowableByteBuffer buf) {
+        buf.clear();
+        return buf;
+    }
 }

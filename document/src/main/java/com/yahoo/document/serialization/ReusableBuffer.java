@@ -34,7 +34,7 @@ public abstract class ReusableBuffer<T> {
         if (this.buffer == null) {
             average.updateAverage(used);
             if (average.getValue() * reuseFactor > used) {
-                this.buffer = buffer;
+                this.buffer = clear(buffer);
             } else {
                 this.buffer = allocate(average.getValue()*2);
             }
@@ -43,5 +43,6 @@ public abstract class ReusableBuffer<T> {
         }
     }
     protected abstract T allocate(int size);
+    protected abstract T clear(T buffer);
 
 }

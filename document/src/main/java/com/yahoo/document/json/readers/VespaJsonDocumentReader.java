@@ -97,22 +97,27 @@ public class VespaJsonDocumentReader {
         int localNesting = buffer.nesting();
 
         buffer.next();
-        while (localNesting <= buffer.nesting()) {
-            expectObjectStart(buffer.currentToken());
+        GrowableByteBuffer backing = tlsBuffer.get().alloc();
+        try {
+            while (localNesting <= buffer.nesting()) {
+                expectObjectStart(buffer.currentToken());
 
-            String fieldName = buffer.currentName();
-            if (isFieldPath(fieldName)) {
-                addFieldPathUpdates(update, buffer, fieldName);
-            } else {
-                addFieldUpdates(update, buffer, fieldName);
+                String fieldName = buffer.currentName();
+                if (isFieldPath(fieldName)) {
+                    addFieldPathUpdates(update, buffer, fieldName, backing);
+                } else {
+                    addFieldUpdates(update, buffer, fieldName, backing);
+                }
+
+                expectObjectEnd(buffer.currentToken());
+                buffer.next();
             }
-
-            expectObjectEnd(buffer.currentToken());
-            buffer.next();
+        } finally {
+            tlsBuffer.get().free(backing, backing.position());
         }
     }
 
-    private void addFieldUpdates(DocumentUpdate update, TokenBuffer buffer, String fieldName) {
+    private void addFieldUpdates(DocumentUpdate update, TokenBuffer buffer, String fieldName, GrowableByteBuffer backing) {
         Field field = update.getType().getField(fieldName);
         int localNesting = buffer.nesting();
         FieldUpdate fieldUpdate = FieldUpdate.create(field);
@@ -121,24 +126,24 @@ public class VespaJsonDocumentReader {
         while (localNesting <= buffer.nesting()) {
             switch (buffer.currentName()) {
                 case UPDATE_REMOVE:
-                    createRemoves(buffer, field, fieldUpdate);
+                    createRemoves(buffer, field, fieldUpdate, backing);
                     break;
                 case UPDATE_ADD:
-                    createAdds(buffer, field, fieldUpdate);
+                    createAdds(buffer, field, fieldUpdate, backing);
                     break;
                 case UPDATE_MATCH:
-                    fieldUpdate.addValueUpdate(createMapUpdate(buffer, field));
+                    fieldUpdate.addValueUpdate(createMapUpdate(buffer, field, backing));
                     break;
                 default:
                     String action = buffer.currentName();
-                    fieldUpdate.addValueUpdate(readSingleUpdate(buffer, field.getDataType(), action));
+                    fieldUpdate.addValueUpdate(readSingleUpdate(buffer, field.getDataType(), action, backing));
             }
             buffer.next();
         }
         update.addFieldUpdate(fieldUpdate);
     }
 
-    private void addFieldPathUpdates(DocumentUpdate update, TokenBuffer buffer, String fieldPath) {
+    private void addFieldPathUpdates(DocumentUpdate update, TokenBuffer buffer, String fieldPath, GrowableByteBuffer backing) {
         int localNesting = buffer.nesting();
 
         buffer.next();
@@ -146,10 +151,10 @@ public class VespaJsonDocumentReader {
             String fieldPathOperation = buffer.currentName().toLowerCase();
             FieldPathUpdate fieldPathUpdate;
             if (fieldPathOperation.equals(UPDATE_ASSIGN)) {
-                fieldPathUpdate = readAssignFieldPathUpdate(update.getType(), fieldPath, buffer);
+                fieldPathUpdate = readAssignFieldPathUpdate(update.getType(), fieldPath, buffer, backing);
 
             } else if (fieldPathOperation.equals(UPDATE_ADD)) {
-                fieldPathUpdate = readAddFieldPathUpdate(update.getType(), fieldPath, buffer);
+                fieldPathUpdate = readAddFieldPathUpdate(update.getType(), fieldPath, buffer, backing);
 
             } else if (fieldPathOperation.equals(UPDATE_REMOVE)) {
                 fieldPathUpdate = readRemoveFieldPathUpdate(update.getType(), fieldPath, buffer);
@@ -165,18 +170,18 @@ public class VespaJsonDocumentReader {
         }
     }
 
-    private AssignFieldPathUpdate readAssignFieldPathUpdate(DocumentType documentType, String fieldPath, TokenBuffer buffer) {
+    private AssignFieldPathUpdate readAssignFieldPathUpdate(DocumentType documentType, String fieldPath, TokenBuffer buffer, GrowableByteBuffer backing) {
         AssignFieldPathUpdate fieldPathUpdate = new AssignFieldPathUpdate(documentType, fieldPath);
         FieldValue fv = SingleValueReader.readSingleValue(
-                buffer, fieldPathUpdate.getFieldPath().getResultingDataType());
+                buffer, fieldPathUpdate.getFieldPath().getResultingDataType(), backing);
         fieldPathUpdate.setNewValue(fv);
         return fieldPathUpdate;
     }
 
-    private AddFieldPathUpdate readAddFieldPathUpdate(DocumentType documentType, String fieldPath, TokenBuffer buffer) {
+    private AddFieldPathUpdate readAddFieldPathUpdate(DocumentType documentType, String fieldPath, TokenBuffer buffer, GrowableByteBuffer backing) {
         AddFieldPathUpdate fieldPathUpdate = new AddFieldPathUpdate(documentType, fieldPath);
         FieldValue fv = SingleValueReader.readSingleValue(
-                buffer, fieldPathUpdate.getFieldPath().getResultingDataType());
+                buffer, fieldPathUpdate.getFieldPath().getResultingDataType(), backing);
         fieldPathUpdate.setNewValues((Array) fv);
         return fieldPathUpdate;
     }

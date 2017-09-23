@@ -55,9 +55,9 @@ public class MapReader {
             token = buffer.next();
             for (int i = 0; i < 2; ++i) {
                 if (MAP_KEY.equals(buffer.currentName())) {
-                    key = readSingleValue(buffer, keyType);
+                    key = readSingleValue(buffer, keyType, backing);
                 } else if (MAP_VALUE.equals(buffer.currentName())) {
-                    value = readSingleValue(buffer, valueType);
+                    value = readSingleValue(buffer, valueType, backing);
                 }
                 token = buffer.next();
             }
@@ -89,7 +89,7 @@ public class MapReader {
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
-    public static ValueUpdate createMapUpdate(TokenBuffer buffer, DataType currentLevel, FieldValue keyParent, FieldValue topLevelKey) {
+    public static ValueUpdate createMapUpdate(TokenBuffer buffer, DataType currentLevel, FieldValue keyParent, FieldValue topLevelKey, GrowableByteBuffer backing) {
         TokenBuffer.Token element = buffer.prefetchScalar(UPDATE_ELEMENT);
         if (UPDATE_ELEMENT.equals(buffer.currentName())) {
             buffer.next();
@@ -104,24 +104,24 @@ public class MapReader {
         if (!UPDATE_MATCH.equals(buffer.currentName())) {
             // we have reached an action...
             if (topLevelKey == null) {
-                return ValueUpdate.createMap(key, readSingleUpdate(buffer, valueTypeForMapUpdate(currentLevel), buffer.currentName()));
+                return ValueUpdate.createMap(key, readSingleUpdate(buffer, valueTypeForMapUpdate(currentLevel), buffer.currentName(), backing));
             } else {
-                return ValueUpdate.createMap(topLevelKey, readSingleUpdate(buffer, valueTypeForMapUpdate(currentLevel), buffer.currentName()));
+                return ValueUpdate.createMap(topLevelKey, readSingleUpdate(buffer, valueTypeForMapUpdate(currentLevel), buffer.currentName(), backing));
             }
         } else {
             // next level of matching
             if (topLevelKey == null) {
-                return createMapUpdate(buffer, valueTypeForMapUpdate(currentLevel), key, key);
+                return createMapUpdate(buffer, valueTypeForMapUpdate(currentLevel), key, key, backing);
             } else {
-                return createMapUpdate(buffer, valueTypeForMapUpdate(currentLevel), key, topLevelKey);
+                return createMapUpdate(buffer, valueTypeForMapUpdate(currentLevel), key, topLevelKey, backing);
             }
         }
     }
 
     @SuppressWarnings("rawtypes")
-    public static ValueUpdate createMapUpdate(TokenBuffer buffer, Field field) {
+    public static ValueUpdate createMapUpdate(TokenBuffer buffer, Field field, GrowableByteBuffer backing) {
         buffer.next();
-        MapValueUpdate m = (MapValueUpdate) MapReader.createMapUpdate(buffer, field.getDataType(), null, null);
+        MapValueUpdate m = (MapValueUpdate) MapReader.createMapUpdate(buffer, field.getDataType(), null, null, backing);
         buffer.next();
         // must generate the field value in parallell with the actual
         return m;

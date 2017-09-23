@@ -10,6 +10,7 @@ import com.yahoo.document.datatypes.FieldValue;
 import com.yahoo.document.datatypes.WeightedSet;
 import com.yahoo.document.json.TokenBuffer;
 import com.yahoo.document.update.FieldUpdate;
+import com.yahoo.io.GrowableByteBuffer;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,21 +23,21 @@ public class AddRemoveCreator {
     // yes, this suppresswarnings ugliness is by intention, the code relies on
     // the contracts in the builders
     @SuppressWarnings({ "cast", "rawtypes", "unchecked" })
-    public static void createAdds(TokenBuffer buffer, Field field, FieldUpdate update) {
-        createAddsOrRemoves(buffer, field, update, false);
+    public static void createAdds(TokenBuffer buffer, Field field, FieldUpdate update, GrowableByteBuffer backing) {
+        createAddsOrRemoves(buffer, field, update, false, backing);
     }
 
     // yes, this suppresswarnings ugliness is by intention, the code relies on
     // the contracts in the builders
     @SuppressWarnings({ "cast", "rawtypes", "unchecked" })
-    public static void createRemoves(TokenBuffer buffer, Field field, FieldUpdate update) {
-        createAddsOrRemoves(buffer, field, update, true);
+    public static void createRemoves(TokenBuffer buffer, Field field, FieldUpdate update, GrowableByteBuffer backing) {
+        createAddsOrRemoves(buffer, field, update, true, backing);
     }
 
     // yes, this suppresswarnings ugliness is by intention, the code relies on
     // the contracts in the builders
     @SuppressWarnings({ "cast", "rawtypes", "unchecked" })
-    private static void createAddsOrRemoves(TokenBuffer buffer, Field field, FieldUpdate update, boolean isRemove) {
+    private static void createAddsOrRemoves(TokenBuffer buffer, Field field, FieldUpdate update, boolean isRemove, GrowableByteBuffer backing) {
         FieldValue container = field.getDataType().createFieldValue();
         FieldUpdate singleUpdate;
         int initNesting = buffer.nesting();
@@ -58,7 +59,7 @@ public class AddRemoveCreator {
                 }
             } else {
                 List<FieldValue> arrayContents = new ArrayList<>();
-                ArrayReader.fillArrayUpdate(buffer, initNesting, valueType, arrayContents);
+                ArrayReader.fillArrayUpdate(buffer, initNesting, valueType, arrayContents, backing);
                 if (buffer.currentToken() != JsonToken.END_ARRAY) {
                     throw new IllegalStateException("Expected END_ARRAY. Got '" + buffer.currentToken() + "'.");
                 }
