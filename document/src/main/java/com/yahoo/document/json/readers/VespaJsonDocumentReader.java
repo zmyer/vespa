@@ -18,7 +18,9 @@ import com.yahoo.document.fieldpathupdate.FieldPathUpdate;
 import com.yahoo.document.fieldpathupdate.RemoveFieldPathUpdate;
 import com.yahoo.document.json.JsonReaderException;
 import com.yahoo.document.json.TokenBuffer;
+import com.yahoo.document.serialization.ReuseableGrowableBuffer;
 import com.yahoo.document.update.FieldUpdate;
+import com.yahoo.io.GrowableByteBuffer;
 
 import static com.yahoo.document.json.readers.AddRemoveCreator.createAdds;
 import static com.yahoo.document.json.readers.AddRemoveCreator.createRemoves;
@@ -37,6 +39,12 @@ import static com.yahoo.document.json.readers.SingleValueReader.readSingleUpdate
 public class VespaJsonDocumentReader {
     private static final String UPDATE_REMOVE = "remove";
     private static final String UPDATE_ADD = "add";
+    private static ThreadLocal<ReuseableGrowableBuffer> tlsBuffer = new ThreadLocal<ReuseableGrowableBuffer>() {
+        @Override
+        protected ReuseableGrowableBuffer initialValue() {
+            return new ReuseableGrowableBuffer(65536, 10);
+        }
+    };
 
     public DocumentOperation createDocumentOperation(DocumentType documentType, DocumentParseInfo documentParseInfo) {
         final DocumentOperation documentOperation;
@@ -73,10 +81,13 @@ public class VespaJsonDocumentReader {
 
     // Exposed for unit testing...
     public void readPut(TokenBuffer buffer, DocumentPut put) {
+        GrowableByteBuffer backing = tlsBuffer.get().alloc();
         try {
-            populateComposite(buffer, put.getDocument());
+            populateComposite(buffer, put.getDocument(), backing);
         } catch (JsonReaderException e) {
             throw JsonReaderException.addDocId(e, put.getId());
+        } finally {
+            tlsBuffer.get().free(backing, backing.position());
         }
     }
 

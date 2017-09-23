@@ -46,7 +46,7 @@ public class SingleValueReader {
             return readAtomic(buffer.currentText(), expectedType);
         } else {
             FieldValue fieldValue = expectedType.createImmutableFieldValue(backing);
-            CompositeReader.populateComposite(buffer, fieldValue);
+            CompositeReader.populateComposite(buffer, fieldValue, backing);
             return fieldValue;
         }
     }

@@ -10,6 +10,7 @@ import com.yahoo.document.datatypes.StructuredFieldValue;
 import com.yahoo.document.datatypes.TensorFieldValue;
 import com.yahoo.document.datatypes.WeightedSet;
 import com.yahoo.document.json.TokenBuffer;
+import com.yahoo.io.GrowableByteBuffer;
 
 import static com.yahoo.document.json.readers.ArrayReader.fillArray;
 import static com.yahoo.document.json.readers.JsonParserHelpers.expectCompositeEnd;
@@ -20,7 +21,7 @@ public class CompositeReader {
     // TODO createComposite is extremely similar to add/remove, refactor
     // yes, this suppresswarnings ugliness is by intention, the code relies on the contracts in the builders
     @SuppressWarnings({ "cast", "rawtypes" })
-    public static void populateComposite(TokenBuffer buffer, FieldValue fieldValue) {
+    public static void populateComposite(TokenBuffer buffer, FieldValue fieldValue, GrowableByteBuffer backing) {
         JsonToken token = buffer.currentToken();
         if ((token != JsonToken.START_OBJECT) && (token != JsonToken.START_ARRAY)) {
             throw new IllegalArgumentException("Expected '[' or '{'. Got '" + token + "'.");
@@ -33,7 +34,7 @@ public class CompositeReader {
                 fillArray(buffer, (CollectionFieldValue) fieldValue, valueType);
             }
         } else if (fieldValue instanceof MapFieldValue) {
-            MapReader.fillMap(buffer, (MapFieldValue) fieldValue);
+            MapReader.fillMap(buffer, (MapFieldValue) fieldValue, backing);
         } else if (fieldValue instanceof StructuredFieldValue) {
             StructReader.fillStruct(buffer, (StructuredFieldValue) fieldValue);
         } else if (fieldValue instanceof TensorFieldValue) {

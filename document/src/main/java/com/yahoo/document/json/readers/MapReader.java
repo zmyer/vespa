@@ -14,6 +14,7 @@ import com.yahoo.document.datatypes.FieldValue;
 import com.yahoo.document.datatypes.IntegerFieldValue;
 import com.yahoo.document.datatypes.MapFieldValue;
 import com.yahoo.document.json.TokenBuffer;
+import com.yahoo.document.serialization.ReuseableGrowableBuffer;
 import com.yahoo.document.update.MapValueUpdate;
 import com.yahoo.document.update.ValueUpdate;
 import com.yahoo.io.GrowableByteBuffer;
@@ -30,37 +31,17 @@ public class MapReader {
     public static final String MAP_VALUE = "value";
     public static final String UPDATE_ELEMENT = "element";
     public static final String UPDATE_MATCH = "match";
-    private final static class AverageSize {
-        private long size = 0;
-        private long count = 1;
-        AverageSize(int initialSize) {
-            size = initialSize;
-        }
-        public void updateAverage(int sz) {
-            size += sz;
-            count++;
-        }
-        public int getValue() {
-            return (int)(size/count);
-        }
-    }
-    private static ThreadLocal<AverageSize> averageBufferSize = new ThreadLocal<AverageSize>() {
-        @Override
-        protected AverageSize initialValue() {
-            return new AverageSize(4096);
-        }
-    };
 
-    public static void fillMap(TokenBuffer buffer, MapFieldValue parent) {
+    public static void fillMap(TokenBuffer buffer, MapFieldValue parent, GrowableByteBuffer backing) {
         if (buffer.currentToken() == JsonToken.START_ARRAY) {
-            MapReader.fillMapFromArray(buffer, parent);
+            MapReader.fillMapFromArray(buffer, parent, backing);
         } else {
-            MapReader.fillMapFromObject(buffer, parent);
+            MapReader.fillMapFromObject(buffer, parent, backing);
         }
     }
 
     @SuppressWarnings({ "rawtypes", "cast", "unchecked" })
-    public static void fillMapFromArray(TokenBuffer buffer, MapFieldValue parent) {
+    public static void fillMapFromArray(TokenBuffer buffer, MapFieldValue parent, GrowableByteBuffer backing) {
         JsonToken token = buffer.currentToken();
         int initNesting = buffer.nesting();
         expectArrayStart(token);
@@ -89,14 +70,13 @@ public class MapReader {
     }
 
     @SuppressWarnings({ "rawtypes", "cast", "unchecked" })
-    public static void fillMapFromObject(TokenBuffer buffer, MapFieldValue parent) {
+    public static void fillMapFromObject(TokenBuffer buffer, MapFieldValue parent, GrowableByteBuffer backing) {
         JsonToken token = buffer.currentToken();
         int initNesting = buffer.nesting();
         expectObjectStart(token);
         token = buffer.next();
         DataType keyType = parent.getDataType().getKeyType();
         DataType valueType = parent.getDataType().getValueType();
-        GrowableByteBuffer backing = new GrowableByteBuffer(averageBufferSize.get().getValue()*2);
         while (buffer.nesting() >= initNesting) {
             FieldValue key = readAtomic(buffer.currentName(), keyType);
             FieldValue value = readSingleValue(buffer, valueType, backing);
@@ -105,7 +85,6 @@ public class MapReader {
             parent.put(key, value);
             token = buffer.next();
         }
-        averageBufferSize.get().updateAverage(backing.position());
         expectObjectEnd(token);
     }
 
