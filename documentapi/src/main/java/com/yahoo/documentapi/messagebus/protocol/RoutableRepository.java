@@ -102,9 +102,9 @@ final class RoutableRepository {
 
         GrowableByteBuffer backing = tlsBuffer.get().alloc();
         if (version.getMajor() >= 5) {
-            out = DocumentSerializerFactory.createHead(new GrowableByteBuffer(8192));
+            out = DocumentSerializerFactory.createHead(backing);
         } else {
-            out = DocumentSerializerFactory.create42(new GrowableByteBuffer(8192));
+            out = DocumentSerializerFactory.create42(backing);
         }
 
         out.putInt(null, type);
