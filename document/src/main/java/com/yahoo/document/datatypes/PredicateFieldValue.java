@@ -64,7 +64,9 @@ public class PredicateFieldValue extends FieldValue {
         } else if (o instanceof Predicate) {
             predicate = (Predicate)o;
         } else if (o instanceof PredicateFieldValue) {
-            predicate = ((PredicateFieldValue)o).predicate;
+            predicate = ((PredicateFieldValue) o).predicate;
+        } else if (o instanceof String) {
+            predicate = Predicate.fromString((String)o);
         } else {
             throw new IllegalArgumentException("Expected " + getClass().getName() + ", got " +
                                                o.getClass().getName() + ".");

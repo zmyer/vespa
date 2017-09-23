@@ -92,7 +92,9 @@ public class SingleValueReader {
         } else if (expectedType instanceof ReferenceDataType) {
             return readReferenceFieldValue(field, expectedType);
         } else {
-            return expectedType.createFieldValue(field);
+            FieldValue fv = expectedType.createFieldValue();
+            fv.assign(field);
+            return fv;
         }
     }
 
