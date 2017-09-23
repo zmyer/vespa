@@ -29,6 +29,12 @@ final class RoutableRepository {
     private final CopyOnWriteHashMap<Integer, VersionMap> factoryTypes = new CopyOnWriteHashMap<>();
     private final CopyOnWriteHashMap<CacheKey, RoutableFactory> cache = new CopyOnWriteHashMap<>();
     private LoadTypeSet loadTypes;
+    private static final ThreadLocal<ReuseableGrowableBuffer> tlsBuffer = new ThreadLocal<ReuseableGrowableBuffer>() {
+        @Override
+        protected ReuseableGrowableBuffer initialValue() {
+            return new ReuseableGrowableBuffer(65536, 10);
+        }
+    };
 
     public RoutableRepository(LoadTypeSet set) {
         loadTypes = set;
@@ -94,6 +100,7 @@ final class RoutableRepository {
         }
         DocumentSerializer out;
 
+        GrowableByteBuffer backing = tlsBuffer.get().alloc();
         if (version.getMajor() >= 5) {
             out = DocumentSerializerFactory.createHead(new GrowableByteBuffer(8192));
         } else {
@@ -103,12 +110,15 @@ final class RoutableRepository {
         out.putInt(null, type);
         if (!factory.encode(obj, out)) {
             log.log(LogLevel.ERROR, "Routable factory " + factory.getClass().getName() + " failed to serialize " +
-                                    "routable of type " + type + " (version " + version + ").");
+                    "routable of type " + type + " (version " + version + ").");
             return new byte[0];
         }
         byte[] ret = new byte[out.getBuf().position()];
         out.getBuf().rewind();
         out.getBuf().get(ret);
+
+        tlsBuffer.get().free(backing, ret.length);
+
         return ret;
     }
 

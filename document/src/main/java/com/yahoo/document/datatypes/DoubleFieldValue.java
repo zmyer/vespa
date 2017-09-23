@@ -8,7 +8,6 @@ import com.yahoo.document.serialization.FieldReader;
 import com.yahoo.document.serialization.FieldWriter;
 import com.yahoo.document.serialization.XmlSerializationHelper;
 import com.yahoo.document.serialization.XmlStream;
-import com.yahoo.text.DoubleParser;
 import com.yahoo.vespa.objects.Ids;
 
 /**
@@ -38,7 +37,7 @@ public final class DoubleFieldValue extends NumericFieldValue {
         this.value = value;
     }
 
-    public DoubleFieldValue(String s) { value = DoubleParser.parse(s); }
+    public DoubleFieldValue(String s) { value = Double.parseDouble(s); }
 
     @Override
     public DoubleFieldValue clone() {

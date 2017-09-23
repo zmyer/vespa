@@ -39,7 +39,7 @@ import static com.yahoo.document.json.readers.SingleValueReader.readSingleUpdate
 public class VespaJsonDocumentReader {
     private static final String UPDATE_REMOVE = "remove";
     private static final String UPDATE_ADD = "add";
-    private static ThreadLocal<ReuseableGrowableBuffer> tlsBuffer = new ThreadLocal<ReuseableGrowableBuffer>() {
+    private static final ThreadLocal<ReuseableGrowableBuffer> tlsBuffer = new ThreadLocal<ReuseableGrowableBuffer>() {
         @Override
         protected ReuseableGrowableBuffer initialValue() {
             return new ReuseableGrowableBuffer(65536, 10);
