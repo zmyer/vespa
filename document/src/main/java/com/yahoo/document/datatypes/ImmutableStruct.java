@@ -191,7 +191,7 @@ public final class ImmutableStruct extends StructuredFieldValue {
             return a - b;
         }
     }
-    public GrowableByteBuffer getRawBuffer(List<Integer> fieldIds, List<Integer> fieldLengths) {
+    public GrowableByteBuffer getRawBuffer(int [] fieldIds, int [] fieldLengths) {
         GrowableByteBuffer buf = new GrowableByteBuffer(offsets[fieldCount] - offsets[0], 2.0f);
         Integer [] order = new Integer[fieldCount];
         for (int i = 0; i < fieldCount; i++) {
@@ -200,12 +200,14 @@ public final class ImmutableStruct extends StructuredFieldValue {
         Arrays.sort(order, new Compare());
 
         byte [] data = buffer.array();
+        int i = 0;
         for (int index : order) {
             int startPos = buf.position();
             buf.put(data, offsets[index], length(index));
 
-            fieldLengths.add(buf.position() - startPos);
-            fieldIds.add(fields[index].getId());
+            fieldLengths[i] = buf.position() - startPos;
+            fieldIds[i] = fields[index].getId();
+            i++;
         }
 
         buf.flip();

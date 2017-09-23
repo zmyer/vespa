@@ -290,7 +290,7 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
         }
     }
 
-    private GrowableByteBuffer getRawBuffer(Struct s, List<Integer> fieldIds, List<Integer> fieldLengths) {
+    private GrowableByteBuffer getRawBuffer(Struct s, int [] fieldIds, int[] fieldLengths) {
         //keep the buffer we're serializing everything into:
         GrowableByteBuffer bigBuffer = buf;
 
@@ -298,13 +298,15 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
         GrowableByteBuffer buffer = new GrowableByteBuffer(4096, 2.0f);
         buf = buffer;
 
+        int i = 0;
         for (Map.Entry<Field, FieldValue> value : s.getFields()) {
 
             int startPos = buffer.position();
             value.getValue().serialize(value.getKey(), this);
 
-            fieldLengths.add(buffer.position() - startPos);
-            fieldIds.add(value.getKey().getId(s.getVersion()));
+            fieldLengths[i] = buffer.position() - startPos;
+            fieldIds[i] = value.getKey().getId(s.getVersion());
+            i++;
         }
 
         // Switch buffers again:
@@ -321,14 +323,14 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
      */
     public void write(FieldBase field, Struct s) {
         int fieldCount = s.getFieldCount();
-        List<Integer> fieldIds = new ArrayList<>(fieldCount);
-        List<Integer> fieldLengths = new ArrayList<>(fieldCount);
+        int [] fieldIds = new int[fieldCount];
+        int [] fieldLengths = new int[fieldCount];
         GrowableByteBuffer buffer = getRawBuffer(s, fieldIds, fieldLengths);
         writeStruct(buffer, fieldIds, fieldLengths, s.getDataType());
     }
 
-    private void writeStruct(GrowableByteBuffer buffer, List<Integer> fieldIds,
-                             List<Integer> fieldLengths, StructDataType dt)
+    private void writeStruct(GrowableByteBuffer buffer, int [] fieldIds,
+                             int [] fieldLengths, StructDataType dt)
     {
         // Actual serialization starts here.
         int lenPos = buf.position();
@@ -349,11 +351,11 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
             buf.putInt2_4_8Bytes(uncompressedSize);
         }
 
-        buf.putInt1_4Bytes(fieldIds.size());
+        buf.putInt1_4Bytes(fieldIds.length);
 
-        for (int i = 0; i < fieldIds.size(); ++i) {
-            putInt1_4Bytes(null, fieldIds.get(i));
-            putInt2_4_8Bytes(null, fieldLengths.get(i));
+        for (int i = 0; i < fieldIds.length; ++i) {
+            putInt1_4Bytes(null, fieldIds[i]);
+            putInt2_4_8Bytes(null, fieldLengths[i]);
         }
 
         int pos = buf.position();
@@ -378,8 +380,8 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
     @Override
     public void write(FieldBase field, ImmutableStruct s) {
         int fieldCount = s.getFieldCount();
-        List<Integer> fieldIds = new ArrayList<>(fieldCount);
-        List<Integer> fieldLengths = new ArrayList<>(fieldCount);
+        int [] fieldIds = new int[fieldCount];
+        int [] fieldLengths = new int[fieldCount];
         GrowableByteBuffer buffer = s.getRawBuffer(fieldIds, fieldLengths);
         writeStruct(buffer, fieldIds, fieldLengths, s.getDataType());
     }
