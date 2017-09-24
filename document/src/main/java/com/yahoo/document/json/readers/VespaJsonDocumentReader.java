@@ -53,7 +53,7 @@ public class VespaJsonDocumentReader {
             switch (documentParseInfo.operationType) {
                 case PUT:
                     documentOperation = new DocumentPut(new Document(documentType, documentParseInfo.documentId, backing));
-                    readPut(documentParseInfo.fieldsBuffer, (DocumentPut) documentOperation);
+                    readPut(documentParseInfo.fieldsBuffer, (DocumentPut) documentOperation, backing);
                     verifyEndState(documentParseInfo.fieldsBuffer, JsonToken.END_OBJECT);
                     break;
                 case REMOVE:
