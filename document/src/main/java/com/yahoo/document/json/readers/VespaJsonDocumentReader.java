@@ -19,7 +19,6 @@ import com.yahoo.document.fieldpathupdate.RemoveFieldPathUpdate;
 import com.yahoo.document.json.JsonReaderException;
 import com.yahoo.document.json.TokenBuffer;
 import com.yahoo.document.serialization.AverageSize;
-import com.yahoo.document.serialization.ReuseableGrowableBuffer;
 import com.yahoo.document.update.FieldUpdate;
 import com.yahoo.io.GrowableByteBuffer;
 
@@ -198,7 +197,7 @@ public class VespaJsonDocumentReader {
             DocumentType documentType, String fieldPath, TokenBuffer buffer, String fieldPathOperation) {
         AssignFieldPathUpdate fieldPathUpdate = new AssignFieldPathUpdate(documentType, fieldPath);
         String arithmeticSign = SingleValueReader.UPDATE_OPERATION_TO_ARITHMETIC_SIGN.get(fieldPathOperation);
-        double value = Double.valueOf(buffer.currentText());
+        double value = buffer.currentNumber().doubleValue();
         String expression = String.format("$value %s %s", arithmeticSign, value);
         fieldPathUpdate.setExpression(expression);
         return fieldPathUpdate;

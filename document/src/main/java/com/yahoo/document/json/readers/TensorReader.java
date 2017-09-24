@@ -45,7 +45,7 @@ public class TensorReader {
             if (TensorReader.TENSOR_ADDRESS.equals(currentName)) {
                 readTensorAddress(buffer, cellBuilder);
             } else if (TensorReader.TENSOR_VALUE.equals(currentName)) {
-                cellValue = Double.valueOf(buffer.currentText());
+                cellValue = buffer.currentNumber().doubleValue();
             }
         }
         expectObjectEnd(buffer.currentToken());

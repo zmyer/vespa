@@ -143,7 +143,7 @@ public class MapReader {
     private static FieldValue keyTypeForMapUpdate(TokenBuffer.Token element, DataType expectedType) {
         FieldValue v;
         if (expectedType instanceof ArrayDataType) {
-            v = new IntegerFieldValue(Integer.valueOf(element.text));
+            v = new IntegerFieldValue((Number)element.text);
         } else if (expectedType instanceof WeightedSetDataType) {
             v = ((WeightedSetDataType) expectedType).getNestedType().createFieldValue(element.text);
         } else if (expectedType instanceof MapDataType) {

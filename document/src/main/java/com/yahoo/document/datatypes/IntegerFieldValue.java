@@ -39,6 +39,10 @@ public final class IntegerFieldValue extends NumericFieldValue {
         this.value = value;
     }
 
+    public IntegerFieldValue(Number value) {
+        this.value = value.intValue();
+    }
+
     public IntegerFieldValue(String s) {
         value = Integer.parseInt(s);
     }

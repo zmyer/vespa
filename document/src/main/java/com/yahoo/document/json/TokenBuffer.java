@@ -8,6 +8,7 @@ import java.util.Iterator;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.JsonTokenId;
 import com.google.common.base.Preconditions;
 
 /**
@@ -19,9 +20,9 @@ public class TokenBuffer {
     public static final class Token {
         public final JsonToken token;
         public final String name;
-        public final String text;
+        public final Object text;
 
-        Token(JsonToken token, String name, String text) {
+        Token(JsonToken token, String name, Object text) {
             this.token = token;
             this.name = name;
             this.text = text;
@@ -61,6 +62,12 @@ public class TokenBuffer {
     }
 
     public String currentText() {
+        return (String)buffer.peekFirst().text;
+    }
+    public Number currentNumber() {
+        return (Number)buffer.peekFirst().text;
+    }
+    public Object currentObject() {
         return buffer.peekFirst().text;
     }
 
@@ -68,7 +75,7 @@ public class TokenBuffer {
         return buffer.size();
     }
 
-    private void add(JsonToken token, String name, String text) {
+    private void add(JsonToken token, String name, Object text) {
         buffer.addLast(new Token(token, name, text));
     }
 
@@ -109,7 +116,17 @@ public class TokenBuffer {
 
     private void addFromParser(JsonToken t, JsonParser tokens) {
         try {
-            add(t, tokens.getCurrentName(), tokens.getText());
+            switch (t.id()) {
+                case JsonTokenId.ID_NUMBER_INT:
+                    add(t, tokens.getCurrentName(), tokens.getLongValue());
+                    break;
+                case JsonTokenId.ID_NUMBER_FLOAT:
+                    add(t, tokens.getCurrentName(), tokens.getDoubleValue());
+                    break;
+                default:
+                    add(t, tokens.getCurrentName(), tokens.getText());
+                    break;
+            }
         } catch (IOException e) {
             // TODO something sane
             throw new RuntimeException(e);

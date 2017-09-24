@@ -25,7 +25,7 @@ public class WeightedSetReader {
         while (buffer.nesting() >= initNesting) {
             // XXX the keys are defined in the spec to always be represented as strings
             FieldValue v = valueType.createFieldValue(buffer.currentName());
-            weightedSet.put(v, Integer.valueOf(buffer.currentText()));
+            weightedSet.put(v, buffer.currentNumber().intValue());
             buffer.next();
         }
     }
