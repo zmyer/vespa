@@ -52,8 +52,13 @@ public class Document extends StructuredFieldValue {
      * @param id The id for this document
      */
     public Document(DocumentType docType, DocumentId id) {
+        this(docType, id, null);
+
+    }
+
+    public Document(DocumentType docType, DocumentId id, GrowableByteBuffer backing) {
         super(docType);
-        setNewType(docType);
+        setNewType(docType, backing);
         internalSetId(id, docType);
     }
 
@@ -105,18 +110,27 @@ public class Document extends StructuredFieldValue {
         return doc;
     }
 
-    private void setNewType(DocumentType type) {
-        header = type.getHeaderType().createFieldValue();
-        body = type.getBodyType().createFieldValue();
+    private void setNewType(DocumentType type, GrowableByteBuffer backing) {
+        if (backing != null) {
+            header = type.getHeaderType().createImmutableFieldValue(backing);
+            body = type.getBodyType().createImmutableFieldValue(backing);
+        } else {
+            header = type.getHeaderType().createFieldValue();
+            body = type.getBodyType().createFieldValue();
+        }
     }
 
     public void setDataType(DataType type) {
+        setDataType(type, null);
+    }
+
+    public void setDataType(DataType type, GrowableByteBuffer backing) {
         if (docId != null && docId.hasDocType() && !docId.getDocType().equals(type.getName())) {
             throw new IllegalArgumentException("Trying to set a document type (" + type.getName() +
                                                ") that doesn't match the document id (" + docId + ").");
         }
         super.setDataType(type);
-        setNewType((DocumentType)type);
+        setNewType((DocumentType)type, backing);
     }
 
     public int getSerializedSize() throws SerializationException {

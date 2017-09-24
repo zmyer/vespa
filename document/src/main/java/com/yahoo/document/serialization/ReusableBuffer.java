@@ -26,7 +26,7 @@ public abstract class ReusableBuffer<T> {
         this.reuseFactor = reuseFactor;
     }
     public T alloc() {
-        T buf = buffer;
+        T buf = (buffer == null) ? allocate(average.getValue()*2) : buffer;
         buffer = null;
         return buf;
     }

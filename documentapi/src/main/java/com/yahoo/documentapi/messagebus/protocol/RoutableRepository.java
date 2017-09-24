@@ -101,23 +101,26 @@ final class RoutableRepository {
         DocumentSerializer out;
 
         GrowableByteBuffer backing = tlsBuffer.get().alloc();
-        if (version.getMajor() >= 5) {
-            out = DocumentSerializerFactory.createHead(backing);
-        } else {
-            out = DocumentSerializerFactory.create42(backing);
-        }
+        byte[] ret = null;
+        try {
+            if (version.getMajor() >= 5) {
+                out = DocumentSerializerFactory.createHead(backing);
+            } else {
+                out = DocumentSerializerFactory.create42(backing);
+            }
 
-        out.putInt(null, type);
-        if (!factory.encode(obj, out)) {
-            log.log(LogLevel.ERROR, "Routable factory " + factory.getClass().getName() + " failed to serialize " +
-                    "routable of type " + type + " (version " + version + ").");
-            return new byte[0];
+            out.putInt(null, type);
+            if (!factory.encode(obj, out)) {
+                log.log(LogLevel.ERROR, "Routable factory " + factory.getClass().getName() + " failed to serialize " +
+                        "routable of type " + type + " (version " + version + ").");
+                return new byte[0];
+            }
+            ret = new byte[out.getBuf().position()];
+            out.getBuf().rewind();
+            out.getBuf().get(ret);
+        } finally {
+            tlsBuffer.get().free(backing, ret.length);
         }
-        byte[] ret = new byte[out.getBuf().position()];
-        out.getBuf().rewind();
-        out.getBuf().get(ret);
-
-        tlsBuffer.get().free(backing, ret.length);
 
         return ret;
     }

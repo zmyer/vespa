@@ -35,7 +35,7 @@ public class StructDataType extends BaseStructDataType {
     }
 
     @Override
-    public FieldValue createImmutableFieldValue(GrowableByteBuffer backing) {
+    public StructuredFieldValue createImmutableFieldValue(GrowableByteBuffer backing) {
         return new ImmutableStruct(this, getFieldCount(), backing);
     }
 

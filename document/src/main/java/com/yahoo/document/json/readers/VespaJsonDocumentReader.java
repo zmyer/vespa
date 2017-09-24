@@ -48,10 +48,11 @@ public class VespaJsonDocumentReader {
 
     public DocumentOperation createDocumentOperation(DocumentType documentType, DocumentParseInfo documentParseInfo) {
         final DocumentOperation documentOperation;
+        GrowableByteBuffer backing = tlsBuffer.get().alloc();
         try {
             switch (documentParseInfo.operationType) {
                 case PUT:
-                    documentOperation = new DocumentPut(new Document(documentType, documentParseInfo.documentId));
+                    documentOperation = new DocumentPut(new Document(documentType, documentParseInfo.documentId, backing));
                     readPut(documentParseInfo.fieldsBuffer, (DocumentPut) documentOperation);
                     verifyEndState(documentParseInfo.fieldsBuffer, JsonToken.END_OBJECT);
                     break;
@@ -60,7 +61,7 @@ public class VespaJsonDocumentReader {
                     break;
                 case UPDATE:
                     documentOperation = new DocumentUpdate(documentType, documentParseInfo.documentId);
-                    readUpdate(documentParseInfo.fieldsBuffer, (DocumentUpdate) documentOperation);
+                    readUpdate(documentParseInfo.fieldsBuffer, (DocumentUpdate) documentOperation, backing);
                     verifyEndState(documentParseInfo.fieldsBuffer, JsonToken.END_OBJECT);
                     break;
                 default:
@@ -68,6 +69,8 @@ public class VespaJsonDocumentReader {
             }
         } catch (JsonReaderException e) {
             throw JsonReaderException.addDocId(e, documentParseInfo.documentId);
+        } finally {
+            tlsBuffer.get().free(backing, backing.position());
         }
         if (documentParseInfo.create.isPresent()) {
             if (!(documentOperation instanceof DocumentUpdate)) {
@@ -81,39 +84,38 @@ public class VespaJsonDocumentReader {
 
     // Exposed for unit testing...
     public void readPut(TokenBuffer buffer, DocumentPut put) {
-        GrowableByteBuffer backing = tlsBuffer.get().alloc();
+        readPut(buffer, put, new GrowableByteBuffer());
+    }
+
+    private void readPut(TokenBuffer buffer, DocumentPut put, GrowableByteBuffer backing) {
         try {
             populateComposite(buffer, put.getDocument(), backing);
         } catch (JsonReaderException e) {
             throw JsonReaderException.addDocId(e, put.getId());
-        } finally {
-            tlsBuffer.get().free(backing, backing.position());
         }
     }
 
     // Exposed for unit testing...
     public void readUpdate(TokenBuffer buffer, DocumentUpdate update) {
+        readUpdate(buffer, update, new GrowableByteBuffer());
+    }
+    public void readUpdate(TokenBuffer buffer, DocumentUpdate update, GrowableByteBuffer backing) {
         expectObjectStart(buffer.currentToken());
         int localNesting = buffer.nesting();
 
         buffer.next();
-        GrowableByteBuffer backing = tlsBuffer.get().alloc();
-        try {
-            while (localNesting <= buffer.nesting()) {
-                expectObjectStart(buffer.currentToken());
+        while (localNesting <= buffer.nesting()) {
+            expectObjectStart(buffer.currentToken());
 
-                String fieldName = buffer.currentName();
-                if (isFieldPath(fieldName)) {
-                    addFieldPathUpdates(update, buffer, fieldName, backing);
-                } else {
-                    addFieldUpdates(update, buffer, fieldName, backing);
-                }
-
-                expectObjectEnd(buffer.currentToken());
-                buffer.next();
+            String fieldName = buffer.currentName();
+            if (isFieldPath(fieldName)) {
+                addFieldPathUpdates(update, buffer, fieldName, backing);
+            } else {
+                addFieldUpdates(update, buffer, fieldName, backing);
             }
-        } finally {
-            tlsBuffer.get().free(backing, backing.position());
+
+            expectObjectEnd(buffer.currentToken());
+            buffer.next();
         }
     }
 
