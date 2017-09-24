@@ -3,20 +3,6 @@ package com.yahoo.document.serialization;
 import java.nio.ByteBuffer;
 
 public abstract class ReusableBuffer<T> {
-    private final static class AverageSize {
-        private long size = 0;
-        private long count = 1;
-        AverageSize(int initialSize) {
-            size = initialSize;
-        }
-        public void updateAverage(int sz) {
-            size += sz;
-            count++;
-        }
-        public int getValue() {
-            return (int)(size/count);
-        }
-    }
     private final AverageSize average;
     private T buffer;
     private final int reuseFactor;
