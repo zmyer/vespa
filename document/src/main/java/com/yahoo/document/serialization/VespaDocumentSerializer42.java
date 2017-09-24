@@ -1,6 +1,7 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.document.serialization;
 
+import com.yahoo.compress.CompressionType;
 import com.yahoo.compress.Compressor;
 import com.yahoo.document.*;
 import com.yahoo.document.annotation.*;
@@ -382,8 +383,31 @@ public class VespaDocumentSerializer42 extends BufferSerializer implements Docum
         int fieldCount = s.getFieldCount();
         int [] fieldIds = new int[fieldCount];
         int [] fieldLengths = new int[fieldCount];
-        GrowableByteBuffer buffer = s.getRawBuffer(fieldIds, fieldLengths);
-        writeStruct(buffer, fieldIds, fieldLengths, s.getDataType());
+        if (s.getDataType().getCompressionConfig().type.isCompressed()) {
+            GrowableByteBuffer buffer = s.getRawBuffer(fieldIds, fieldLengths);
+            writeStruct(buffer, fieldIds, fieldLengths, s.getDataType());
+        } else {
+            // Actual serialization starts here.
+            int lenPos = buf.position();
+            putInt(null, 0); // Move back to this after compression is done.
+            buf.put(CompressionType.NONE.getCode());
+            Integer [] fieldOrder = s.getOrderedFieldIdsAndlengths(fieldIds, fieldLengths);
+            buf.putInt1_4Bytes(fieldIds.length);
+
+            for (int i = 0; i < fieldIds.length; ++i) {
+                putInt1_4Bytes(null, fieldIds[i]);
+                putInt2_4_8Bytes(null, fieldLengths[i]);
+            }
+
+            int pos = buf.position();
+            s.serialize(buf, fieldOrder);
+            int dataLength = buf.position() - pos;
+
+            int posNow = buf.position();
+            buf.position(lenPos);
+            putInt(null, dataLength);
+            buf.position(posNow);
+        }
     }
 
     /**

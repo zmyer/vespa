@@ -191,6 +191,29 @@ public final class ImmutableStruct extends StructuredFieldValue {
             return a - b;
         }
     }
+    public Integer [] getOrderedFieldIdsAndlengths(int [] fieldIds, int [] fieldLengths) {
+        Integer [] order = new Integer[fieldCount];
+        for (int i = 0; i < fieldCount; i++) {
+            order[i] = i;
+        }
+        Arrays.sort(order, new Compare());
+
+        int i = 0;
+        for (int index : order) {
+            fieldLengths[i] = length(index);
+            fieldIds[i] = fields[index].getId();
+            i++;
+        }
+        return order;
+    }
+
+    public void serialize(GrowableByteBuffer buf, Integer [] order) {
+        byte [] data = buffer.array();
+        for (int index : order) {
+            buf.put(data, offsets[index], length(index));
+        }
+    }
+
     public GrowableByteBuffer getRawBuffer(int [] fieldIds, int [] fieldLengths) {
         GrowableByteBuffer buf = new GrowableByteBuffer(offsets[fieldCount] - offsets[0], 2.0f);
         Integer [] order = new Integer[fieldCount];
