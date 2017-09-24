@@ -33,8 +33,8 @@ public class Document extends StructuredFieldValue {
     public static final int classId = registerClass(Ids.document + 3, Document.class);
     public static final short SERIALIZED_VERSION = 8;
     private DocumentId docId;
-    private Struct header;
-    private Struct body;
+    private StructuredFieldValue header;
+    private StructuredFieldValue body;
     private Long lastModified = null;
 
     /**
@@ -88,8 +88,8 @@ public class Document extends StructuredFieldValue {
         docId = id;
     }
 
-    public Struct getHeader() { return header; }
-    public Struct getBody() { return body; }
+    public StructuredFieldValue getHeader() { return header; }
+    public StructuredFieldValue getBody() { return body; }
 
     @Override
     public void assign(Object o) {

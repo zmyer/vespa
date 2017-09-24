@@ -231,7 +231,7 @@ public final class XmlDocumentWriter implements DocumentWriter {
 
     @Override
     public void write(FieldBase field, StructuredFieldValue value) {
-        buffer.beginTag(field.getName());
+        optionalWrapperStart(field);
         Iterator<Map.Entry<Field, FieldValue>> i = value.iterator();
         while (i.hasNext()) {
             Map.Entry<Field, FieldValue> v = i.next();
@@ -239,7 +239,7 @@ public final class XmlDocumentWriter implements DocumentWriter {
             v.getValue().printXml(buffer);
             buffer.endTag();
         }
-        buffer.endTag();
+        optionalWrapperEnd(field);
     }
 
     @Override

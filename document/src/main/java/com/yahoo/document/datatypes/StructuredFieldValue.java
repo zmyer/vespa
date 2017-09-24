@@ -167,6 +167,10 @@ public abstract class StructuredFieldValue extends CompositeFieldValue {
 
     public abstract int getFieldCount();
 
+    public StructuredFieldValue clone()  {
+        return (StructuredFieldValue) super.clone();
+    }
+
     public abstract Iterator<Map.Entry<Field, FieldValue>> iterator();
 
     @Override
