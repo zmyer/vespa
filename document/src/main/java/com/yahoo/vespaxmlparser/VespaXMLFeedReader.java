@@ -220,7 +220,7 @@ public class VespaXMLFeedReader extends VespaXMLReader implements FeedReader {
      * @see com.yahoo.vespaxmlparser.FeedReader#read(com.yahoo.vespaxmlparser.VespaXMLFeedReader.Operation)
      */
     @Override
-    public void read(Operation operation) throws Exception {
+    public void readOne(Operation operation) throws Exception {
         String startTag = null;
         operation.setInvalid();
 

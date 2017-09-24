@@ -33,7 +33,7 @@ public class JsonFeedReader implements FeedReader {
     }
 
     @Override
-    public void read(Operation operation) throws Exception {
+    public void readOne(Operation operation) throws Exception {
         DocumentOperation documentOperation = reader.next();
 
         if (documentOperation == null) {
