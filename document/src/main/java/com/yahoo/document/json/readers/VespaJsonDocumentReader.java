@@ -197,7 +197,7 @@ public class VespaJsonDocumentReader {
             DocumentType documentType, String fieldPath, TokenBuffer buffer, String fieldPathOperation) {
         AssignFieldPathUpdate fieldPathUpdate = new AssignFieldPathUpdate(documentType, fieldPath);
         String arithmeticSign = SingleValueReader.UPDATE_OPERATION_TO_ARITHMETIC_SIGN.get(fieldPathOperation);
-        double value = buffer.currentNumber().doubleValue();
+        double value = Double.valueOf(buffer.currentText());
         String expression = String.format("$value %s %s", arithmeticSign, value);
         fieldPathUpdate.setExpression(expression);
         return fieldPathUpdate;

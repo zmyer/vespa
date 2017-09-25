@@ -43,7 +43,7 @@ public class SingleValueReader {
 
     public static FieldValue readSingleValue(TokenBuffer buffer, DataType expectedType, GrowableByteBuffer backing) {
         if (buffer.currentToken().isScalarValue()) {
-            return readAtomic(buffer.currentObject(), expectedType);
+            return readAtomic(buffer.currentText(), expectedType);
         } else {
             FieldValue fieldValue = expectedType.createImmutableFieldValue(backing);
             CompositeReader.populateComposite(buffer, fieldValue, backing);
@@ -63,16 +63,16 @@ public class SingleValueReader {
                 break;
             // double is silly, but it's what is used internally anyway
             case UPDATE_INCREMENT:
-                update = ValueUpdate.createIncrement(buffer.currentNumber());
+                update = ValueUpdate.createIncrement(Double.valueOf(buffer.currentText()));
                 break;
             case UPDATE_DECREMENT:
-                update = ValueUpdate.createDecrement(buffer.currentNumber());
+                update = ValueUpdate.createDecrement(Double.valueOf(buffer.currentText()));
                 break;
             case UPDATE_MULTIPLY:
-                update = ValueUpdate.createMultiply(buffer.currentNumber());
+                update = ValueUpdate.createMultiply(Double.valueOf(buffer.currentText()));
                 break;
             case UPDATE_DIVIDE:
-                update = ValueUpdate.createDivide(buffer.currentNumber());
+                update = ValueUpdate.createDivide(Double.valueOf(buffer.currentText()));
                 break;
             default:
                 throw new IllegalArgumentException("Operation \"" + buffer.currentName() + "\" not implemented.");
@@ -84,13 +84,13 @@ public class SingleValueReader {
         return arithmeticExpressionPattern.matcher(expression.trim());
     }
 
-    public static FieldValue readAtomic(Object field, DataType expectedType) {
+    public static FieldValue readAtomic(String field, DataType expectedType) {
         if (expectedType.equals(DataType.RAW)) {
-            return expectedType.createFieldValue(new Base64().decode((String)field));
+            return expectedType.createFieldValue(new Base64().decode(field));
         } else if (expectedType.equals(PositionDataType.INSTANCE)) {
-            return PositionDataType.fromString((String)field);
+            return PositionDataType.fromString(field);
         } else if (expectedType instanceof ReferenceDataType) {
-            return readReferenceFieldValue((String)field, expectedType);
+            return readReferenceFieldValue(field, expectedType);
         } else {
             FieldValue fv = expectedType.createFieldValue();
             fv.assign(field);
