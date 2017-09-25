@@ -3,6 +3,7 @@ package com.yahoo.vespaxmlparser;
 
 import com.yahoo.vespaxmlparser.VespaXMLFeedReader.Operation;
 
+import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 
 /**
@@ -17,14 +18,14 @@ public interface FeedReader {
 
     /**
      * Reads the next operation from the stream.
-     * @param operation The operation to fill in. Operation is unchanged if none was found.
+     * @return A future operation.
      */
-    public abstract void readOne(Operation operation) throws Exception;
+    public abstract Future<Operation> readOne() throws Exception;
 
-    default void read(Operation operation) throws Exception {
+    default Future<Operation> read() throws Exception {
         numCores.acquire();
         try {
-            readOne(operation);
+            return readOne();
         } finally {
             numCores.release();
         }

@@ -7,16 +7,25 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.google.common.annotations.Beta;
 import com.yahoo.document.DocumentId;
 import com.yahoo.document.DocumentOperation;
+import com.yahoo.document.DocumentPut;
+import com.yahoo.document.DocumentRemove;
 import com.yahoo.document.DocumentType;
 import com.yahoo.document.DocumentTypeManager;
+import com.yahoo.document.DocumentUpdate;
 import com.yahoo.document.TestAndSetCondition;
 import com.yahoo.document.json.document.DocumentParser;
 import com.yahoo.document.json.readers.DocumentParseInfo;
 import com.yahoo.document.json.readers.VespaJsonDocumentReader;
+import com.yahoo.vespaxmlparser.VespaXMLFeedReader;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static com.yahoo.document.json.JsonReader.ReaderState.END_OF_FEED;
 import static com.yahoo.document.json.readers.JsonParserHelpers.expectArrayStart;
@@ -39,6 +48,8 @@ public class JsonReader {
     private final JsonParser parser;
     private final DocumentTypeManager typeManager;
     private ReaderState state = ReaderState.AT_START;
+    private final InputStream stream;
+    private final Executor executor;
 
     enum ReaderState {
         AT_START, READING, END_OF_FEED
@@ -46,6 +57,8 @@ public class JsonReader {
 
     public JsonReader(DocumentTypeManager typeManager, InputStream input, JsonFactory parserFactory) {
         this.typeManager = typeManager;
+        stream = input;
+        executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
         try {
             parser = parserFactory.createParser(input);
@@ -80,6 +93,44 @@ public class JsonReader {
     }
 
     public DocumentOperation next() {
+        Optional<DocumentParseInfo> documentParseInfo = parseNext();
+        if ( !documentParseInfo.isPresent()) {
+            return null;
+        }
+        return createOperation(documentParseInfo.get());
+    }
+
+    public Future<VespaXMLFeedReader.Operation> nextFuture() {
+        Optional<DocumentParseInfo> documentParseInfo = parseNext();
+        CompletableFuture<VespaXMLFeedReader.Operation> promise = new CompletableFuture<>();
+        executor.execute();
+        return promise;
+    }
+
+    private void createOperation(DocumentParseInfo documentParseInfo, CompletableFuture<VespaXMLFeedReader.Operation> promise) {
+        DocumentOperation documentOperation = createOperation(documentParseInfo);
+        VespaXMLFeedReader.Operation operation = new VespaXMLFeedReader.Operation();
+        if (documentOperation == null) {
+            try {
+                stream.close();
+            } catch (IOException e) {
+            }
+            operation.setInvalid();
+        } else if (documentOperation instanceof DocumentUpdate) {
+            operation.setDocumentUpdate((DocumentUpdate) documentOperation);
+        } else if (documentOperation instanceof DocumentRemove) {
+            operation.setRemove(documentOperation.getId());
+        } else if (documentOperation instanceof DocumentPut) {
+            operation.setDocument(((DocumentPut) documentOperation).getDocument());
+        } else {
+            promise.completeExceptionally( new IllegalStateException("Got unknown class from JSON reader: " + documentOperation.getClass().getName()));
+        }
+
+        operation.setCondition(documentOperation.getCondition());
+        promise.complete(operation);
+    }
+
+    private Optional<DocumentParseInfo> parseNext() {
         switch (state) {
             case AT_START:
                 JsonToken t = nextToken(parser);
@@ -99,15 +150,19 @@ public class JsonReader {
             state = END_OF_FEED;
             throw new RuntimeException(r);
         }
-        if (! documentParseInfo.isPresent()) {
+        if (!documentParseInfo.isPresent()) {
             state = END_OF_FEED;
-            return null;
         }
+        return documentParseInfo;
+    }
+
+
+    private DocumentOperation createOperation(DocumentParseInfo documentParseInfo) {
         VespaJsonDocumentReader vespaJsonDocumentReader = new VespaJsonDocumentReader();
         DocumentOperation operation = vespaJsonDocumentReader.createDocumentOperation(
-                getDocumentTypeFromString(documentParseInfo.get().documentId.getDocType(), typeManager),
-                documentParseInfo.get());
-        operation.setCondition(TestAndSetCondition.fromConditionString(documentParseInfo.get().condition));
+                getDocumentTypeFromString(documentParseInfo.documentId.getDocType(), typeManager),
+                documentParseInfo);
+        operation.setCondition(TestAndSetCondition.fromConditionString(documentParseInfo.condition));
         return operation;
     }
 

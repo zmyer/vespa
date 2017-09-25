@@ -2,6 +2,7 @@
 package com.yahoo.document.json;
 
 import java.io.InputStream;
+import java.util.concurrent.Future;
 
 import com.fasterxml.jackson.core.JsonFactory;
 import com.yahoo.document.DocumentOperation;
@@ -33,7 +34,7 @@ public class JsonFeedReader implements FeedReader {
     }
 
     @Override
-    public void readOne(Operation operation) throws Exception {
+    public Future<Operation> readOne() throws Exception {
         DocumentOperation documentOperation = reader.next();
 
         if (documentOperation == null) {
