@@ -62,8 +62,7 @@ public class VespaXMLReaderTestCase {
     @Test
     public void testNews1() throws Exception {
         VespaXMLFeedReader parser = new VespaXMLFeedReader("src/test/vespaxmlparser/testalltypes.xml", manager);
-        VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-        parser.read(op);
+        VespaXMLFeedReader.Operation op = parser.read().get();
 
         assertTrue(VespaXMLFeedReader.OperationType.INVALID != op.getType());
         Document doc = op.getDocument();
@@ -147,8 +146,7 @@ public class VespaXMLReaderTestCase {
     public void testNews3() throws Exception {
         // Updating all elements in a documentType
         VespaXMLFeedReader parser = new VespaXMLFeedReader("src/test/vespaxmlparser/test03.xml", manager);
-        VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-        parser.read(op);
+        VespaXMLFeedReader.Operation op = parser.read().get();
 
         assertEquals(VespaXMLFeedReader.OperationType.UPDATE, op.getType());
 
@@ -212,8 +210,7 @@ public class VespaXMLReaderTestCase {
         // Test on adding just a few fields to a DocumentUpdate (implies other fields to null)
         VespaXMLFeedReader parser = new VespaXMLFeedReader("src/test/vespaxmlparser/test04.xml", manager);
 
-        VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-        parser.read(op);
+        VespaXMLFeedReader.Operation op = parser.read().get();
 
         assertEquals(VespaXMLFeedReader.OperationType.UPDATE, op.getType());
 
@@ -267,8 +264,7 @@ public class VespaXMLReaderTestCase {
         // Adding a few new fields to a Document using different syntax
         VespaXMLFeedReader parser = new VespaXMLFeedReader("src/test/vespaxmlparser/test05.xml", manager);
 
-        VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-        parser.read(op);
+        VespaXMLFeedReader.Operation op = parser.read().get();
 
         assertEquals(VespaXMLFeedReader.OperationType.UPDATE, op.getType());
 
@@ -332,20 +328,19 @@ public class VespaXMLReaderTestCase {
 
         // long value with txt
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
         }
 
         // empty string
-        VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-        parser.read(op);
+        VespaXMLFeedReader.Operation op = parser.read().get();
         assertEquals("doc:news:http://news6b", op.getDocument().getId().toString());
 
         // int array with text
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -353,7 +348,7 @@ public class VespaXMLReaderTestCase {
 
         // long array with whitespace
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -361,7 +356,7 @@ public class VespaXMLReaderTestCase {
 
         // byte array with value
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -369,7 +364,7 @@ public class VespaXMLReaderTestCase {
 
         // float array with string
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -377,7 +372,7 @@ public class VespaXMLReaderTestCase {
 
         // weighted set of int with string
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -385,7 +380,7 @@ public class VespaXMLReaderTestCase {
 
         // weighted set of int with string as weight
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -393,16 +388,16 @@ public class VespaXMLReaderTestCase {
 
         // weighted set of string with string as weight
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
         }
 
-        parser.read(op = new VespaXMLFeedReader.Operation());
+        op = parser.read().get();
         assertEquals("doc:news:http://news6j", op.getDocument().getId().toString());
 
-        parser.read(op = new VespaXMLFeedReader.Operation());
+        op = parser.read().get();
         assertEquals(VespaXMLFeedReader.OperationType.INVALID, op.getType());
     }
 
@@ -412,8 +407,7 @@ public class VespaXMLReaderTestCase {
         // are also some updates that will fail (be skipped).
         VespaXMLFeedReader parser = new VespaXMLFeedReader("src/test/vespaxmlparser/test07.xml", manager);
 
-        VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-        parser.read(op);
+        VespaXMLFeedReader.Operation op = parser.read().get();
 
         assertEquals(VespaXMLFeedReader.OperationType.UPDATE, op.getType());
 
@@ -447,7 +441,7 @@ public class VespaXMLReaderTestCase {
 
         // Trying arithmetic on string (b)
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -455,7 +449,7 @@ public class VespaXMLReaderTestCase {
 
         // "By" as string (c)
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -463,7 +457,7 @@ public class VespaXMLReaderTestCase {
 
         // Empty key in weighted set of int (d)
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -471,7 +465,7 @@ public class VespaXMLReaderTestCase {
 
         // No "by" attribute (e)
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -479,7 +473,7 @@ public class VespaXMLReaderTestCase {
 
         // Float key as string (f)
         try {
-            parser.read(new VespaXMLFeedReader.Operation());
+            parser.read().get();
             fail();
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -490,8 +484,7 @@ public class VespaXMLReaderTestCase {
     public void testNews8() throws Exception {
         VespaXMLFeedReader parser = new VespaXMLFeedReader("src/test/vespaxmlparser/test08.xml", manager);
 
-        VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-        parser.read(op);
+        VespaXMLFeedReader.Operation op = parser.read().get();
 
         assertEquals(VespaXMLFeedReader.OperationType.UPDATE, op.getType());
 
@@ -516,24 +509,20 @@ public class VespaXMLReaderTestCase {
         VespaXMLFeedReader parser = new VespaXMLFeedReader("src/test/vespaxmlparser/test09.xml", manager);
 
         {
-            VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-            parser.read(op);
+            VespaXMLFeedReader.Operation op = parser.read().get();
 
             assertEquals(VespaXMLFeedReader.OperationType.REMOVE, op.getType());
             assertEquals("doc:news:http://news9a", op.getRemove().toString());
         }
         {
-            VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-            parser.read(op);
-
+            VespaXMLFeedReader.Operation op = parser.read().get();
             assertEquals(VespaXMLFeedReader.OperationType.REMOVE, op.getType());
             assertEquals("doc:news:http://news9b", op.getRemove().toString());
         }
         {
             // Remove without documentid. Not supported.
-            VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
             try {
-                parser.read(op);
+                parser.read().get();
                 fail();
             } catch (Exception e) {
                 System.out.println(e.getMessage());
@@ -545,8 +534,7 @@ public class VespaXMLReaderTestCase {
     public void testNews10() throws Exception {
         VespaXMLFeedReader parser = new VespaXMLFeedReader("src/test/vespaxmlparser/test10.xml", manager);
         {
-            VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-            parser.read(op);
+            VespaXMLFeedReader.Operation op = parser.read().get();
             Document doc = op.getDocument();
 
             assertEquals(new StringFieldValue("testUrl"), doc.getFieldValue("url"));
@@ -583,15 +571,13 @@ public class VespaXMLReaderTestCase {
             assertEquals(new Integer(14), strWset.get(new StringFieldValue("string14")));
         }
         {
-            VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-            parser.read(op);
+            VespaXMLFeedReader.Operation op = parser.read().get();
             Document doc = op.getDocument();
             assertNotNull(doc);
             assertEquals(new StringFieldValue("testUrl2"), doc.getFieldValue("url"));
         }
         {
-            VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-            parser.read(op);
+            VespaXMLFeedReader.Operation op = parser.read().get();
             DocumentUpdate upd = op.getDocumentUpdate();
 
             assertNull(upd.getFieldUpdate("url"));
@@ -627,8 +613,7 @@ public class VespaXMLReaderTestCase {
                                  .getWeight());
         }
         {
-            VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-            parser.read(op);
+            VespaXMLFeedReader.Operation op = parser.read().get();
             DocumentUpdate upd = op.getDocumentUpdate();
 
             assertEquals(new StringFieldValue("assignUrl"),
@@ -659,15 +644,13 @@ public class VespaXMLReaderTestCase {
             assertNull(upd.getFieldUpdate("weightedsetstring"));
         }
         {
-            VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-            parser.read(op);
+            VespaXMLFeedReader.Operation op = parser.read().get();
             assertEquals("doc:news:http://news10e", op.getRemove().toString());
         }
         {
             // Illegal remove without documentid attribute
             try {
-                VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-                parser.read(op);
+                parser.read().get();
                 fail();
             } catch (Exception e) {
                 System.out.println(e.getMessage());
@@ -680,8 +663,7 @@ public class VespaXMLReaderTestCase {
         // Adding a few new fields to a Document using different syntax
         VespaXMLFeedReader parser = new VespaXMLFeedReader("src/tests/vespaxml/fieldpathupdates.xml", manager);
 
-        VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-        parser.read(op);
+        VespaXMLFeedReader.Operation op = parser.read().get();
 
         assertEquals(VespaXMLFeedReader.OperationType.UPDATE, op.getType());
 
@@ -883,8 +865,7 @@ public class VespaXMLReaderTestCase {
         final int NUM_OPERATIONS_IN_FEED = 3;
 
         for (int i = 0; i < NUM_OPERATIONS_IN_FEED; i++) {
-            VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-            parser.read(op);
+            VespaXMLFeedReader.Operation op = parser.read().get();
 
             assertTrue("Missing test and set condition", op.getCondition().isPresent());
             assertEquals("Condition is not the same as in xml feed", "news.value_long == 1", op.getCondition().getSelection());

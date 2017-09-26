@@ -6,6 +6,13 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.xml.stream.XMLStreamException;
 
@@ -27,7 +34,9 @@ public abstract class Feeder {
     protected List<String> errors = new LinkedList<String>();
     protected boolean doAbort = true;
     protected boolean createIfNonExistent = false;
+    protected AtomicBoolean documentError = new AtomicBoolean(false);
     protected final VespaFeedSender sender;
+    private final ExecutorService orderedExecutor = Executors.newSingleThreadExecutor();
     private final int MAX_ERRORS = 10;
 
     protected Feeder(DocumentTypeManager docMan, VespaFeedSender sender, InputStream stream) {
@@ -78,20 +87,10 @@ public abstract class Feeder {
             return errors;
         }
 
-        while (!sender.isAborted()) {
+        while (!sender.isAborted() && !documentError.get()) {
             try {
-                VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
-                reader.read(op);
-                if (createIfNonExistent && op.getDocumentUpdate() != null) {
-                    op.getDocumentUpdate().setCreateIfNonExistent(true);
-                }
-
-                // Done feeding.
-                if (op.getType() == VespaXMLFeedReader.OperationType.INVALID) {
-                    break;
-                } else {
-                    sender.sendOperation(op);
-                }
+                Future<VespaXMLFeedReader.Operation> op = reader.read();
+                orderedExecutor.execute(() -> send(op));
             } catch (XMLStreamException e) {
                 addException(e);
                 break;
@@ -102,8 +101,31 @@ public abstract class Feeder {
                 }
             }
         }
+        orderedExecutor.shutdown();
+        try {
+            orderedExecutor.awaitTermination(-1, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+        }
 
         return errors;
+    }
+
+    void send(Future<VespaXMLFeedReader.Operation> future) {
+        try {
+            VespaXMLFeedReader.Operation op = future.get();
+            if (createIfNonExistent && op.getDocumentUpdate() != null) {
+                op.getDocumentUpdate().setCreateIfNonExistent(true);
+            }
+
+            // Done feeding.
+            if (op.getType() == VespaXMLFeedReader.OperationType.INVALID) {
+                documentError.set(true);
+            } else {
+                sender.sendOperation(op);
+            }
+        } catch (InterruptedException e) {
+        } catch (ExecutionException e) {
+        }
     }
 
 }

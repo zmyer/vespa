@@ -94,7 +94,7 @@ public class JsonReader {
 
     public DocumentOperation next() {
         Optional<DocumentParseInfo> documentParseInfo = parseNext();
-        if ( !documentParseInfo.isPresent()) {
+        if ( ! documentParseInfo.isPresent()) {
             return null;
         }
         return createOperation(documentParseInfo.get());
@@ -103,7 +103,11 @@ public class JsonReader {
     public Future<VespaXMLFeedReader.Operation> nextFuture() {
         Optional<DocumentParseInfo> documentParseInfo = parseNext();
         CompletableFuture<VespaXMLFeedReader.Operation> promise = new CompletableFuture<>();
-        executor.execute();
+        if (documentParseInfo.isPresent()) {
+            executor.execute(() -> createOperation(documentParseInfo.get(), promise));
+        } else {
+            promise.complete(new VespaXMLFeedReader.Operation());
+        }
         return promise;
     }
 
@@ -142,7 +146,7 @@ public class JsonReader {
             case READING:
                 break;
         }
-        Optional<DocumentParseInfo> documentParseInfo;
+        Optional<DocumentParseInfo> documentParseInfo = Optional.empty();
         try {
             documentParseInfo = parseDocument();
         } catch (IOException r) {
@@ -150,7 +154,7 @@ public class JsonReader {
             state = END_OF_FEED;
             throw new RuntimeException(r);
         }
-        if (!documentParseInfo.isPresent()) {
+        if ( !documentParseInfo.isPresent()) {
             state = END_OF_FEED;
         }
         return documentParseInfo;

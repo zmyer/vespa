@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
 
 /**
  * XML parser for Vespa document XML.
@@ -206,8 +208,7 @@ public class VespaXMLFeedReader extends VespaXMLReader implements FeedReader {
     public List<Operation> readAll() throws Exception {
         List<Operation> list = new ArrayList<Operation>();
         while (true) {
-            Operation op = new Operation();
-            read(op);
+            Operation op = read().get();
             if (op.getType() == OperationType.INVALID) {
                 return list;
             } else {
@@ -220,7 +221,9 @@ public class VespaXMLFeedReader extends VespaXMLReader implements FeedReader {
      * @see com.yahoo.vespaxmlparser.FeedReader#read(com.yahoo.vespaxmlparser.VespaXMLFeedReader.Operation)
      */
     @Override
-    public void readOne(Operation operation) throws Exception {
+    public Future<Operation> readOne() throws Exception {
+        CompletableFuture<Operation> future = new CompletableFuture<>();
+        Operation operation = new Operation();
         String startTag = null;
         operation.setInvalid();
 
@@ -236,13 +239,15 @@ public class VespaXMLFeedReader extends VespaXMLReader implements FeedReader {
                         Document document = new Document(documentReader);
                         operation.setDocument(document);
                         operation.setCondition(TestAndSetCondition.fromConditionString(documentReader.getCondition()));
-                        return;
+                        future.complete(operation);
+                        return future;
                     } else if ("update".equals(startTag)) {
                         VespaXMLUpdateReader updateReader = new VespaXMLUpdateReader(reader, docTypeManager);
                         DocumentUpdate update = new DocumentUpdate(updateReader);
                         operation.setDocumentUpdate(update);
                         operation.setCondition(TestAndSetCondition.fromConditionString(updateReader.getCondition()));
-                        return;
+                        future.complete(operation);
+                        return future;
                     } else if ("remove".equals(startTag)) {
                         boolean documentIdFound = false;
 
@@ -263,7 +268,8 @@ public class VespaXMLFeedReader extends VespaXMLReader implements FeedReader {
 
                         operation.setCondition(TestAndSetCondition.fromConditionString(condition));
 
-                        return;
+                        future.complete(operation);
+                        return future;
                     } else {
                         throw newDeserializeException("Element \"" + startTag + "\" not allowed in this context");
                     }
@@ -282,6 +288,8 @@ public class VespaXMLFeedReader extends VespaXMLReader implements FeedReader {
 
             throw(e);
         }
+        future.complete(operation);
+        return future;
     }
 
     public void read(FeedOperation fo) throws XMLStreamException {

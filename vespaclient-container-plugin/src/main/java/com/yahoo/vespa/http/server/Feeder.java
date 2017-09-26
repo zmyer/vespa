@@ -327,10 +327,9 @@ public class Feeder implements Runnable {
     }
 
     private Tuple2<String, Message> getNextMessage(String operationId) throws Exception {
-        VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
         Tuple2<String, Message> msg;
 
-        getNextOperation(op);
+        VespaXMLFeedReader.Operation op = getNextOperation();
 
         switch (op.getType()) {
             case DOCUMENT:
@@ -374,12 +373,12 @@ public class Feeder implements Runnable {
         }
     }
 
-    protected void getNextOperation(VespaXMLFeedReader.Operation op) throws Exception {
+    protected VespaXMLFeedReader.Operation getNextOperation() throws Exception {
         int length = readByteLength();
 
         try (InputStream limitedInputStream = new ByteLimitedInputStream(requestInputStream, length)){
             FeedReader reader = feedReaderFactory.createReader(limitedInputStream, docTypeManager, settings.dataFormat);
-            reader.read(op);
+            return reader.read().get();
         }
     }
 

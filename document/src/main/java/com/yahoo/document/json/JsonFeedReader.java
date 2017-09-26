@@ -25,35 +25,15 @@ import com.yahoo.vespaxmlparser.VespaXMLFeedReader.Operation;
  */
 public class JsonFeedReader implements FeedReader {
     private final JsonReader reader;
-    private InputStream stream;
     private static final JsonFactory jsonFactory = new JsonFactory().disable(JsonFactory.Feature.CANONICALIZE_FIELD_NAMES);
 
     public JsonFeedReader(InputStream stream, DocumentTypeManager docMan) {
         reader = new JsonReader(docMan, stream, jsonFactory);
-        this.stream = stream;
     }
 
     @Override
     public Future<Operation> readOne() throws Exception {
-        DocumentOperation documentOperation = reader.next();
-
-        if (documentOperation == null) {
-            stream.close();
-            operation.setInvalid();
-            return;
-        }
-
-        if (documentOperation instanceof DocumentUpdate) {
-            operation.setDocumentUpdate((DocumentUpdate) documentOperation);
-        } else if (documentOperation instanceof DocumentRemove) {
-            operation.setRemove(documentOperation.getId());
-        } else if (documentOperation instanceof DocumentPut) {
-            operation.setDocument(((DocumentPut) documentOperation).getDocument());
-        } else {
-            throw new IllegalStateException("Got unknown class from JSON reader: " + documentOperation.getClass().getName());
-        }
-
-        operation.setCondition(documentOperation.getCondition());
+        return reader.nextFuture();
     }
 
 }

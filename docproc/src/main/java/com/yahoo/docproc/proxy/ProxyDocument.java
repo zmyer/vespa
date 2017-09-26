@@ -16,6 +16,7 @@ import com.yahoo.document.datatypes.FieldPathIteratorHandler;
 import com.yahoo.document.datatypes.FieldPathIteratorHandler.ModificationStatus;
 import com.yahoo.document.datatypes.FieldValue;
 import com.yahoo.document.datatypes.Struct;
+import com.yahoo.document.datatypes.StructuredFieldValue;
 import com.yahoo.document.serialization.DocumentReader;
 import com.yahoo.document.serialization.DocumentWriter;
 import com.yahoo.document.serialization.FieldReader;
@@ -228,12 +229,12 @@ public class ProxyDocument extends Document implements DocumentOperationWrapper 
     }
 
     @Override
-    public Struct getHeader() {
+    public StructuredFieldValue getHeader() {
         return doc.getHeader();
     }
 
     @Override
-    public Struct getBody() {
+    public StructuredFieldValue getBody() {
         return doc.getBody();
     }
 

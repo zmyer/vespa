@@ -32,13 +32,13 @@ public class StreamReaderV3 {
 
     public VespaXMLFeedReader.Operation getNextOperation(
             InputStream requestInputStream, FeederSettings settings) throws Exception {
-        VespaXMLFeedReader.Operation op = new VespaXMLFeedReader.Operation();
+        VespaXMLFeedReader.Operation op = null;
 
         int length = readByteLength(requestInputStream);
 
         try (InputStream limitedInputStream = new ByteLimitedInputStream(requestInputStream, length)){
             FeedReader reader = feedReaderFactory.createReader(limitedInputStream, docTypeManager, settings.dataFormat);
-            reader.read(op);
+            op = reader.read().get();
         }
         return op;
     }
