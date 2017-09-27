@@ -4,8 +4,6 @@ package com.yahoo.vespa.hosted.controller.restapi.application;
 import com.yahoo.application.container.handler.Request;
 import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.config.provision.Environment;
-import com.yahoo.config.provision.RegionName;
-import com.yahoo.config.provision.Zone;
 import com.yahoo.vespa.hosted.controller.ConfigServerClientMock;
 import com.yahoo.vespa.hosted.controller.api.identifiers.AthensDomain;
 import com.yahoo.vespa.hosted.controller.api.identifiers.UserId;
@@ -15,11 +13,8 @@ import com.yahoo.vespa.hosted.controller.api.integration.athens.mock.AthensDbMoc
 import com.yahoo.vespa.hosted.controller.api.integration.athens.mock.AthensMock;
 import com.yahoo.vespa.hosted.controller.api.integration.athens.mock.ZmsClientFactoryMock;
 import com.yahoo.vespa.hosted.controller.api.integration.configserver.ConfigServerException;
-import com.yahoo.vespa.hosted.controller.api.integration.cost.CostApplication;
-import com.yahoo.vespa.hosted.controller.api.integration.cost.CostCluster;
 import com.yahoo.vespa.hosted.controller.application.ApplicationPackage;
 import com.yahoo.vespa.hosted.controller.application.DeploymentJobs;
-import com.yahoo.vespa.hosted.controller.cost.CostMock;
 import com.yahoo.vespa.hosted.controller.deployment.ApplicationPackageBuilder;
 import com.yahoo.vespa.hosted.controller.restapi.ContainerControllerTester;
 import com.yahoo.vespa.hosted.controller.restapi.ContainerTester;
@@ -577,26 +572,6 @@ public class ApplicationApiTest extends ControllerContainerTest {
         AthensDbMock.Domain domain = mock.getSetup().domains.get(new AthensDomain(domainName));
         domain.admin(new AthensPrincipal(new AthensDomain(athensScrewdriverDomain), new UserId(screwdriverUserId)));
     }
-    
-    private void addMockObservedApplicationCost(String tenant, String application, String instance) {
-        CostMock mock = (CostMock) container.components().getComponent("com.yahoo.vespa.hosted.controller.cost.MockInsightBackend");
-        
-        CostCluster cost = new CostCluster(null, null, null);
-/*        cost.setCount(2);
-        cost.setResource("cpu");
-        cost.setUtilization(1.0f);
-        cost.setTco(25);
-        cost.setFlavor("flavor1");
-        cost.setWaste(10);
-        cost.setType("content");
-        List<String> hostnames = new ArrayList<>();
-        hostnames.add("host1");
-        hostnames.add("host2");
-        cost.setHostnames(hostnames);
-        Map<String, CostCluster> clusterCosts = new HashMap<>();
-        clusterCosts.put("cluster1", cost);*/
-        
-        mock.setApplicationCost(new ApplicationId.Builder().tenant(tenant).applicationName(application).instanceName(instance).build(),
-                                new CostApplication(new Zone(Environment.prod, RegionName.from("prod.us-west-1")),null, null));
-    }
+
+    private void addMockObservedApplicationCost(String tenant, String application, String instance) {}
 }
