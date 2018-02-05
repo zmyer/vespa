@@ -27,7 +27,9 @@ public class TenantHandlerTest extends TenantTest {
 
     @Before
     public void setup() throws Exception {
-        handler = new TenantHandler(testExecutor(), null, tenants);
+        handler = new TenantHandler(
+                TenantHandler.testOnlyContext(),
+                tenants);
     }
 
     @Test
@@ -53,11 +55,14 @@ public class TenantHandlerTest extends TenantTest {
     }
  
     @Test
-    public void testGetExisting() throws Exception {
-        tenants.writeTenantPath(a);
-        TenantGetResponse response = (TenantGetResponse) handler.handleGET(
-                HttpRequest.createTestRequest("http://deploy.example.yahoo.com:80/application/v2/tenant/a", Method.GET));
-        assertResponseEquals(response, "{\"message\":\"Tenant 'a' exists.\"}");
+    public void testGetAndList() throws Exception {
+        tenants.addTenant(a);
+        assertResponseEquals((TenantGetResponse) handler.handleGET(
+                HttpRequest.createTestRequest("http://deploy.example.yahoo.com:80/application/v2/tenant/a", Method.GET)),
+                "{\"message\":\"Tenant 'a' exists.\"}");
+        assertResponseEquals((ListTenantsResponse) handler.handleGET(
+                HttpRequest.createTestRequest("http://deploy.example.yahoo.com:80/application/v2/tenant/", Method.GET)),
+                "{\"tenants\":[\"default\",\"a\"]}");
     }
 
     @Test(expected=BadRequestException.class)

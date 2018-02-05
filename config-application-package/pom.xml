@@ -7,6 +7,7 @@
         <groupId>com.yahoo.vespa</groupId>
         <artifactId>parent</artifactId>
         <version>6-SNAPSHOT</version>
+        <relativePath>../parent/pom.xml</relativePath>
     </parent>
     <artifactId>config-application-package</artifactId>
     <packaging>container-plugin</packaging>
@@ -35,6 +36,11 @@
             <groupId>com.yahoo.vespa</groupId>
             <artifactId>vespajlib</artifactId>
             <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
             <scope>provided</scope>
         </dependency>
         <dependency>

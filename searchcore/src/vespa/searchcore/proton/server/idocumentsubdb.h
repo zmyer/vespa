@@ -7,10 +7,7 @@
 #include <vespa/searchlib/common/serialnum.h>
 #include <vespa/searchlib/util/searchable_stats.h>
 
-
-namespace search::index {
-    class Schema;
-}
+namespace search::index { class Schema; }
 
 namespace document { class DocumentId; }
 
@@ -28,6 +25,7 @@ class DocumentSubDbInitializerResult;
 class FeedHandler;
 class FileConfigManager;
 class IAttributeManager;
+class IBucketStateCalculator;
 class IDcoumentRetriever;
 class IDocumentDBReferenceResolver;
 class IDocumentDBReference;
@@ -66,18 +64,16 @@ public:
 
     virtual std::unique_ptr<DocumentSubDbInitializer>
     createInitializer(const DocumentDBConfig &configSnapshot, SerialNum configSerialNum,
-                      const ProtonConfig::Summary &protonSummaryCfg, const ProtonConfig::Index &indexCfg) const = 0;
+                      const ProtonConfig::Index &indexCfg) const = 0;
 
     // Called by master thread
     virtual void setup(const DocumentSubDbInitializerResult &initResult) = 0;
     virtual void initViews(const DocumentDBConfig &configSnapshot, const std::shared_ptr<matching::SessionManager> &sessionManager) = 0;
 
     virtual IReprocessingTask::List
-    applyConfig(const DocumentDBConfig &newConfigSnapshot,
-                const DocumentDBConfig &oldConfigSnapshot,
-                SerialNum serialNum,
-                const ReconfigParams &params,
-                IDocumentDBReferenceResolver &resolver) = 0;
+    applyConfig(const DocumentDBConfig &newConfigSnapshot, const DocumentDBConfig &oldConfigSnapshot,
+                SerialNum serialNum, const ReconfigParams &params, IDocumentDBReferenceResolver &resolver) = 0;
+    virtual void setBucketStateCalculator(const std::shared_ptr<IBucketStateCalculator> &calc) = 0;
 
     virtual std::shared_ptr<ISearchHandler> getSearchView() const = 0;
     virtual std::shared_ptr<IFeedView> getFeedView() const = 0;

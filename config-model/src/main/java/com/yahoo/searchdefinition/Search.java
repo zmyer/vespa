@@ -58,7 +58,7 @@ public class Search implements Serializable, ImmutableSearch {
 
     // Field sets
     private FieldSets fieldSets = new FieldSets();
-    
+
     // Whether or not this object has been processed.
     private boolean processed;
 
@@ -162,17 +162,17 @@ public class Search implements Serializable, ImmutableSearch {
         docType = document;
     }
 
-    public void addRankingConstant(RankingConstant rConstant) {
-        rConstant.validate();
-        String name = rConstant.getName();
-        if (rankingConstants.get(name) != null) {
-            throw new IllegalArgumentException("Ranking constant '"+name+"' defined twice");
-        }
-        rankingConstants.put(name, rConstant);
+    public void addRankingConstant(RankingConstant constant) {
+        constant.validate();
+        String name = constant.getName();
+        if (rankingConstants.containsKey(name))
+            throw new IllegalArgumentException("Ranking constant '" + name + "' defined twice");
+        rankingConstants.put(name, constant);
     }
 
-    public Iterable<RankingConstant> getRankingConstants() {
-        return rankingConstants.values();
+    /** Returns a read-only map of the ranking constants in this indexed by name */
+    public Map<String, RankingConstant> getRankingConstants() {
+        return Collections.unmodifiableMap(rankingConstants);
     }
 
     public Optional<TemporaryImportedFields> temporaryImportedFields() {
@@ -247,7 +247,7 @@ public class Search implements Serializable, ImmutableSearch {
     /**
      * Returns a list of all the fields of this search definition, that is all fields in all documents, in the documents
      * they inherit, and all extra fields. The caller receives ownership to the list - subsequent changes to it will not
-     * impact this Search
+     * impact this
      *
      * @return the list of fields in this searchdefinition
      */
@@ -266,6 +266,8 @@ public class Search implements Serializable, ImmutableSearch {
     public Reader getRankingExpression(String fileName) {
         return sourceApplication.getRankingExpression(fileName);
     }
+
+    public ApplicationPackage sourceApplication() { return sourceApplication; }
 
     /**
      * Returns a field defined in this search definition or one if its documents. Fields in this search definition takes
@@ -544,7 +546,7 @@ public class Search implements Serializable, ImmutableSearch {
     }
 
     /**
-     * Returns the first occurence of an attribute having this name, or null if none
+     * Returns the first occurrence of an attribute having this name, or null if none
      *
      * @param name Name of attribute
      * @return The Attribute with given name.

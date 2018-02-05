@@ -114,7 +114,9 @@ Content = element content {
     Documents? &
     ContentNodes? &
     TopGroup? &
-    Controllers?
+    Controllers? &
+    # Contains experimental feature switches
+    Experimental?
 }
 
 Controllers =
@@ -335,6 +337,7 @@ Tuning = element tuning {
          element store {
             element cache {
                element maxsize { xsd:nonNegativeInteger }? &
+               element maxsize-percent { xsd:double { minInclusive = "0.0" maxInclusive = "50.0" } }? &
                element initialentries { xsd:nonNegativeInteger }? &
                element maxentries { xsd:nonNegativeInteger }? &
                TuningCompression?
@@ -353,6 +356,9 @@ Tuning = element tuning {
       }? &
       element initialize {
          element threads { xsd:nonNegativeInteger }?
+      }? &
+      element feeding {
+         element concurrency { xsd:double { minInclusive = "0.0" maxInclusive = "1.0" } }?
       }?
    }?
 }
@@ -363,4 +369,8 @@ TuningIoOptionsFull = string "normal" | string "directio" | string "mmap" | stri
 TuningCompression = element compression {
    element type { string "none" | string "lz4" | string "zstd" }? &
    element level { xsd:nonNegativeInteger }?
+}
+
+Experimental = element experimental {
+    element enable-multiple-bucket-spaces { xsd:boolean }?
 }

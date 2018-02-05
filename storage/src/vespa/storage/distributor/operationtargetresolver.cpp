@@ -8,7 +8,7 @@ namespace distributor {
 
 void
 OperationTarget::print(vespalib::asciistream& out, const PrintProperties&) const {
-    out << "OperationTarget(" << _bucket << ", " << _node
+    out << "OperationTarget(" << _bucket.toString() << ", " << _node
         << (_newCopy ? ", new copy" : ", existing copy") << ")";
 }
 

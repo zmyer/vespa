@@ -5,10 +5,13 @@
 #include <vespa/storage/persistence/splitbitdetector.h>
 #include <vespa/vespalib/io/fileutil.h>
 #include <vespa/persistence/dummyimpl/dummypersistence.h>
+#include <vespa/persistence/spi/test.h>
 #include <vespa/document/base/testdocman.h>
 #include <vespa/document/bucket/bucketidfactory.h>
+#include <vespa/metrics/loadmetric.h>
 #include <algorithm>
 
+using storage::spi::test::makeSpiBucket;
 
 namespace storage {
 
@@ -61,8 +64,7 @@ SplitBitDetectorTest::testTwoUsers()
     document::TestDocMan testDocMan;
     spi::dummy::DummyPersistence provider(testDocMan.getTypeRepoSP(), 1);
     provider.getPartitionStates();
-    spi::Bucket bucket(document::BucketId(1, 1),
-                       spi::PartitionId(0));
+    spi::Bucket bucket(makeSpiBucket(document::BucketId(1, 1)));
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
 
@@ -95,8 +97,7 @@ SplitBitDetectorTest::testSingleUser()
     document::TestDocMan testDocMan;
     spi::dummy::DummyPersistence provider(testDocMan.getTypeRepoSP(), 1);
     provider.getPartitionStates();
-    spi::Bucket bucket(document::BucketId(1, 1),
-                       spi::PartitionId(0));
+    spi::Bucket bucket(makeSpiBucket(document::BucketId(1, 1)));
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
 
@@ -123,8 +124,7 @@ SplitBitDetectorTest::testMaxBits()
     document::TestDocMan testDocMan;
     spi::dummy::DummyPersistence provider(testDocMan.getTypeRepoSP(), 1);
     provider.getPartitionStates();
-    spi::Bucket bucket(document::BucketId(1, 1),
-                       spi::PartitionId(0));
+    spi::Bucket bucket(makeSpiBucket(document::BucketId(1, 1)));
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
     int minContentSize = 1, maxContentSize = 1;
@@ -153,7 +153,7 @@ SplitBitDetectorTest::testMaxBitsOneBelowMax()
     document::TestDocMan testDocMan;
     spi::dummy::DummyPersistence provider(testDocMan.getTypeRepoSP(), 1);
     provider.getPartitionStates();
-    spi::Bucket bucket(document::BucketId(15, 1), spi::PartitionId(0));
+    spi::Bucket bucket(makeSpiBucket(document::BucketId(15, 1)));
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
     int minContentSize = 1, maxContentSize = 1;
@@ -191,8 +191,7 @@ SplitBitDetectorTest::testUnsplittable()
     document::TestDocMan testDocMan;
     spi::dummy::DummyPersistence provider(testDocMan.getTypeRepoSP(), 1);
     provider.getPartitionStates();
-    spi::Bucket bucket(document::BucketId(1, 1),
-                       spi::PartitionId(0));
+    spi::Bucket bucket(makeSpiBucket(document::BucketId(1, 1)));
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
 
@@ -220,8 +219,7 @@ SplitBitDetectorTest::testUnsplittableMinCount()
     document::TestDocMan testDocMan;
     spi::dummy::DummyPersistence provider(testDocMan.getTypeRepoSP(), 1);
     provider.getPartitionStates();
-    spi::Bucket bucket(document::BucketId(1, 1),
-                       spi::PartitionId(0));
+    spi::Bucket bucket(makeSpiBucket(document::BucketId(1, 1)));
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
 
@@ -251,8 +249,7 @@ SplitBitDetectorTest::testEmpty()
     document::TestDocMan testDocMan;
     spi::dummy::DummyPersistence provider(testDocMan.getTypeRepoSP(), 1);
     provider.getPartitionStates();
-    spi::Bucket bucket(document::BucketId(1, 1),
-                       spi::PartitionId(0));
+    spi::Bucket bucket(makeSpiBucket(document::BucketId(1, 1)));
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
 
@@ -271,8 +268,7 @@ SplitBitDetectorTest::testZeroDocLimitFallbacksToOneBitIncreaseWith1Doc()
     document::TestDocMan testDocMan;
     spi::dummy::DummyPersistence provider(testDocMan.getTypeRepoSP(), 1);
     provider.getPartitionStates();
-    spi::Bucket bucket(document::BucketId(1, 1),
-                       spi::PartitionId(0));
+    spi::Bucket bucket(makeSpiBucket(document::BucketId(1, 1)));
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
 
@@ -295,8 +291,7 @@ SplitBitDetectorTest::testZeroDocLimitFallbacksToOneBitIncreaseOnGidCollision()
     document::TestDocMan testDocMan;
     spi::dummy::DummyPersistence provider(testDocMan.getTypeRepoSP(), 1);
     provider.getPartitionStates();
-    spi::Bucket bucket(document::BucketId(1, 1),
-                       spi::PartitionId(0));
+    spi::Bucket bucket(makeSpiBucket(document::BucketId(1, 1)));
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
 

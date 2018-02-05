@@ -1,11 +1,12 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
+
 #include <vespa/document/base/testdocrepo.h>
-#include <vespa/document/fieldvalue/document.h>
 #include <vespa/document/datatype/documenttype.h>
+#include <vespa/document/fieldvalue/document.h>
 #include <vespa/documentapi/documentapi.h>
+#include <vespa/documentapi/loadtypes/loadtypeset.h>
 #include <vespa/vdslib/state/clusterstate.h>
 #include <vespa/vespalib/testkit/testapp.h>
-#include <vespa/documentapi/loadtypes/loadtypeset.h>
 
 using document::DocumentTypeRepo;
 using document::readDocumenttypesConfig;
@@ -92,13 +93,7 @@ void Test::testProtocol() {
     DocumentProtocol protocol(set, _repo);
     EXPECT_TRUE(protocol.getName() == "document");
 
-    IRoutingPolicy::UP policy = protocol.createPolicy(string("SearchRow"),string(""));
-    EXPECT_TRUE(policy.get() != NULL);
-
-    policy = protocol.createPolicy(string("SearchColumn"),string(""));
-    EXPECT_TRUE(policy.get() != NULL);
-
-    policy = protocol.createPolicy(string("DocumentRouteSelector"), string("file:documentrouteselectorpolicy.cfg"));
+    IRoutingPolicy::UP policy = protocol.createPolicy(string("DocumentRouteSelector"), string("file:documentrouteselectorpolicy.cfg"));
     EXPECT_TRUE(policy.get() != NULL);
 
     policy = protocol.createPolicy(string(""),string(""));

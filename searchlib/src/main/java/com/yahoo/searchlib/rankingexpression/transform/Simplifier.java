@@ -1,7 +1,6 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.searchlib.rankingexpression.transform;
 
-import com.yahoo.searchlib.rankingexpression.evaluation.BooleanValue;
 import com.yahoo.searchlib.rankingexpression.evaluation.DoubleValue;
 import com.yahoo.searchlib.rankingexpression.evaluation.Value;
 import com.yahoo.searchlib.rankingexpression.rule.ArithmeticNode;
@@ -10,8 +9,8 @@ import com.yahoo.searchlib.rankingexpression.rule.CompositeNode;
 import com.yahoo.searchlib.rankingexpression.rule.ConstantNode;
 import com.yahoo.searchlib.rankingexpression.rule.EmbracedNode;
 import com.yahoo.searchlib.rankingexpression.rule.ExpressionNode;
-import com.yahoo.searchlib.rankingexpression.rule.ReferenceNode;
 import com.yahoo.searchlib.rankingexpression.rule.IfNode;
+import com.yahoo.searchlib.rankingexpression.rule.ReferenceNode;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -21,12 +20,12 @@ import java.util.List;
  *
  * @author bratseth
  */
-public class Simplifier extends ExpressionTransformer {
+public class Simplifier extends ExpressionTransformer<TransformContext> {
 
     @Override
-    public ExpressionNode transform(ExpressionNode node) {
+    public ExpressionNode transform(ExpressionNode node, TransformContext context) {
         if (node instanceof CompositeNode)
-            node = transformChildren((CompositeNode) node); // depth first
+            node = transformChildren((CompositeNode) node, context); // depth first
         if (node instanceof IfNode)
             node = transformIf((IfNode) node);
         if (node instanceof EmbracedNode && hasSingleUndividableChild((EmbracedNode)node))
@@ -94,7 +93,7 @@ public class Simplifier extends ExpressionTransformer {
     private ExpressionNode transformIf(IfNode node) {
         if ( ! isConstant(node.getCondition())) return node;
 
-        if (((BooleanValue)node.getCondition().evaluate(null)).asBoolean())
+        if ((node.getCondition().evaluate(null)).asBoolean())
             return node.getTrueExpression();
         else
             return node.getFalseExpression();

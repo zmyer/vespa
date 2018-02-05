@@ -7,10 +7,12 @@ import com.yahoo.vespa.hosted.controller.api.integration.configserver.ConfigServ
 import com.yahoo.yolean.Exceptions;
 
 import static com.yahoo.jdisc.Response.Status.BAD_REQUEST;
+import static com.yahoo.jdisc.Response.Status.CONFLICT;
 import static com.yahoo.jdisc.Response.Status.FORBIDDEN;
 import static com.yahoo.jdisc.Response.Status.INTERNAL_SERVER_ERROR;
 import static com.yahoo.jdisc.Response.Status.METHOD_NOT_ALLOWED;
 import static com.yahoo.jdisc.Response.Status.NOT_FOUND;
+import static com.yahoo.jdisc.Response.Status.UNAUTHORIZED;
 
 /**
  * A HTTP JSON response containing an error code and a message
@@ -24,7 +26,8 @@ public class ErrorResponse extends SlimeJsonResponse {
         BAD_REQUEST,
         FORBIDDEN,
         METHOD_NOT_ALLOWED,
-        INTERNAL_SERVER_ERROR
+        INTERNAL_SERVER_ERROR,
+        UNAUTHORIZED
     }
 
     public ErrorResponse(int statusCode, String errorType, String message) {
@@ -55,12 +58,25 @@ public class ErrorResponse extends SlimeJsonResponse {
         return new ErrorResponse(FORBIDDEN, errorCodes.FORBIDDEN.name(), message);
     }
 
+    public static ErrorResponse unauthorized(String message) {
+        return new ErrorResponse(UNAUTHORIZED, errorCodes.UNAUTHORIZED.name(), message);
+    }
+
     public static ErrorResponse methodNotAllowed(String message) {
         return new ErrorResponse(METHOD_NOT_ALLOWED, errorCodes.METHOD_NOT_ALLOWED.name(), message);
     }
 
     public static ErrorResponse from(ConfigServerException e) {
-        return new ErrorResponse(BAD_REQUEST, e.getErrorCode().name(), Exceptions.toMessageString(e));
+        switch (e.getErrorCode()) {
+            case NOT_FOUND:
+                return new ErrorResponse(NOT_FOUND, e.getErrorCode().name(), Exceptions.toMessageString(e));
+            case ACTIVATION_CONFLICT:
+                return new ErrorResponse(CONFLICT, e.getErrorCode().name(), Exceptions.toMessageString(e));
+            case INTERNAL_SERVER_ERROR:
+                return new ErrorResponse(INTERNAL_SERVER_ERROR, e.getErrorCode().name(), Exceptions.toMessageString(e));
+            default:
+                return new ErrorResponse(BAD_REQUEST, e.getErrorCode().name(), Exceptions.toMessageString(e));
+        }
     }
 
 }

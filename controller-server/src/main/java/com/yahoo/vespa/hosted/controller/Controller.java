@@ -5,35 +5,32 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.google.inject.Inject;
 import com.yahoo.component.AbstractComponent;
 import com.yahoo.component.Version;
-import com.yahoo.config.provision.ApplicationId;
-import com.yahoo.config.provision.Environment;
-import com.yahoo.config.provision.RegionName;
+import com.yahoo.component.Vtag;
 import com.yahoo.config.provision.SystemName;
-import com.yahoo.vespa.hosted.controller.api.identifiers.AthensDomain;
+import com.yahoo.vespa.athenz.api.AthenzDomain;
 import com.yahoo.vespa.hosted.controller.api.identifiers.DeploymentId;
 import com.yahoo.vespa.hosted.controller.api.identifiers.Property;
 import com.yahoo.vespa.hosted.controller.api.identifiers.PropertyId;
 import com.yahoo.vespa.hosted.controller.api.integration.MetricsService;
-import com.yahoo.vespa.hosted.controller.api.integration.athens.Athens;
-import com.yahoo.vespa.hosted.controller.api.integration.athens.ZmsClient;
+import com.yahoo.vespa.hosted.controller.api.integration.athenz.AthenzClientFactory;
 import com.yahoo.vespa.hosted.controller.api.integration.chef.Chef;
 import com.yahoo.vespa.hosted.controller.api.integration.configserver.ConfigServerClient;
-import com.yahoo.vespa.hosted.controller.api.integration.cost.ApplicationCost;
-import com.yahoo.vespa.hosted.controller.api.integration.cost.Cost;
+import com.yahoo.vespa.hosted.controller.api.integration.deployment.ArtifactRepository;
 import com.yahoo.vespa.hosted.controller.api.integration.dns.NameService;
 import com.yahoo.vespa.hosted.controller.api.integration.entity.EntityService;
 import com.yahoo.vespa.hosted.controller.api.integration.github.GitHub;
-import com.yahoo.vespa.hosted.controller.api.integration.jira.Jira;
+import com.yahoo.vespa.hosted.controller.api.integration.noderepository.NodeRepositoryClientInterface;
+import com.yahoo.vespa.hosted.controller.api.integration.organization.Organization;
 import com.yahoo.vespa.hosted.controller.api.integration.routing.GlobalRoutingService;
 import com.yahoo.vespa.hosted.controller.api.integration.routing.RotationStatus;
 import com.yahoo.vespa.hosted.controller.api.integration.routing.RoutingGenerator;
+import com.yahoo.vespa.hosted.controller.api.integration.zone.ZoneId;
 import com.yahoo.vespa.hosted.controller.api.integration.zone.ZoneRegistry;
-import com.yahoo.vespa.hosted.controller.common.NotFoundCheckedException;
 import com.yahoo.vespa.hosted.controller.persistence.ControllerDb;
 import com.yahoo.vespa.hosted.controller.persistence.CuratorDb;
 import com.yahoo.vespa.hosted.controller.versions.VersionStatus;
 import com.yahoo.vespa.hosted.controller.versions.VespaVersion;
-import com.yahoo.vespa.hosted.rotation.RotationRepository;
+import com.yahoo.vespa.hosted.rotation.config.RotationsConfig;
 import com.yahoo.vespa.serviceview.bindings.ApplicationView;
 
 import java.net.URI;
@@ -42,8 +39,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
 /**
@@ -67,26 +62,17 @@ public class Controller extends AbstractComponent {
     private final CuratorDb curator;
     private final ApplicationController applicationController;
     private final TenantController tenantController;
-    
-    /** 
-     * Status of Vespa versions across the system. 
-     * This is expensive to maintain so that is done periodically by a maintenance job 
-     */
-    private final AtomicReference<VersionStatus> versionStatus;
-    
     private final Clock clock;
-
-    private final RotationRepository rotationRepository;
     private final GitHub gitHub;
     private final EntityService entityService;
     private final GlobalRoutingService globalRoutingService;
     private final ZoneRegistry zoneRegistry;
-    private final Cost cost;
     private final ConfigServerClient configServerClient;
+    private final NodeRepositoryClientInterface nodeRepositoryClient;
     private final MetricsService metricsService;
     private final Chef chefClient;
-    private final Athens athens;
-    private final ZmsClient zmsClient;
+    private final Organization organization;
+    private final AthenzClientFactory athenzClientFactory;
 
     /**
      * Creates a controller 
@@ -95,59 +81,62 @@ public class Controller extends AbstractComponent {
      * @param curator the curator instance storing working state shared between controller instances
      */
     @Inject
-    public Controller(ControllerDb db, CuratorDb curator, RotationRepository rotationRepository,
-                      GitHub gitHub, Jira jiraClient, EntityService entityService,
+    public Controller(ControllerDb db, CuratorDb curator, RotationsConfig rotationsConfig,
+                      GitHub gitHub, EntityService entityService, Organization organization,
                       GlobalRoutingService globalRoutingService,
-                      ZoneRegistry zoneRegistry, Cost cost, ConfigServerClient configServerClient,
+                      ZoneRegistry zoneRegistry, ConfigServerClient configServerClient, NodeRepositoryClientInterface nodeRepositoryClient,
                       MetricsService metricsService, NameService nameService,
-                      RoutingGenerator routingGenerator, Chef chefClient, Athens athens) {
-        this(db, curator, rotationRepository,
-             gitHub, jiraClient, entityService, globalRoutingService, zoneRegistry,
-             cost, configServerClient, metricsService, nameService, routingGenerator, chefClient,
-             Clock.systemUTC(), athens);
+                      RoutingGenerator routingGenerator, Chef chefClient, AthenzClientFactory athenzClientFactory,
+                      ArtifactRepository artifactRepository) {
+        this(db, curator, rotationsConfig,
+             gitHub, entityService, organization, globalRoutingService, zoneRegistry,
+             configServerClient, nodeRepositoryClient, metricsService, nameService, routingGenerator, chefClient,
+             Clock.systemUTC(), athenzClientFactory, artifactRepository);
     }
 
-    public Controller(ControllerDb db, CuratorDb curator, RotationRepository rotationRepository,
-                      GitHub gitHub, Jira jiraClient, EntityService entityService,
+    public Controller(ControllerDb db, CuratorDb curator, RotationsConfig rotationsConfig,
+                      GitHub gitHub, EntityService entityService, Organization organization,
                       GlobalRoutingService globalRoutingService,
-                      ZoneRegistry zoneRegistry, Cost cost, ConfigServerClient configServerClient,
+                      ZoneRegistry zoneRegistry, ConfigServerClient configServerClient, NodeRepositoryClientInterface nodeRepositoryClient,
                       MetricsService metricsService, NameService nameService,
-                      RoutingGenerator routingGenerator, Chef chefClient, Clock clock, Athens athens) {
+                      RoutingGenerator routingGenerator, Chef chefClient, Clock clock,
+                      AthenzClientFactory athenzClientFactory, ArtifactRepository artifactRepository) {
         Objects.requireNonNull(db, "Controller db cannot be null");
         Objects.requireNonNull(curator, "Curator cannot be null");
-        Objects.requireNonNull(rotationRepository, "Rotation repository cannot be null");
+        Objects.requireNonNull(rotationsConfig, "RotationsConfig cannot be null");
         Objects.requireNonNull(gitHub, "GitHubClient cannot be null");
-        Objects.requireNonNull(jiraClient, "JiraClient cannot be null");
         Objects.requireNonNull(entityService, "EntityService cannot be null");
+        Objects.requireNonNull(organization, "Organization cannot be null");
         Objects.requireNonNull(globalRoutingService, "GlobalRoutingService cannot be null");
         Objects.requireNonNull(zoneRegistry, "ZoneRegistry cannot be null");
-        Objects.requireNonNull(cost, "Cost cannot be null");
         Objects.requireNonNull(configServerClient, "ConfigServerClient cannot be null");
+        Objects.requireNonNull(nodeRepositoryClient, "NodeRepositoryClientInterface cannot be null");
         Objects.requireNonNull(metricsService, "MetricsService cannot be null");
         Objects.requireNonNull(nameService, "NameService cannot be null");
         Objects.requireNonNull(routingGenerator, "RoutingGenerator cannot be null");
         Objects.requireNonNull(chefClient, "ChefClient cannot be null");
         Objects.requireNonNull(clock, "Clock cannot be null");
-        Objects.requireNonNull(athens, "Athens cannot be null");
+        Objects.requireNonNull(athenzClientFactory, "Athens cannot be null");
+        Objects.requireNonNull(artifactRepository, "ArtifactRepository cannot be null");
 
-        this.rotationRepository = rotationRepository;
         this.curator = curator;
         this.gitHub = gitHub;
         this.entityService = entityService;
+        this.organization = organization;
         this.globalRoutingService = globalRoutingService;
         this.zoneRegistry = zoneRegistry;
-        this.cost = cost;
         this.configServerClient = configServerClient;
+        this.nodeRepositoryClient = nodeRepositoryClient;
         this.metricsService = metricsService;
         this.chefClient = chefClient;
         this.clock = clock;
-        this.athens = athens;
-        this.zmsClient = athens.zmsClientFactory().createClientWithServicePrincipal();
+        this.athenzClientFactory = athenzClientFactory;
 
-        applicationController = new ApplicationController(this, db, curator, rotationRepository, athens.zmsClientFactory(),
-                                                          nameService, configServerClient, routingGenerator, clock);
-        tenantController = new TenantController(this, db, curator, entityService);
-        versionStatus = new AtomicReference<>(VersionStatus.empty());
+        applicationController = new ApplicationController(this, db, curator, athenzClientFactory,
+                                                          rotationsConfig,
+                                                          nameService, configServerClient, artifactRepository,
+                                                          routingGenerator, clock);
+        tenantController = new TenantController(this, db, curator, entityService, athenzClientFactory);
     }
     
     /** Returns the instance controlling tenants */
@@ -156,14 +145,10 @@ public class Controller extends AbstractComponent {
     /** Returns the instance controlling applications */
     public ApplicationController applications() { return applicationController; }
 
-    public List<AthensDomain> getDomainList(String prefix) {
-        return zmsClient.getDomainList(prefix);
+    public List<AthenzDomain> getDomainList(String prefix) {
+        return athenzClientFactory.createZmsClientWithServicePrincipal().getDomainList(prefix);
     }
 
-    public Athens athens() {
-        return athens;
-    }
-    
     /**
      * Fetch list of all active OpsDB properties.
      *
@@ -175,44 +160,16 @@ public class Controller extends AbstractComponent {
 
     public Clock clock() { return clock; }
 
-    public ApplicationCost getApplicationCost(com.yahoo.config.provision.ApplicationId application,
-                                              com.yahoo.config.provision.Zone zone)
-            throws NotFoundCheckedException {
-        return cost.getApplicationCost(zone.environment(), zone.region(), application);
+    public Optional<URI> getLogServerUrl(DeploymentId deploymentId) {
+        return zoneRegistry.getLogServerUri(deploymentId);
     }
 
-    public URI getElkUri(Environment environment, RegionName region, DeploymentId deploymentId) {
-        return elkUrl(zoneRegistry.getLogServerUri(environment, region), deploymentId);
-    }
-
-    public List<URI> getConfigServerUris(Environment environment, RegionName region) {
-        return zoneRegistry.getConfigServerUris(environment, region);
+    // TODO Rename to getConfigServerUris once port 4080 is removed from configservers
+    public List<URI> getSecureConfigServerUris(ZoneId zoneId) {
+        return zoneRegistry.getConfigServerSecureUris(zoneId);
     }
     
     public ZoneRegistry zoneRegistry() { return zoneRegistry; }
-
-    private URI elkUrl(Optional<URI> kibanaHost, DeploymentId deploymentId) {
-        String kibanaQuery = "/#/discover?_g=()&_a=(columns:!(_source)," +
-                             "index:'logstash-*',interval:auto," +
-                             "query:(query_string:(analyze_wildcard:!t,query:'" +
-                             "HV-tenant:%22" + deploymentId.applicationId().tenant().value() + "%22%20" +
-                             "AND%20HV-application:%22" + deploymentId.applicationId().application().value() + "%22%20" +
-                             "AND%20HV-region:%22" + deploymentId.zone().region().value() + "%22%20" +
-                             "AND%20HV-instance:%22" + deploymentId.applicationId().instance().value() + "%22%20" +
-                             "AND%20HV-environment:%22" + deploymentId.zone().environment().value() + "%22'))," +
-                             "sort:!('@timestamp',desc))";
-
-        URI kibanaPath = URI.create(kibanaQuery);
-        if (kibanaHost.isPresent()) {
-            return kibanaHost.get().resolve(kibanaPath);
-        } else {
-            return null;
-        }
-    }
-
-    public Set<URI> getRotationUris(ApplicationId id) {
-        return rotationRepository.getRotationUris(id);
-    }
 
     public Map<String, RotationStatus> getHealthStatus(String hostname) {
         return globalRoutingService.getHealthStatus(hostname);
@@ -233,12 +190,14 @@ public class Controller extends AbstractComponent {
     }
 
     // TODO: Model the response properly
-    // TODO: What is this
+    // TODO: What is this -- I believe it fetches, and purges, errors from some log server
     public JsonNode grabLog(DeploymentId deploymentId) {
         return configServerClient.grabLog(deploymentId);
     }
 
-    public GitHub gitHub() { return gitHub; }
+    public GitHub gitHub() {
+        return gitHub;
+    }
 
     /** Replace the current version status by a new one */
     public void updateVersionStatus(VersionStatus newStatus) {
@@ -247,19 +206,23 @@ public class Controller extends AbstractComponent {
             ! newStatus.systemVersion().equals(currentStatus.systemVersion())) {
             log.info("Changing system version from " + printableVersion(currentStatus.systemVersion()) +
                      " to " + printableVersion(newStatus.systemVersion()));
-            curator.writeSystemVersion(newStatus.systemVersion().get().versionNumber());
         }
-
-        this.versionStatus.set(newStatus); 
+        curator.writeVersionStatus(newStatus);
     }
     
     /** Returns the latest known version status. Calling this is free but the status may be slightly out of date. */
-    public VersionStatus versionStatus() { return versionStatus.get(); }
+    public VersionStatus versionStatus() { return curator.readVersionStatus(); }
     
     /** Returns the current system version: The controller should drive towards running all applications on this version */
-    public Version systemVersion() { return curator.readSystemVersion(); }
+    public Version systemVersion() {
+        return versionStatus().systemVersion()
+                .map(VespaVersion::versionNumber)
+                .orElse(Vtag.currentVersion);
+    }
 
-    public MetricsService metricsService() { return metricsService; }
+    public MetricsService metricsService() {
+        return metricsService;
+    }
 
     public SystemName system() {
         return zoneRegistry.system();
@@ -267,6 +230,18 @@ public class Controller extends AbstractComponent {
 
     public Chef chefClient() {
         return chefClient;
+    }
+
+    public Organization organization() {
+        return organization;
+    }
+
+    public CuratorDb curator() {
+        return curator;
+    }
+
+    public NodeRepositoryClientInterface nodeRepositoryClient() {
+        return nodeRepositoryClient;
     }
 
     private String printableVersion(Optional<VespaVersion> vespaVersion) {

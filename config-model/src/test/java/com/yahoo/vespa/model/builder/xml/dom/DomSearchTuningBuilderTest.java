@@ -3,7 +3,6 @@ package com.yahoo.vespa.model.builder.xml.dom;
 
 import com.yahoo.collections.CollectionUtil;
 import com.yahoo.config.ConfigInstance;
-import com.yahoo.vespa.config.search.core.PartitionsConfig;
 import com.yahoo.vespa.config.search.core.ProtonConfig;
 import com.yahoo.config.model.builder.xml.test.DomBuilderTest;
 import com.yahoo.text.StringUtilities;
@@ -176,6 +175,7 @@ public class DomSearchTuningBuilderTest extends DomBuilderTest {
                 "<store>",
                 "<cache>",
                 "<maxsize>128</maxsize>",
+                "<maxsize-percent>30.7</maxsize-percent>",
                 "<initialentries>64</initialentries>",
                 "<compression>",
                 "<type>none</type>",
@@ -184,7 +184,6 @@ public class DomSearchTuningBuilderTest extends DomBuilderTest {
                 "</cache>",
                 "<logstore>",
                 "<maxfilesize>512</maxfilesize>",
-                "<maxdiskbloatfactor>1.4</maxdiskbloatfactor>",
                 "<minfilesizefactor>0.3</minfilesizefactor>",
                 "<numthreads>7</numthreads>",
                 "<chunk>",
@@ -200,11 +199,11 @@ public class DomSearchTuningBuilderTest extends DomBuilderTest {
         assertEquals(Tuning.SearchNode.IoType.DIRECTIO, t.searchNode.summary.io.write);
         assertEquals(Tuning.SearchNode.IoType.DIRECTIO, t.searchNode.summary.io.read);
         assertEquals(128, t.searchNode.summary.store.cache.maxSize.longValue());
+        assertEquals(30.7, t.searchNode.summary.store.cache.maxSizePercent.doubleValue(), DELTA);
         assertEquals(Tuning.SearchNode.Summary.Store.Compression.Type.NONE,
                 t.searchNode.summary.store.cache.compression.type);
         assertEquals(3, t.searchNode.summary.store.cache.compression.level.intValue());
         assertEquals(512, t.searchNode.summary.store.logStore.maxFileSize.longValue());
-        assertEquals(1.4, t.searchNode.summary.store.logStore.maxDiskBloatFactor, DELTA);
         assertEquals(0.3, t.searchNode.summary.store.logStore.minFileSizeFactor, DELTA);
         assertEquals(7, t.searchNode.summary.store.logStore.numThreads.intValue());
         assertEquals(256, t.searchNode.summary.store.logStore.chunk.maxSize.intValue());
@@ -219,12 +218,29 @@ public class DomSearchTuningBuilderTest extends DomBuilderTest {
         assertThat(cfg, containsString("summary.cache.compression.type NONE"));
         assertThat(cfg, containsString("summary.cache.compression.level 3"));
         assertThat(cfg, containsString("summary.log.maxfilesize 512"));
-        assertThat(cfg, containsString("summary.log.maxdiskbloatfactor 1.4"));
         assertThat(cfg, containsString("summary.log.minfilesizefactor 0.3"));
         assertThat(cfg, containsString("summary.log.chunk.maxbytes 256"));
         assertThat(cfg, containsString("summary.log.chunk.compression.type LZ4"));
         assertThat(cfg, containsString("summary.log.chunk.compression.level 5"));
     }
+
+    @Test
+    public void requireThatWeCanGiveSummaryCacheSizeInPercentage() {
+        Tuning t = createTuning(parseXml("<summary>",
+                "<store>",
+                "<cache>",
+                "<maxsize-percent>30.7</maxsize-percent>",
+                "</cache>",
+                "</store>",
+                "</summary>"));
+
+        assertNull(t.searchNode.summary.store.cache.maxSize);
+        assertEquals(30.7, t.searchNode.summary.store.cache.maxSizePercent.doubleValue(),DELTA);
+
+        String cfg = getProtonCfg(t);
+        assertThat(cfg, containsString("summary.cache.maxbytes -30"));
+    }
+
 
     @Test
     public void requireThatWeCanParseInitializeTag() {
@@ -234,6 +250,15 @@ public class DomSearchTuningBuilderTest extends DomBuilderTest {
         assertEquals(7, t.searchNode.initialize.threads.intValue());
         String cfg = getProtonCfg(t);
         assertThat(cfg, containsString("initialize.threads 7"));
+    }
+
+    @Test
+    public void requireThatWeCanParseFeedingTag() {
+        Tuning t = createTuning(parseXml("<feeding>",
+                "<concurrency>0.7</concurrency>",
+                "</feeding>"));
+        assertEquals(0.7, t.searchNode.feeding.concurrency.doubleValue(), DELTA);
+        assertThat(getProtonCfg(t), containsString("feeding.concurrency 0.7"));
     }
 
 }

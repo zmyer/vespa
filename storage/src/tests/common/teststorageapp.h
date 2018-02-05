@@ -24,10 +24,10 @@
 #include <vespa/storage/storageserver/framework.h>
 #include <vespa/storage/frameworkimpl/component/distributorcomponentregisterimpl.h>
 #include <vespa/storage/frameworkimpl/component/servicelayercomponentregisterimpl.h>
-#include <vespa/storageframework/generic/memory/memorymanagerinterface.h>
 #include <vespa/storageframework/defaultimplementation/clock/realclock.h>
 #include <vespa/storageframework/defaultimplementation/component/testcomponentregister.h>
 #include <vespa/persistence/spi/persistenceprovider.h>
+#include <vespa/document/bucket/fixed_bucket_spaces.h>
 #include <vespa/document/base/testdocman.h>
 
 namespace storage {
@@ -125,7 +125,9 @@ public:
     spi::PartitionStateList& getPartitions();
     uint16_t getPartition(const document::BucketId&);
 
-    StorBucketDatabase& getStorageBucketDatabase() override { return _compReg.getBucketDatabase(); }
+    StorBucketDatabase& getStorageBucketDatabase() override {
+        return _compReg.getBucketSpaceRepo().get(document::FixedBucketSpaces::default_space()).bucketDatabase();
+    }
 
 private:
     // For storage server interface implementation we'll get rid of soon.

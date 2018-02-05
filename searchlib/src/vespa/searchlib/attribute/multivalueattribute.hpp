@@ -8,7 +8,6 @@ namespace search {
 
 namespace multivalueattribute {
 
-constexpr size_t HUGE_MEMORY_PAGE_SIZE = 2 * 1024 * 1024;
 constexpr size_t SMALL_MEMORY_PAGE_SIZE = 4 * 1024;
 
 }
@@ -19,9 +18,11 @@ MultiValueAttribute(const vespalib::string &baseFileName,
                     const AttributeVector::Config &cfg)
     : B(baseFileName, cfg),
       _mvMapping(MultiValueMapping::optimizedConfigForHugePage(1023,
-                                                               multivalueattribute::HUGE_MEMORY_PAGE_SIZE,
+                                                               vespalib::alloc::MemoryAllocator::HUGEPAGE_SIZE,
                                                                multivalueattribute::SMALL_MEMORY_PAGE_SIZE,
-                                                               8 * 1024), cfg.getGrowStrategy())
+                                                               8 * 1024,
+                                                               cfg.getGrowStrategy().getMultiValueAllocGrowFactor()),
+                 cfg.getGrowStrategy())
 {
 }
 

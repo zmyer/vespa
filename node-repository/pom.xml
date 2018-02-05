@@ -9,6 +9,7 @@
       <groupId>com.yahoo.vespa</groupId>
       <artifactId>parent</artifactId>
       <version>6-SNAPSHOT</version>
+        <relativePath>../parent/pom.xml</relativePath>
     </parent>
     <artifactId>node-repository</artifactId>
     <version>6-SNAPSHOT</version>
@@ -50,6 +51,12 @@
         <dependency>
             <groupId>com.yahoo.vespa</groupId>
             <artifactId>service-monitor</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.yahoo.vespa</groupId>
+            <artifactId>application-model</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>

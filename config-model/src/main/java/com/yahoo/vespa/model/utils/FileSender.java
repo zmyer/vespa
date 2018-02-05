@@ -17,9 +17,10 @@ import java.util.*;
  * Utility methods for sending files to a collection of nodes.
  *
  * @author gjoranv
- * @since 5.1.9
  */
 public class FileSender implements Serializable {
+
+    public enum FileType {FILE, URI};
 
     /**
      * Send the given file to all given services.
@@ -35,10 +36,25 @@ public class FileSender implements Serializable {
             throw new IllegalStateException("No service instances. Probably a standalone cluster setting up <nodes> " +
                                             "using 'count' instead of <node> tags.");
         }
+
         FileReference fileref = null;
         for (AbstractService service : services) {
             // The same reference will be returned from each call.
             fileref = service.sendFile(relativePath);
+        }
+        return fileref;
+    }
+
+    public static FileReference sendUriToServices(String uri, Collection<? extends AbstractService> services) {
+        if (services.isEmpty()) {
+            throw new IllegalStateException("No service instances. Probably a standalone cluster setting up <nodes> " +
+                    "using 'count' instead of <node> tags.");
+        }
+
+        FileReference fileref = null;
+        for (AbstractService service : services) {
+            // The same reference will be returned from each call.
+            fileref = service.sendUri(uri);
         }
         return fileref;
     }

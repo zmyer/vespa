@@ -7,7 +7,6 @@
   </config>
 
   <admin version="2.0">
-    <minSlobroksPerCluster>1</minSlobroksPerCluster>
     <adminserver hostalias="adminserver" />
     <logserver hostalias="logserver" />
     <slobroks>
@@ -26,6 +25,9 @@
         <metric-set id="my-set2" />
       </consumer>
     </metrics>
+    <logforwarding>
+      <splunk deployment-server="foo:8989" client-name="foobar" splunk-home="/opt/splunk"/>
+    </logforwarding>
   </admin>
 
   <config name="bar">
@@ -104,7 +106,10 @@
         </request-chain>
       </filtering>
 
-      <server port="4080" id="myServer" />
+      <server port="4080" id="myServer">
+        <ssl-keystore-configurator class="com.yahoo.MySslKeyStoreConfigurator" bundle="mybundle" />
+        <ssl-truststore-configurator class="com.yahoo.MySslTrustStoreConfigurator" bundle="mybundle" />
+      </server>
       <server port="4081" id="anotherServer">
         <config name="container.jdisc.config.http-server">
           <maxChunkSize>9999</maxChunkSize>

@@ -3,8 +3,10 @@ package com.yahoo.documentapi.messagebus.protocol;
 
 import com.yahoo.document.BucketId;
 import com.yahoo.document.DocumentId;
+import com.yahoo.document.FixedBucketSpaces;
 import com.yahoo.document.serialization.DocumentDeserializer;
 import com.yahoo.document.serialization.DocumentSerializer;
+import com.yahoo.vespa.objects.Deserializer;
 
 import java.util.Map;
 
@@ -16,6 +18,10 @@ import java.util.Map;
 public abstract class RoutableFactories51 extends RoutableFactories50 {
 
     public static class CreateVisitorMessageFactory extends DocumentMessageFactory {
+
+        protected String decodeBucketSpace(Deserializer deserializer) {
+            return FixedBucketSpaces.defaultSpace();
+        }
 
         @Override
         protected DocumentMessage doDecode(DocumentDeserializer buf) {
@@ -53,7 +59,12 @@ public abstract class RoutableFactories51 extends RoutableFactories50 {
             msg.setVisitorOrdering(buf.getInt(null));
             msg.setMaxBucketsPerVisitor(buf.getInt(null));
             msg.setVisitorDispatcherVersion(50);
+            msg.setBucketSpace(decodeBucketSpace(buf));
             return msg;
+        }
+
+        protected boolean encodeBucketSpace(String bucketSpace, DocumentSerializer buf) {
+            return FixedBucketSpaces.defaultSpace().equals(bucketSpace);
         }
 
         @Override
@@ -92,7 +103,7 @@ public abstract class RoutableFactories51 extends RoutableFactories50 {
 
             buf.putInt(null, msg.getVisitorOrdering());
             buf.putInt(null, msg.getMaxBucketsPerVisitor());
-            return true;
+            return encodeBucketSpace(msg.getBucketSpace(), buf);
         }
     }
 

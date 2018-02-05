@@ -6,7 +6,6 @@
 #include "i_proton_configurer.h"
 #include <vespa/config/common/exceptions.h>
 #include <vespa/vespalib/util/exceptions.h>
-#include <thread>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".proton.server.proton_config_fetcher");
@@ -24,7 +23,9 @@ ProtonConfigFetcher::ProtonConfigFetcher(const config::ConfigUri & configUri, IP
       _owner(owner),
       _mutex(),
       _dbManagerMap(),
-      _threadPool(128 * 1024, 1)
+      _threadPool(128 * 1024, 1),
+      _oldDocumentTypeRepos(),
+      _currentDocumentTypeRepo()
 {
 }
 
@@ -64,8 +65,7 @@ ProtonConfigFetcher::pruneManagerMap(const BootstrapConfig::SP & config)
         if (_dbManagerMap.find(docTypeName) != _dbManagerMap.end()) {
             mgr = _dbManagerMap[docTypeName];
         } else {
-            mgr = DocumentDBConfigManager::SP(new DocumentDBConfigManager
-                    (ddb.configid, docTypeName.getName()));
+            mgr = std::make_shared<DocumentDBConfigManager>(ddb.configid, docTypeName.getName());
         }
         set.add(mgr->createConfigKeySet());
         newMap[docTypeName] = mgr;
@@ -78,11 +78,9 @@ void
 ProtonConfigFetcher::updateDocumentDBConfigs(const BootstrapConfig::SP & bootstrapConfig, const ConfigSnapshot & snapshot)
 {
     lock_guard guard(_mutex);
-    for (DBManagerMap::iterator it(_dbManagerMap.begin()), mt(_dbManagerMap.end());
-         it != mt;
-         it++) {
-        it->second->forwardConfig(bootstrapConfig);
-        it->second->update(snapshot);
+    for (auto & entry : _dbManagerMap) {
+        entry.second->forwardConfig(bootstrapConfig);
+        entry.second->update(snapshot);
     }
 }
 
@@ -100,10 +98,11 @@ ProtonConfigFetcher::reconfigure()
             assert(insres.first->second->getGeneration() == generation);
         }
     }
-    auto configSnapshot = std::make_shared<ProtonConfigSnapshot>(std::move(bootstrapConfig), std::move(dbConfigs));
+    auto configSnapshot = std::make_shared<ProtonConfigSnapshot>(bootstrapConfig, std::move(dbConfigs));
     LOG(debug, "Reconfiguring proton with gen %" PRId64, generation);
     _owner.reconfigure(std::move(configSnapshot));
     LOG(debug, "Reconfigured proton with gen %" PRId64, generation);
+    rememberDocumentTypeRepo(bootstrapConfig->getDocumentTypeRepoSP());
 }
 
 void
@@ -178,15 +177,22 @@ ProtonConfigFetcher::close()
     }
 }
 
-DocumentDBConfig::SP
-ProtonConfigFetcher::getDocumentDBConfig(const DocTypeName & docTypeName) const
+void
+ProtonConfigFetcher::rememberDocumentTypeRepo(std::shared_ptr<document::DocumentTypeRepo> repo)
 {
-    lock_guard guard(_mutex);
-    DBManagerMap::const_iterator it(_dbManagerMap.find(docTypeName));
-    if (it == _dbManagerMap.end())
-        return DocumentDBConfig::SP();
-
-    return it->second->getConfig();
+    // Ensure that previous document type repo is kept alive, and also
+    // any document type repo that was current within last 10 minutes.
+    using namespace std::chrono_literals;
+    if (repo == _currentDocumentTypeRepo) {
+        return; // no change
+    }
+    auto &repos = _oldDocumentTypeRepos;
+    TimePoint now = Clock::now();
+    while (!repos.empty() && repos.front().first < now) {
+        repos.pop_front();
+    }
+    repos.emplace_back(now + 10min, _currentDocumentTypeRepo);
+    _currentDocumentTypeRepo = repo;
 }
 
 } // namespace proton

@@ -22,16 +22,16 @@ import java.util.stream.Stream;
 public class Random extends CompositeTensorFunction {
 
     private final TensorType type;
-    
+
     public Random(TensorType type) {
         this.type = type;
     }
-    
-    @Override
-    public List<TensorFunction> functionArguments() { return Collections.emptyList(); }
 
     @Override
-    public TensorFunction replaceArguments(List<TensorFunction> arguments) {
+    public List<TensorFunction> arguments() { return Collections.emptyList(); }
+
+    @Override
+    public TensorFunction withArguments(List<TensorFunction> arguments) {
         if ( arguments.size() != 0)
             throw new IllegalArgumentException("Random must have 0 arguments, got " + arguments.size());
         return this;
@@ -46,7 +46,7 @@ public class Random extends CompositeTensorFunction {
     public String toString(ToStringContext context) {
         return "random(" + dimensionNames().collect(Collectors.joining(",")) + ")";
     }
-    
+
     private Stream<String> dimensionNames() {
         return type.dimensions().stream().map(TensorType.Dimension::toString);
     }

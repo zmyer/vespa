@@ -25,6 +25,7 @@ LOG_SETUP("attribute_test");
 #include <vespa/searchlib/attribute/attributevector.hpp>
 #include <vespa/searchlib/attribute/bitvector_search_cache.h>
 #include <vespa/searchlib/attribute/imported_attribute_vector.h>
+#include <vespa/searchlib/attribute/imported_attribute_vector_factory.h>
 #include <vespa/searchlib/attribute/integerbase.h>
 #include <vespa/searchlib/attribute/predicate_attribute.h>
 #include <vespa/searchlib/attribute/singlenumericattribute.hpp>
@@ -41,6 +42,7 @@ LOG_SETUP("attribute_test");
 #include <vespa/vespalib/io/fileutil.h>
 #include <vespa/vespalib/test/insertion_operators.h>
 #include <vespa/vespalib/testkit/testapp.h>
+#include <vespa/searchcommon/attribute/iattributevector.h>
 
 namespace vespa { namespace config { namespace search {}}}
 
@@ -55,7 +57,9 @@ using proton::ImportedAttributesRepo;
 using proton::test::AttributeUtils;
 using search::TuneFileAttributes;
 using search::attribute::BitVectorSearchCache;
+using search::attribute::IAttributeVector;
 using search::attribute::ImportedAttributeVector;
+using search::attribute::ImportedAttributeVectorFactory;
 using search::attribute::ReferenceAttribute;
 using search::index::DummyFileHeaderContext;
 using search::index::schema::CollectionType;
@@ -69,10 +73,11 @@ using vespalib::tensor::Tensor;
 using vespalib::tensor::TensorCells;
 using vespalib::tensor::TensorDimensions;
 
-typedef search::attribute::Config AVConfig;
-typedef search::attribute::BasicType AVBasicType;
-typedef search::attribute::CollectionType AVCollectionType;
-typedef SingleValueNumericAttribute<IntegerAttributeTemplate<int32_t> > Int32AttributeVector;
+using AVConfig = search::attribute::Config;
+using AVBasicType = search::attribute::BasicType;
+using AVCollectionType = search::attribute::CollectionType;
+using Int32AttributeVector = SingleValueNumericAttribute<IntegerAttributeTemplate<int32_t> >;
+using LidVector = LidVectorContext::LidVector;
 
 namespace
 {
@@ -155,6 +160,9 @@ struct Fixture
     }
     void remove(SerialNum serialNum, DocumentIdT lid, bool immediateCommit = true) {
         _aw->remove(serialNum, lid, immediateCommit, emptyCallback);
+    }
+    void remove(const LidVector &lidVector, SerialNum serialNum, bool immediateCommit = true) {
+        _aw->remove(lidVector, serialNum, immediateCommit, emptyCallback);
     }
     void commit(SerialNum serialNum) {
         _aw->forceCommit(serialNum, emptyCallback);
@@ -293,23 +301,23 @@ TEST_F("require that attribute writer handles predicate put", Fixture)
     EXPECT_TRUE(it.valid());
 }
 
+void
+assertUndefined(const IAttributeVector &attr, uint32_t docId)
+{
+    EXPECT_TRUE(search::attribute::isUndefined<int32_t>(attr.getInt(docId)));
+}
+
 TEST_F("require that attribute writer handles remove", Fixture)
 {
     AttributeVector::SP a1 = f.addAttribute("a1");
     AttributeVector::SP a2 = f.addAttribute("a2");
-    Schema s;
-    s.addAttributeField(Schema::AttributeField("a1", schema::DataType::INT32, CollectionType::SINGLE));
-    s.addAttributeField(Schema::AttributeField("a2", schema::DataType::INT32, CollectionType::SINGLE));
-
-    DocBuilder idb(s);
-
     fillAttribute(a1, 1, 10, 1);
     fillAttribute(a2, 1, 20, 1);
 
     f.remove(2, 0);
 
-    EXPECT_TRUE(search::attribute::isUndefined<int32_t>(a1->getInt(0)));
-    EXPECT_TRUE(search::attribute::isUndefined<int32_t>(a2->getInt(0)));
+    TEST_DO(assertUndefined(*a1, 0));
+    TEST_DO(assertUndefined(*a2, 0));
 
     f.remove(2, 0); // same sync token as previous
     try {
@@ -319,6 +327,24 @@ TEST_F("require that attribute writer handles remove", Fixture)
         LOG(info, "Got expected exception: '%s'", e.getMessage().c_str());
         EXPECT_TRUE(true);
     }
+}
+
+TEST_F("require that attribute writer handles batch remove", Fixture)
+{
+    AttributeVector::SP a1 = f.addAttribute("a1");
+    AttributeVector::SP a2 = f.addAttribute("a2");
+    fillAttribute(a1, 4, 22, 1);
+    fillAttribute(a2, 4, 33, 1);
+
+    LidVector lidsToRemove = {1,3};
+    f.remove(lidsToRemove, 2);
+
+    TEST_DO(assertUndefined(*a1, 1));
+    EXPECT_EQUAL(22, a1->getInt(2));
+    TEST_DO(assertUndefined(*a1, 3));
+    TEST_DO(assertUndefined(*a2, 1));
+    EXPECT_EQUAL(33, a2->getInt(2));
+    TEST_DO(assertUndefined(*a2, 3));
 }
 
 void verifyAttributeContent(const AttributeVector & v, uint32_t lid, vespalib::stringref expected)
@@ -720,11 +746,11 @@ TEST_F("require that attribute writer spreads write over 3 write contexts", Fixt
 ImportedAttributeVector::SP
 createImportedAttribute(const vespalib::string &name)
 {
-    auto result = std::make_shared<ImportedAttributeVector>(name,
-                                                            ReferenceAttribute::SP(),
-                                                            AttributeVector::SP(),
-                                                            std::shared_ptr<search::IDocumentMetaStoreContext>(),
-                                                            true);
+    auto result = ImportedAttributeVectorFactory::create(name,
+                                                         ReferenceAttribute::SP(),
+                                                         AttributeVector::SP(),
+                                                         std::shared_ptr<search::IDocumentMetaStoreContext>(),
+                                                         true);
     result->getSearchCache()->insert("foo", BitVectorSearchCache::Entry::SP());
     return result;
 }

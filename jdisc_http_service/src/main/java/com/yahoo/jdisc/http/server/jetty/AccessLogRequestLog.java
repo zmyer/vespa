@@ -5,6 +5,7 @@ import com.google.common.base.Objects;
 import com.yahoo.container.logging.AccessLog;
 import com.yahoo.container.logging.AccessLogEntry;
 
+import com.yahoo.jdisc.http.servlet.ServletRequest;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.server.RequestLog;
 import org.eclipse.jetty.server.Response;
@@ -17,6 +18,8 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.security.Principal;
+import java.security.cert.X509Certificate;
 import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -26,6 +29,7 @@ import java.util.logging.Logger;
  * and our own configurable access logging in different formats provided by {@link AccessLog}.
  *
  * @author bakksjo
+ * @author bjorncs
  */
 public class AccessLogRequestLog extends AbstractLifeCycle implements RequestLog {
 
@@ -45,24 +49,29 @@ public class AccessLogRequestLog extends AbstractLifeCycle implements RequestLog
 
     @Override
     public void log(final Request request, final Response response) {
-        final AccessLogEntry accessLogEntryFromServletRequest = (AccessLogEntry) request.getAttribute(
-                JDiscHttpServlet.ATTRIBUTE_NAME_ACCESS_LOG_ENTRY);
-        final AccessLogEntry accessLogEntry;
-        if (accessLogEntryFromServletRequest != null) {
-            accessLogEntry = accessLogEntryFromServletRequest;
-        } else {
-            accessLogEntry = new AccessLogEntry();
-            populateAccessLogEntryFromHttpServletRequest(request, accessLogEntry);
+        try {
+            final AccessLogEntry accessLogEntryFromServletRequest = (AccessLogEntry) request.getAttribute(
+                    JDiscHttpServlet.ATTRIBUTE_NAME_ACCESS_LOG_ENTRY);
+            final AccessLogEntry accessLogEntry;
+            if (accessLogEntryFromServletRequest != null) {
+                accessLogEntry = accessLogEntryFromServletRequest;
+            } else {
+                accessLogEntry = new AccessLogEntry();
+                populateAccessLogEntryFromHttpServletRequest(request, accessLogEntry);
+            }
+
+            final long startTime = request.getTimeStamp();
+            final long endTime = System.currentTimeMillis();
+            accessLogEntry.setTimeStamp(startTime);
+            accessLogEntry.setDurationBetweenRequestResponse(endTime - startTime);
+            accessLogEntry.setReturnedContentSize(response.getContentCount());
+            accessLogEntry.setStatusCode(response.getStatus());
+
+            accessLog.log(accessLogEntry);
+        } catch (Exception e) {
+            // Catching any exceptions here as it is unclear how Jetty handles exceptions from a RequestLog.
+            logger.log(Level.SEVERE, "Failed to log access log entry: " + e.getMessage(), e);
         }
-
-        final long startTime = request.getTimeStamp();
-        final long endTime = System.currentTimeMillis();
-        accessLogEntry.setTimeStamp(startTime);
-        accessLogEntry.setDurationBetweenRequestResponse(endTime - startTime);
-        accessLogEntry.setReturnedContentSize(response.getContentCount());
-        accessLogEntry.setStatusCode(response.getStatus());
-
-        accessLog.log(accessLogEntry);
     }
 
     /*
@@ -74,18 +83,12 @@ public class AccessLogRequestLog extends AbstractLifeCycle implements RequestLog
     public static void populateAccessLogEntryFromHttpServletRequest(
             final HttpServletRequest request,
             final AccessLogEntry accessLogEntry) {
-        final String quotedPath = request.getRequestURI();
-        final String quotedQuery = request.getQueryString();
-        try {
-            final StringBuilder uriBuffer = new StringBuilder();
-            uriBuffer.append(quotedPath);
-            if (quotedQuery != null) {
-                uriBuffer.append('?').append(quotedQuery);
-            }
-            final URI uri = new URI(uriBuffer.toString());
-            accessLogEntry.setURI(uri);
-        } catch (URISyntaxException e) {
-            setUriFromMalformedInput(accessLogEntry, quotedPath, quotedQuery);
+        setUriFromRequest(request, accessLogEntry);
+
+        accessLogEntry.setRawPath(request.getRequestURI());
+        String queryString = request.getQueryString();
+        if (queryString != null) {
+            accessLogEntry.setRawQuery(queryString);
         }
 
         final String remoteAddress = getRemoteAddress(request);
@@ -107,6 +110,16 @@ public class AccessLogRequestLog extends AbstractLifeCycle implements RequestLog
             accessLogEntry.setPeerPort(peerPort);
         }
         accessLogEntry.setHttpVersion(request.getProtocol());
+        accessLogEntry.setScheme(request.getScheme());
+        accessLogEntry.setLocalPort(request.getLocalPort());
+        Principal principal = (Principal) request.getAttribute(ServletRequest.JDISC_REQUEST_PRINCIPAL);
+        if (principal != null) {
+            accessLogEntry.setUserPrincipal(principal);
+        }
+        X509Certificate[] clientCert = (X509Certificate[]) request.getAttribute("javax.servlet.request.X509Certificate");
+        if (clientCert != null && clientCert.length > 0) {
+            accessLogEntry.setSslPrincipal(clientCert[0].getSubjectX500Principal());
+        }
     }
 
     private static String getRemoteAddress(final HttpServletRequest request) {
@@ -123,16 +136,38 @@ public class AccessLogRequestLog extends AbstractLifeCycle implements RequestLog
                 .orElseGet(request::getRemotePort);
     }
 
-    private static void setUriFromMalformedInput(final AccessLogEntry accessLogEntry, final String quotedPath, final String quotedQuery) {
+    @SuppressWarnings("deprecation")
+    private static void setUriFromRequest(HttpServletRequest request, AccessLogEntry accessLogEntry) {
+        tryCreateUriFromRequest(request)
+                .ifPresent(accessLogEntry::setURI); // setURI is deprecated
+    }
+
+    // This is a mess and does not work correctly
+    private static Optional<URI> tryCreateUriFromRequest(HttpServletRequest request) {
+        final String quotedQuery = request.getQueryString();
+        final String quotedPath = request.getRequestURI();
+        try {
+            final StringBuilder uriBuffer = new StringBuilder();
+            uriBuffer.append(quotedPath);
+            if (quotedQuery != null) {
+                uriBuffer.append('?').append(quotedQuery);
+            }
+            return Optional.of(new URI(uriBuffer.toString()));
+        } catch (URISyntaxException e) {
+            return setUriFromMalformedInput(quotedPath, quotedQuery);
+        }
+    }
+
+    private static Optional<URI> setUriFromMalformedInput(final String quotedPath, final String quotedQuery) {
         try {
             final String scheme = null;
             final String authority = null;
             final String fragment = null;
-            final URI uri = new URI(scheme, authority, unquote(quotedPath), unquote(quotedQuery), fragment);
-            accessLogEntry.setURI(uri);
+            return Optional.of(new URI(scheme, authority, unquote(quotedPath), unquote(quotedQuery), fragment));
         } catch (URISyntaxException e) {
             // I have no idea how this can happen here now...
             logger.log(Level.WARNING, "Could not convert String URI to URI object", e);
+            return Optional.empty();
         }
     }
 

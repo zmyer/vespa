@@ -307,11 +307,16 @@ public class NodeRepository extends AbstractComponent {
 
     /** Sets a list of nodes ready and returns the nodes in the ready state */
     public List<Node> setReady(List<Node> nodes) {
-        for (Node node : nodes)
-            if (node.state() != Node.State.dirty)
-                throw new IllegalArgumentException("Can not set " + node + " ready. It is not dirty.");
         try (Mutex lock = lockUnallocated()) {
-            return db.writeTo(Node.State.ready, nodes, Agent.system, Optional.empty());
+            List<Node> nodesWithResetFields = nodes.stream()
+                    .map(node -> {
+                        if (node.state() != Node.State.dirty)
+                            throw new IllegalArgumentException("Can not set " + node + " ready. It is not dirty.");
+                        return node.with(node.status().withWantToRetire(false).withWantToDeprovision(false));
+                    })
+                    .collect(Collectors.toList());
+
+            return db.writeTo(Node.State.ready, nodesWithResetFields, Agent.system, Optional.empty());
         }
     }
 
@@ -624,7 +629,7 @@ public class NodeRepository extends AbstractComponent {
     // Public for testing
     public List<Node> getConfigNodes() {
         // TODO: Revisit this when config servers are added to the repository
-        return Arrays.stream(curator.connectionSpec().split(","))
+        return Arrays.stream(curator.zooKeeperEnsembleConnectionSpec().split(","))
                 .map(hostPort -> hostPort.split(":")[0])
                 .map(host -> createNode(host, host, Optional.empty(),
                         flavors.getFlavorOrThrow("v-4-8-100"), // Must be a flavor that exists in Hosted Vespa

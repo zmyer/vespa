@@ -2,15 +2,16 @@
 package com.yahoo.vespa.config.server.session;
 
 import com.yahoo.log.LogLevel;
-import com.yahoo.config.provision.ApplicationId;
-import com.yahoo.vespa.config.server.application.TenantApplications;
 import com.yahoo.vespa.config.server.deploy.TenantFileSystemDirs;
 
 import java.io.File;
 import java.io.FilenameFilter;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
@@ -22,27 +23,27 @@ import java.util.logging.Logger;
 public class LocalSessionRepo extends SessionRepo<LocalSession> {
 
     private static final Logger log = Logger.getLogger(LocalSessionRepo.class.getName());
+    private static final FilenameFilter sessionApplicationsFilter = (dir, name) -> name.matches("\\d+");
+    private static final Duration delay = Duration.ofMinutes(5);
 
-    private final static FilenameFilter sessionApplicationsFilter = (dir, name) -> name.matches("\\d+");
-
+    private final ScheduledExecutorService purgeOldSessionsExecutor = new ScheduledThreadPoolExecutor(1);
     private final long sessionLifetime; // in seconds
-    private final TenantApplications applicationRepo;
     private final Clock clock;
 
     public LocalSessionRepo(TenantFileSystemDirs tenantFileSystemDirs, LocalSessionLoader loader,
-                            TenantApplications applicationRepo, Clock clock, long sessionLifeTime) {
-        this(applicationRepo, clock, sessionLifeTime);
-        loadSessions(tenantFileSystemDirs.path(), loader);
+                            Clock clock, long sessionLifeTime) {
+        this(clock, sessionLifeTime);
+        loadSessions(tenantFileSystemDirs.sessionsPath(), loader);
+        purgeOldSessionsExecutor.scheduleWithFixedDelay(this::purgeOldSessions, delay.getSeconds(), delay.getSeconds(), TimeUnit.SECONDS);
     }
 
     // Constructor public only for testing
-    public LocalSessionRepo(TenantApplications applicationRepo, Clock clock) {
-        this(applicationRepo, clock, TimeUnit.DAYS.toMillis(1));
+    public LocalSessionRepo(Clock clock) {
+        this(clock, TimeUnit.DAYS.toMillis(1));
     }
 
     // Constructor public only for testing
-    public LocalSessionRepo(TenantApplications applicationRepo, Clock clock, long sessionLifetime) {
-        this.applicationRepo = applicationRepo;
+    private LocalSessionRepo(Clock clock, long sessionLifetime) {
         this.sessionLifetime = sessionLifetime;
         this.clock = clock;
     }
@@ -62,46 +63,29 @@ public class LocalSessionRepo extends SessionRepo<LocalSession> {
         }
     }
 
-    /**
-     * Gets the active Session for the given application id.
-     *
-     * @return the active session, or null if there is no active session for the given application id.
-     */
-    public LocalSession getActiveSession(ApplicationId applicationId) {
-        List<ApplicationId> applicationIds = applicationRepo.listApplications();
-        if (applicationIds.contains(applicationId)) {
-            return getSession(applicationRepo.getSessionIdForApplication(applicationId));
-        }
-        return null;
-    }
-
-    @Override
-    public synchronized void addSession(LocalSession session) {
-        purgeOldSessions();
-        super.addSession(session);
-    }
-
-    private void purgeOldSessions() {
-        final List<ApplicationId> applicationIds = applicationRepo.listApplications();
-        List<LocalSession> sessions = new ArrayList<>(listSessions());
-        for (LocalSession candidate : sessions) {
-            if (hasExpired(candidate) && !isActiveSession(candidate, applicationIds)) {
-                deleteSession(candidate);
+    // public for testing
+    public void purgeOldSessions() {
+        log.log(LogLevel.DEBUG, "Purging old sessions");
+        try {
+            List<LocalSession> sessions = new ArrayList<>(listSessions());
+            for (LocalSession candidate : sessions) {
+                if (hasExpired(candidate) && !isActiveSession(candidate)) {
+                    deleteSession(candidate);
+                }
             }
+            // Make sure to catch here, to avoid executor just dying in case of issues ...
+        } catch (Throwable e) {
+            log.log(LogLevel.WARNING, "Error when purging old sessions ", e);
         }
+        log.log(LogLevel.DEBUG, "Done purging old sessions");
     }
 
     private boolean hasExpired(LocalSession candidate) {
         return (candidate.getCreateTime() + sessionLifetime) <= TimeUnit.MILLISECONDS.toSeconds(clock.millis());
     }
 
-    private boolean isActiveSession(LocalSession candidate, List<ApplicationId> activeIds) {
-        if (candidate.getStatus() == Session.Status.ACTIVATE && activeIds.contains(candidate.getApplicationId())) {
-            long sessionId = applicationRepo.getSessionIdForApplication(candidate.getApplicationId());
-            return (candidate.getSessionId() == sessionId);
-        } else {
-            return false;
-        }
+    private boolean isActiveSession(LocalSession candidate) {
+        return candidate.getStatus() == Session.Status.ACTIVATE;
     }
 
     private void deleteSession(LocalSession candidate) {

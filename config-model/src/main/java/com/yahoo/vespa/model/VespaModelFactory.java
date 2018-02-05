@@ -138,7 +138,8 @@ public class VespaModelFactory implements ModelFactory {
             .rotations(modelContext.properties().rotations())
             .zone(zone)
             .now(clock.instant())
-            .wantedNodeVespaVersion(modelContext.wantedNodeVespaVersion());
+            .wantedNodeVespaVersion(modelContext.wantedNodeVespaVersion())
+            .disableFiledistributor(modelContext.properties().disableFileDistributor());
         modelContext.previousModel().ifPresent(builder::previousModel);
         return builder.build();
     }
@@ -147,6 +148,7 @@ public class VespaModelFactory implements ModelFactory {
         return new DeployProperties.Builder()
                 .applicationId(properties.applicationId())
                 .configServerSpecs(properties.configServerSpecs())
+                .loadBalancerName(properties.loadBalancerName())
                 .multitenant(properties.multitenant())
                 .hostedVespa(properties.hostedVespa())
                 .vespaVersion(getVersion())

@@ -20,7 +20,6 @@ import com.yahoo.slime.JsonDecoder;
 import com.yahoo.slime.Slime;
 import com.yahoo.transaction.Transaction;
 import com.yahoo.vespa.config.server.ApplicationRepository;
-import com.yahoo.vespa.config.server.PathProvider;
 import com.yahoo.vespa.config.server.TestComponentRegistry;
 import com.yahoo.vespa.config.server.application.ApplicationSet;
 import com.yahoo.vespa.config.server.host.HostRegistry;
@@ -77,7 +76,7 @@ public class SessionPrepareHandlerTest extends SessionHandlerTest {
     public void setupRepo() throws Exception {
         applicationRepo = new MemoryTenantApplications();
         curator = new MockCurator();
-        localRepo = new LocalSessionRepo(applicationRepo, Clock.systemUTC());
+        localRepo = new LocalSessionRepo(Clock.systemUTC());
         pathPrefix = "/application/v2/tenant/" + tenant + "/session/";
         preparedMessage = " for tenant '" + tenant + "' prepared.\"";
         tenantMessage = ",\"tenant\":\"" + tenant + "\"";
@@ -148,15 +147,14 @@ public class SessionPrepareHandlerTest extends SessionHandlerTest {
      * A mock remote session repo based on contents of local repo
      */
     private RemoteSessionRepo fromLocalSessionRepo(LocalSessionRepo localRepo, Clock clock) {
-        RemoteSessionRepo remoteRepo = new RemoteSessionRepo();
-        PathProvider pathProvider = new PathProvider(Path.createRoot());
+        RemoteSessionRepo remoteRepo = new RemoteSessionRepo(tenant);
         for (LocalSession ls : localRepo.listSessions()) {
 
-            zooKeeperClient = new MockSessionZKClient(curator, pathProvider.getSessionDirs().append(String.valueOf(ls.getSessionId())));
+            zooKeeperClient = new MockSessionZKClient(curator, tenant, ls.getSessionId());
             if (ls.getStatus()!=null) zooKeeperClient.writeStatus(ls.getStatus());
-            RemoteSession remSess = new RemoteSession(TenantName.from("default"), ls.getSessionId(),
+            RemoteSession remSess = new RemoteSession(tenant, ls.getSessionId(),
                                                       new TestComponentRegistry.Builder().curator(curator).build(),
-                                                      zooKeeperClient, 
+                                                      zooKeeperClient,
                                                       clock);
             remoteRepo.addSession(remSess);
         }
@@ -238,10 +236,9 @@ public class SessionPrepareHandlerTest extends SessionHandlerTest {
     @Test
     public void require_that_preparing_with_multiple_tenants_work() throws Exception {
         // Need different repos for 'default' tenant as opposed to the 'test' tenant
-        TenantApplications applicationRepoDefault = new MemoryTenantApplications();
-        LocalSessionRepo localRepoDefault = new LocalSessionRepo(applicationRepoDefault, Clock.systemUTC());
-        final TenantName tenantName = TenantName.defaultName();
-        addTenant(tenantName, localRepoDefault, new RemoteSessionRepo(), new MockSessionFactory());
+        LocalSessionRepo localRepoDefault = new LocalSessionRepo(Clock.systemUTC());
+        final TenantName defaultTenant = TenantName.defaultName();
+        addTenant(defaultTenant, localRepoDefault, new RemoteSessionRepo(tenant), new MockSessionFactory());
         addTestTenant();
         final SessionHandler handler = createHandler(builder);
 
@@ -249,7 +246,7 @@ public class SessionPrepareHandlerTest extends SessionHandlerTest {
         // Deploy with default tenant
         MockSession session = new MockSession(sessionId, null);
         localRepoDefault.addSession(session);
-        pathPrefix = "/application/v2/tenant/default/session/";
+        pathPrefix = "/application/v2/tenant/" + defaultTenant + "/session/";
 
         HttpResponse response = handler.handle(
                 SessionHandlerTest.createTestRequest(pathPrefix, HttpRequest.Method.PUT, Cmd.PREPARED, sessionId));
@@ -318,7 +315,7 @@ public class SessionPrepareHandlerTest extends SessionHandlerTest {
 
     @Test
     public void test_out_of_capacity_response() throws InterruptedException, IOException {
-        String message = "No nodes available";
+        String message = "Internal error";
         SessionThrowingException session = new SessionThrowingException(new OutOfCapacityException(message));
         localRepo.addSession(session);
         HttpResponse response = createHandler()
@@ -326,6 +323,19 @@ public class SessionPrepareHandlerTest extends SessionHandlerTest {
         assertEquals(400, response.getStatus());
         Slime data = getData(response);
         assertThat(data.get().field("error-code").asString(), is(HttpErrorResponse.errorCodes.OUT_OF_CAPACITY.name()));
+        assertThat(data.get().field("message").asString(), is(message));
+    }
+
+    @Test
+    public void test_that_nullpointerexception_gives_internal_server_error() throws InterruptedException, IOException {
+        String message = "No nodes available";
+        SessionThrowingException session = new SessionThrowingException(new NullPointerException(message));
+        localRepo.addSession(session);
+        HttpResponse response = createHandler()
+                .handle(SessionHandlerTest.createTestRequest(pathPrefix, HttpRequest.Method.PUT, Cmd.PREPARED, 1L));
+        assertEquals(500, response.getStatus());
+        Slime data = getData(response);
+        assertThat(data.get().field("error-code").asString(), is(HttpErrorResponse.errorCodes.INTERNAL_SERVER_ERROR.name()));
         assertThat(data.get().field("message").asString(), is(message));
     }
 
@@ -368,16 +378,18 @@ public class SessionPrepareHandlerTest extends SessionHandlerTest {
     }
 
     private TestTenantBuilder addTestTenant() {
-        return addTenant(tenant, localRepo, new RemoteSessionRepo(), new MockSessionFactory());
+        return addTenant(tenant, localRepo, new RemoteSessionRepo(tenant), new MockSessionFactory());
     }
 
     private SessionHandler createHandler(TestTenantBuilder builder) {
         final ConfigserverConfig configserverConfig = new ConfigserverConfig(new ConfigserverConfig.Builder());
-        return new SessionPrepareHandler(Runnable::run, AccessLog.voidAccessLog(), builder.createTenants(), configserverConfig,
-                                         new ApplicationRepository(builder.createTenants(),
-                                                                   new MockProvisioner(),
-                                                                   curator,
-                                                                   Clock.systemUTC()));
+        return new SessionPrepareHandler(
+                SessionPrepareHandler.testOnlyContext(),
+                new ApplicationRepository(builder.createTenants(),
+                                          new MockProvisioner(),
+                                          Clock.systemUTC()),
+                builder.createTenants(), configserverConfig);
+
     }
 
     private TestTenantBuilder addTenant(TenantName tenantName,

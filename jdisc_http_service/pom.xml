@@ -9,12 +9,23 @@
     <groupId>com.yahoo.vespa</groupId>
     <artifactId>parent</artifactId>
     <version>6-SNAPSHOT</version>
+    <relativePath>../parent/pom.xml</relativePath>
   </parent>
   <artifactId>jdisc_http_service</artifactId>
   <version>6-SNAPSHOT</version>
   <packaging>container-plugin</packaging>
   <name>${project.artifactId}</name>
   <dependencies>
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcpkix-jdk15on</artifactId>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk15on</artifactId>
+      <scope>compile</scope>
+    </dependency>
     <dependency>
       <groupId>com.google.inject</groupId>
       <artifactId>guice</artifactId>

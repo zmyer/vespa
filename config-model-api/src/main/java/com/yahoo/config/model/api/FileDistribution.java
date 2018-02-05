@@ -11,18 +11,32 @@ import java.util.Set;
 /**
  * Interface for models towards filedistribution.
  *
- * @author lulf
- * @since 5.1
+ * @author Ulf Lilleengen
  */
 public interface FileDistribution {
 
     void sendDeployedFiles(String hostName, Set<FileReference> fileReferences);
+
+    /**
+     * Notifies client which file references to download. Used to start downloading early (while
+     * preparing application package).
+     *
+     * @param hostName       host which should be notified about file references to download
+     * @param port           port which should be used when notifying
+     * @param fileReferences set of file references to start downloading
+     */
+    void startDownload(String hostName, int port, Set<FileReference> fileReferences);
+
     void reloadDeployFileDistributor();
-    void limitSendingOfDeployedFilesTo(Collection<String> hostNames);
+
     void removeDeploymentsThatHaveDifferentApplicationId(Collection<String> targetHostnames);
 
+    static String getDefaultFileDBRoot() {
+        return Defaults.getDefaults().underVespaHome("var/db/vespa/filedistribution");
+    }
+
     static File getDefaultFileDBPath() {
-        return new File(Defaults.getDefaults().underVespaHome("var/db/vespa/filedistribution"));
+        return new File(getDefaultFileDBRoot());
     }
 
 }

@@ -8,6 +8,7 @@
 #include "wrapped_simple_tensor.h"
 #include <vespa/eval/tensor/sparse/direct_sparse_tensor_builder.h>
 #include <vespa/eval/tensor/dense/dense_tensor.h>
+#include <vespa/vespalib/stllike/hash_map.hpp>
 #include <limits>
 
 using vespalib::eval::ValueType;
@@ -69,7 +70,7 @@ mapAddress(const TensorAddress &address)
 {
     _addressBuilder.clear();
     TensorAddressElementIterator<TensorAddress> addressIterator(address);
-    for (const auto &dimension : _builder.type().dimensions()) {
+    for (const auto &dimension : _builder.fast_type().dimensions()) {
         if (addressIterator.skipToDimension(dimension.name)) {
             _addressBuilder.add(addressIterator.label());
             addressIterator.next();

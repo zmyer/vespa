@@ -9,11 +9,15 @@
 #include <vespa/storageapi/message/persistence.h>
 #include <vespa/storageapi/message/multioperation.h>
 #include <vespa/storage/common/bucketmessages.h>
+#include <vespa/document/bucket/fixed_bucket_spaces.h>
 #include <vespa/vespalib/stllike/hash_map.hpp>
+#include "distributor_bucket_space_repo.h"
+#include "distributor_bucket_space.h"
 
 #include <vespa/log/log.h>
 LOG_SETUP(".distributor.operation.queue");
 
+using document::BucketSpace;
 using storage::lib::Node;
 using storage::lib::NodeType;
 
@@ -22,12 +26,13 @@ namespace distributor {
 
 IdealStateManager::IdealStateManager(
         Distributor& owner,
-        ManagedBucketSpace& bucketSpace,
+        DistributorBucketSpaceRepo& bucketSpaceRepo,
         DistributorComponentRegister& compReg,
         bool manageActiveBucketCopies)
     : HtmlStatusReporter("idealstateman", "Ideal state manager"),
       _metrics(new IdealStateMetricSet),
-      _distributorComponent(owner, bucketSpace, compReg, "Ideal state manager")
+      _distributorComponent(owner, bucketSpaceRepo, compReg, "Ideal state manager"),
+      _bucketSpaceRepo(bucketSpaceRepo)
 {
     _distributorComponent.registerStatusPage(*this);
     _distributorComponent.registerMetric(*_metrics);
@@ -73,17 +78,17 @@ IdealStateManager::iAmUp() const
 void
 IdealStateManager::fillParentAndChildBuckets(StateChecker::Context& c) const
 {
-    _distributorComponent.getBucketDatabase().getAll(c.bucketId, c.entries);
+    c.db.getAll(c.getBucketId(), c.entries);
     if (c.entries.empty()) {
         LOG(spam,
             "Did not find bucket %s in bucket database",
-            c.bucketId.toString().c_str());
+            c.bucket.toString().c_str());
     }
 }
 void
 IdealStateManager::fillSiblingBucket(StateChecker::Context& c) const
 {
-    c.siblingEntry = _distributorComponent.getBucketDatabase().get(c.siblingBucket);
+    c.siblingEntry = c.db.get(c.siblingBucket);
 }
 
 BucketDatabase::Entry*
@@ -91,7 +96,7 @@ IdealStateManager::getEntryForPrimaryBucket(StateChecker::Context& c) const
 {
     for (uint32_t j = 0; j < c.entries.size(); ++j) {
         BucketDatabase::Entry& e = c.entries[j];
-        if (e.getBucketId() == c.bucketId) {
+        if (e.getBucketId() == c.getBucketId() && ! e->getNodes().empty()) {
             return &e;
         }
     }
@@ -139,10 +144,11 @@ IdealStateManager::runStateCheckers(StateChecker::Context& c) const
 
 StateChecker::Result
 IdealStateManager::generateHighestPriority(
-        const document::BucketId& bid,
+        const document::Bucket &bucket,
         NodeMaintenanceStatsTracker& statsTracker) const
 {
-    StateChecker::Context c(_distributorComponent, statsTracker, bid);
+    auto &distributorBucketSpace(_bucketSpaceRepo.get(bucket.getBucketSpace()));
+    StateChecker::Context c(_distributorComponent, distributorBucketSpace, statsTracker, bucket);
     fillParentAndChildBuckets(c);
     fillSiblingBucket(c);
 
@@ -158,11 +164,11 @@ IdealStateManager::generateHighestPriority(
 
 MaintenancePriorityAndType
 IdealStateManager::prioritize(
-        const document::BucketId& bucketId,
+        const document::Bucket &bucket,
         NodeMaintenanceStatsTracker& statsTracker) const
 {
     StateChecker::Result generated(
-            generateHighestPriority(bucketId, statsTracker));
+            generateHighestPriority(bucket, statsTracker));
     MaintenancePriority priority(generated.getPriority());
     MaintenanceOperation::Type type(priority.requiresMaintenance()
                                     ? generated.getType()
@@ -171,11 +177,14 @@ IdealStateManager::prioritize(
 }
 
 IdealStateOperation::SP
-IdealStateManager::generateInterceptingSplit(const BucketDatabase::Entry& e,
+IdealStateManager::generateInterceptingSplit(BucketSpace bucketSpace,
+                                             const BucketDatabase::Entry& e,
                                              api::StorageMessage::Priority pri)
 {
     NodeMaintenanceStatsTracker statsTracker;
-    StateChecker::Context c(_distributorComponent, statsTracker, e.getBucketId());
+    document::Bucket bucket(bucketSpace, e.getBucketId());
+    auto &distributorBucketSpace(_bucketSpaceRepo.get(bucket.getBucketSpace()));
+    StateChecker::Context c(_distributorComponent, distributorBucketSpace, statsTracker, bucket);
     if (e.valid()) {
         c.entry = e;
 
@@ -193,11 +202,11 @@ IdealStateManager::generateInterceptingSplit(const BucketDatabase::Entry& e,
 }
 
 MaintenanceOperation::SP
-IdealStateManager::generate(const document::BucketId& bucketId) const
+IdealStateManager::generate(const document::Bucket &bucket) const
 {
     NodeMaintenanceStatsTracker statsTracker;
     IdealStateOperation::SP op(
-            generateHighestPriority(bucketId, statsTracker).createOperation());
+            generateHighestPriority(bucket, statsTracker).createOperation());
     if (op.get()) {
         op->setIdealStateManager(
                 const_cast<IdealStateManager*>(this));
@@ -206,10 +215,11 @@ IdealStateManager::generate(const document::BucketId& bucketId) const
 }
 
 std::vector<MaintenanceOperation::SP>
-IdealStateManager::generateAll(const document::BucketId& bucketId,
+IdealStateManager::generateAll(const document::Bucket &bucket,
                                NodeMaintenanceStatsTracker& statsTracker) const
 {
-    StateChecker::Context c(_distributorComponent, statsTracker, bucketId);
+    auto &distributorBucketSpace(_bucketSpaceRepo.get(bucket.getBucketSpace()));
+    StateChecker::Context c(_distributorComponent, distributorBucketSpace, statsTracker, bucket);
     fillParentAndChildBuckets(c);
     fillSiblingBucket(c);
     BucketDatabase::Entry* e(getEntryForPrimaryBucket(c));
@@ -232,15 +242,14 @@ IdealStateManager::generateAll(const document::BucketId& bucketId,
 
 void
 IdealStateManager::getBucketStatus(
+        BucketSpace bucketSpace,
         const BucketDatabase::Entry& entry,
         NodeMaintenanceStatsTracker& statsTracker,
         std::ostream& out) const
 {
-    LOG(debug, "Dumping bucket database valid at cluster state version %u",
-        _distributorComponent.getDistributor().getClusterState().getVersion());
-
+    document::Bucket bucket(bucketSpace, entry.getBucketId());
     std::vector<MaintenanceOperation::SP> operations(
-            generateAll(entry.getBucketId(), statsTracker));
+            generateAll(bucket, statsTracker));
     if (operations.empty()) {
         out << entry.getBucketId() << " : ";
     } else {
@@ -259,11 +268,21 @@ IdealStateManager::getBucketStatus(
     out << "[" << entry->toString() << "]<br>\n";
 }
 
-void
-IdealStateManager::getBucketStatus(std::ostream& out) const
-{
-     StatusBucketVisitor proc(*this, out);
-     _distributorComponent.getBucketDatabase().forEach(proc);
+void IdealStateManager::dump_bucket_space_db_status(document::BucketSpace bucket_space, std::ostream& out) const {
+    out << "<h2>" << document::FixedBucketSpaces::to_string(bucket_space) << " - " << bucket_space << "</h2>\n";
+
+    StatusBucketVisitor proc(*this, bucket_space, out);
+    auto &distributorBucketSpace(_bucketSpaceRepo.get(bucket_space));
+    distributorBucketSpace.getBucketDatabase().forEach(proc);
+}
+
+void IdealStateManager::getBucketStatus(std::ostream& out) const {
+    LOG(debug, "Dumping bucket database valid at cluster state version %u",
+        _distributorComponent.getDistributor().getClusterState().getVersion());
+
+    for (auto& space : _bucketSpaceRepo) {
+        dump_bucket_space_db_status(space.first, out);
+    }
 }
 
 } // distributor

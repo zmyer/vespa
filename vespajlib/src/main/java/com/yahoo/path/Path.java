@@ -2,23 +2,25 @@
 package com.yahoo.path;
 
 import com.google.common.annotations.Beta;
+import com.google.common.collect.ImmutableList;
 
+import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
-
-// TODO: Remove and replace usage by java.nio.file.Path
+import java.util.stream.Collectors;
 
 /**
  * Represents a path represented by a list of elements. Immutable
  *
- * @author lulf
+ * @author Ulf Lilleengen
  */
 @Beta
 public final class Path {
 
     private final String delimiter;
-    private final List<String> elements = new ArrayList<>();
+    private final ImmutableList<String> elements;
 
     /**
      * Create an empty path.
@@ -40,7 +42,7 @@ public final class Path {
      * @param elements a list of path elements
      */
     private Path(List<String> elements, String delimiter) {
-        this.elements.addAll(elements);
+        this.elements = ImmutableList.copyOf(elements);
         this.delimiter = delimiter;
     }
 
@@ -52,26 +54,20 @@ public final class Path {
     /**
      * Add path elements by splitting based on delimiter and appending to elements.
      */
-    private void addElementsFromString(String path) {
-        String[] pathElements = path.split(delimiter);
-        if (pathElements != null) {
-            for (String elem : pathElements) {
-                if (!"".equals(elem)) {
-                    elements.add(elem);
-                }
-            }
-        }
+    private static List<String> elementsOf(String path, String delimiter) {
+        return Arrays.stream(path.split(delimiter)).filter(e -> !"".equals(e)).collect(Collectors.toList());
     }
 
     /**
-     * Append an element to the path. Returns a new path with this element appended.
-     * @param name name of element to append.
-     * @return this, for chaining
+     * Append an element to the path. Returns a new path with the given path appended.
+     *
+     * @param path the path to append to this
+     * @return the new path
      */
-    public Path append(String name) {
-        Path path = new Path(this);
-        path.addElementsFromString(name);
-        return path;
+    public Path append(String path) {
+        List<String> newElements = new ArrayList<>(this.elements);
+        newElements.addAll(elementsOf(path, delimiter));
+        return new Path(newElements, delimiter);
     }
 
     /**
@@ -81,9 +77,9 @@ public final class Path {
      * @return a new path with argument appended to it.
      */
     public Path append(Path path) {
-        Path newPath = new Path(this);
-        newPath.elements.addAll(path.elements);
-        return newPath;
+        List<String> newElements = new ArrayList<>(this.elements);
+        newElements.addAll(path.elements());
+        return new Path(newElements, delimiter);
     }
 
     /**
@@ -91,9 +87,7 @@ public final class Path {
      * @return the name
      */
     public String getName() {
-        if (elements.isEmpty()) {
-            return "";
-        }
+        if (elements.isEmpty()) return "";
         return elements.get(elements.size() - 1);
     }
 
@@ -142,6 +136,9 @@ public final class Path {
 
     public Iterator<String> iterator() { return elements.iterator(); }
 
+    /** Returns an immutable list of the elements of this path in order */
+    public List<String> elements() { return elements; }
+
     /**
      * Convert to string.
      *
@@ -172,9 +169,7 @@ public final class Path {
      * @return a path object that may be used with the application package.
      */
     public static Path fromString(String path, String delimiter) {
-        Path pathObj = new Path(delimiter);
-        pathObj.addElementsFromString(path);
-        return pathObj;
+        return new Path(elementsOf(path, delimiter), delimiter);
     }
 
     /**
@@ -194,6 +189,8 @@ public final class Path {
     public static Path createRoot(String delimiter) {
         return new Path(delimiter);
     }
+
+    public File toFile() { return new File(toString()); }
 
     @Override
     public int hashCode() {

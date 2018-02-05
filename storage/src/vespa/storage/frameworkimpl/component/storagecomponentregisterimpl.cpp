@@ -10,11 +10,21 @@ LOG_SETUP(".storage.component.register");
 namespace storage {
 
 StorageComponentRegisterImpl::StorageComponentRegisterImpl()
-    : _nodeType(0),
+    : _componentLock(),
+      _components(),
+      _clusterName(),
+      _nodeType(nullptr),
       _index(0xffff),
+      _docTypeRepo(),
       _loadTypes(new documentapi::LoadTypeSet),
-      _nodeStateUpdater(0)
-{ }
+      _priorityConfig(),
+      _bucketIdFactory(),
+      _distribution(),
+      _nodeStateUpdater(nullptr),
+      _bucketSpacesConfig(),
+      _enableMultipleBucketSpaces(false)
+{
+}
 
 StorageComponentRegisterImpl::~StorageComponentRegisterImpl() { }
 
@@ -23,9 +33,9 @@ StorageComponentRegisterImpl::registerStorageComponent(StorageComponent& smc)
 {
     vespalib::LockGuard lock(_componentLock);
     _components.push_back(&smc);
-    assert(_nodeType != 0);
+    assert(_nodeType != nullptr);
     smc.setNodeInfo(_clusterName, *_nodeType, _index);
-    if (_nodeStateUpdater != 0) {
+    if (_nodeStateUpdater != nullptr) {
         smc.setNodeStateUpdater(*_nodeStateUpdater);
     }
     smc.setDocumentTypeRepo(_docTypeRepo);
@@ -33,6 +43,7 @@ StorageComponentRegisterImpl::registerStorageComponent(StorageComponent& smc)
     smc.setPriorityConfig(_priorityConfig);
     smc.setBucketIdFactory(_bucketIdFactory);
     smc.setDistribution(_distribution);
+    smc.enableMultipleBucketSpaces(_enableMultipleBucketSpaces);
 }
 
 void
@@ -41,7 +52,7 @@ StorageComponentRegisterImpl::setNodeInfo(vespalib::stringref clusterName,
                                           uint16_t index)
 {
     vespalib::LockGuard lock(_componentLock);
-    if (_nodeType != 0) {
+    if (_nodeType != nullptr) {
         LOG(warning, "Node info already set. May be valid in tests, but is a "
                      "bug in production. Node info should not be updated live");
     }
@@ -60,8 +71,8 @@ StorageComponentRegisterImpl::setNodeStateUpdater(NodeStateUpdater& updater)
                 VESPA_STRLOC);
     }
     _nodeStateUpdater = &updater;
-    for (uint32_t i=0; i<_components.size(); ++i) {
-        _components[i]->setNodeStateUpdater(updater);
+    for (auto& component : _components) {
+        component->setNodeStateUpdater(updater);
     }
 }
 
@@ -70,8 +81,8 @@ StorageComponentRegisterImpl::setDocumentTypeRepo(document::DocumentTypeRepo::SP
 {
     vespalib::LockGuard lock(_componentLock);
     _docTypeRepo = repo;
-    for (uint32_t i=0; i<_components.size(); ++i) {
-        _components[i]->setDocumentTypeRepo(repo);
+    for (auto& component : _components) {
+        component->setDocumentTypeRepo(repo);
     }
 }
 
@@ -80,8 +91,8 @@ StorageComponentRegisterImpl::setLoadTypes(documentapi::LoadTypeSet::SP loadType
 {
     vespalib::LockGuard lock(_componentLock);
     _loadTypes = loadTypes;
-    for (uint32_t i=0; i<_components.size(); ++i) {
-        _components[i]->setLoadTypes(loadTypes);
+    for (auto& component : _components) {
+        component->setLoadTypes(loadTypes);
     }
 }
 
@@ -90,8 +101,8 @@ StorageComponentRegisterImpl::setPriorityConfig(const PriorityConfig& config)
 {
     vespalib::LockGuard lock(_componentLock);
     _priorityConfig = config;
-    for (uint32_t i=0; i<_components.size(); ++i) {
-        _components[i]->setPriorityConfig(config);
+    for (auto& component : _components) {
+        component->setPriorityConfig(config);
     }
 }
 
@@ -100,8 +111,8 @@ StorageComponentRegisterImpl::setBucketIdFactory(const document::BucketIdFactory
 {
     vespalib::LockGuard lock(_componentLock);
     _bucketIdFactory = factory;
-    for (uint32_t i=0; i<_components.size(); ++i) {
-        _components[i]->setBucketIdFactory(factory);
+    for (auto& component : _components) {
+        component->setBucketIdFactory(factory);
     }
 }
 
@@ -110,9 +121,31 @@ StorageComponentRegisterImpl::setDistribution(lib::Distribution::SP distribution
 {
     vespalib::LockGuard lock(_componentLock);
     _distribution = distribution;
-    for (uint32_t i=0; i<_components.size(); ++i) {
-        _components[i]->setDistribution(distribution);
+    for (auto& component : _components) {
+        component->setDistribution(distribution);
     }
+}
+
+void
+StorageComponentRegisterImpl::setBucketSpacesConfig(const BucketspacesConfig& config)
+{
+    vespalib::LockGuard lock(_componentLock);
+    _bucketSpacesConfig = config;
+}
+
+void StorageComponentRegisterImpl::setEnableMultipleBucketSpaces(bool enabled) {
+    vespalib::LockGuard lock(_componentLock);
+    assert(!_enableMultipleBucketSpaces); // Cannot disable once enabled.
+    _enableMultipleBucketSpaces = enabled;
+    for (auto& component : _components) {
+        component->enableMultipleBucketSpaces(_enableMultipleBucketSpaces);
+    }
+}
+
+bool StorageComponentRegisterImpl::enableMultipleBucketSpaces() const {
+    // We allow reading this outside _componentLock, as it should never be written
+    // again after startup.
+    return _enableMultipleBucketSpaces;
 }
 
 } // storage

@@ -1,7 +1,6 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 #pragma once
 
-#include <vespa/storageframework/generic/memory/memorytoken.h>
 #include <vespa/storageapi/message/internal.h>
 #include <vespa/persistence/spi/docentry.h>
 #include <vespa/persistence/spi/bucket.h>
@@ -14,8 +13,7 @@ namespace storage {
 
 class GetIterCommand : public api::InternalCommand {
 private:
-    mutable framework::MemoryToken::UP _token;
-    document::BucketId _bucketId;
+    document::Bucket _bucket;
     spi::IteratorId _iteratorId;
     uint32_t _maxByteSize;
 
@@ -24,15 +22,14 @@ public:
     typedef std::unique_ptr<GetIterCommand> UP;
     typedef std::shared_ptr<GetIterCommand> SP;
 
-    GetIterCommand(framework::MemoryToken::UP token,
-                   const document::BucketId& bucketId,
+    GetIterCommand(const document::Bucket &bucket,
                    const spi::IteratorId iteratorId,
                    uint32_t maxByteSize);
     ~GetIterCommand();
 
     std::unique_ptr<api::StorageReply> makeReply() override;
 
-    document::BucketId getBucketId() const override { return _bucketId; }
+    document::Bucket getBucket() const override { return _bucket; }
     bool hasSingleBucketId() const override { return true; }
 
     spi::IteratorId getIteratorId() const { return _iteratorId; }
@@ -44,14 +41,12 @@ public:
 
     void print(std::ostream& out, bool verbose, const std::string& indent) const override;
 private:
-    framework::MemoryToken::UP releaseMemoryToken() { return std::move(_token); }
     friend class GetIterReply;
 };
 
 class GetIterReply : public api::InternalReply {
 private:
-    framework::MemoryToken::UP _token;
-    document::BucketId _bucketId;
+    document::Bucket _bucket;
     std::vector<spi::DocEntry::UP> _entries;
     bool _completed;
 
@@ -64,9 +59,7 @@ public:
     ~GetIterReply();
 
     bool hasSingleBucketId() const override { return true; }
-    document::BucketId getBucketId() const override {
-        return _bucketId;
-    }
+    document::Bucket getBucket() const override { return _bucket; }
 
     const std::vector<spi::DocEntry::UP>& getEntries() const {
         return _entries;
@@ -84,7 +77,7 @@ public:
 
 class CreateIteratorCommand : public api::InternalCommand
 {
-    document::BucketId _bucketId;
+    document::Bucket _bucket;
     spi::Selection _selection;
     std::string _fieldSet;
     spi::IncludedVersions _includedVersions;
@@ -95,13 +88,13 @@ public:
     typedef std::unique_ptr<CreateIteratorCommand> UP;
     typedef std::shared_ptr<CreateIteratorCommand> SP;
 
-    CreateIteratorCommand(const document::BucketId& bucketId,
+    CreateIteratorCommand(const document::Bucket &bucket,
                           const spi::Selection& selection,
                           const std::string& fields,
                           spi::IncludedVersions includedVersions);
     ~CreateIteratorCommand();
     bool hasSingleBucketId() const override { return true; }
-    document::BucketId getBucketId() const override { return _bucketId; }
+    document::Bucket getBucket() const override { return _bucket; }
     const spi::Selection& getSelection() const { return _selection; }
     spi::IncludedVersions getIncludedVersions() const { return _includedVersions; }
     const std::string& getFields() const { return _fieldSet; }
@@ -120,7 +113,7 @@ public:
 
 class CreateIteratorReply : public api::InternalReply
 {
-    document::BucketId _bucketId;
+    document::Bucket _bucket;
     spi::IteratorId _iteratorId;
 public:
     static const uint32_t ID = 1004;
@@ -131,7 +124,7 @@ public:
     ~CreateIteratorReply();
 
     bool hasSingleBucketId() const override { return true; }
-    document::BucketId getBucketId() const override { return _bucketId; }
+    document::Bucket getBucket() const override { return _bucket; }
 
     spi::IteratorId getIteratorId() const { return _iteratorId; }
 
@@ -172,18 +165,16 @@ public:
 
 class RecheckBucketInfoCommand : public api::InternalCommand
 {
-    document::BucketId _bucketId;
+    document::Bucket _bucket;
 public:
     static const uint32_t ID = 1007;
     typedef std::shared_ptr<RecheckBucketInfoCommand> SP;
     typedef std::unique_ptr<RecheckBucketInfoCommand> UP;
 
-    RecheckBucketInfoCommand(const document::BucketId& bucketId);
+    RecheckBucketInfoCommand(const document::Bucket &bucket);
     ~RecheckBucketInfoCommand();
 
-    document::BucketId getBucketId() const override {
-        return _bucketId;
-    }
+    document::Bucket getBucket() const override { return _bucket; }
 
     std::unique_ptr<api::StorageReply> makeReply() override;
 
@@ -192,7 +183,7 @@ public:
 
 class RecheckBucketInfoReply : public api::InternalReply
 {
-    document::BucketId _bucketId;
+    document::Bucket _bucket;
 public:
     static const uint32_t ID = 1008;
     typedef std::shared_ptr<RecheckBucketInfoReply> SP;
@@ -201,9 +192,7 @@ public:
     RecheckBucketInfoReply(const RecheckBucketInfoCommand& cmd);
     ~RecheckBucketInfoReply();
 
-    document::BucketId getBucketId() const override {
-        return _bucketId;
-    }
+    document::Bucket getBucket() const override { return _bucket; }
 
     void print(std::ostream& out, bool verbose, const std::string& indent) const override;
 };
@@ -212,33 +201,11 @@ class AbortBucketOperationsCommand : public api::InternalCommand
 {
 public:
     class AbortPredicate {
-        virtual bool doShouldAbort(const document::BucketId&) const = 0;
+        virtual bool doShouldAbort(const document::Bucket&) const = 0;
     public:
         virtual ~AbortPredicate() {}
-        bool shouldAbort(const document::BucketId& bid) const {
-            return doShouldAbort(bid);
-        }
-    };
-
-    using BucketSet = vespalib::hash_set<document::BucketId, document::BucketId::hash>;
-
-    // Primarily for unit test mocking; actual predicate impl should do lazy
-    // evaluations based on previous and current cluster states.
-    class ExplicitBucketSetPredicate : public AbortPredicate {
-        BucketSet _bucketsToAbort;
-
-        bool doShouldAbort(const document::BucketId& bid) const override;
-    public:
-        explicit ExplicitBucketSetPredicate(const BucketSet& bucketsToAbort);
-        ~ExplicitBucketSetPredicate();
-
-        template <typename Iterator>
-        ExplicitBucketSetPredicate(Iterator first, Iterator last)
-            : _bucketsToAbort(first, last)
-        { }
-
-        const BucketSet& getBucketsToAbort() const {
-            return _bucketsToAbort;
+        bool shouldAbort(const document::Bucket &bucket) const {
+            return doShouldAbort(bucket);
         }
     };
 
@@ -251,8 +218,8 @@ public:
     AbortBucketOperationsCommand(std::unique_ptr<AbortPredicate> predicate);
     ~AbortBucketOperationsCommand();
 
-    bool shouldAbort(const document::BucketId& bid) const {
-        return _predicate->shouldAbort(bid);
+    bool shouldAbort(const document::Bucket &bucket) const {
+        return _predicate->shouldAbort(bucket);
     }
 
     std::unique_ptr<api::StorageReply> makeReply() override;

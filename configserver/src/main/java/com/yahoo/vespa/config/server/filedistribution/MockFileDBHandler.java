@@ -8,13 +8,11 @@ import java.util.Collection;
 import java.util.Set;
 
 /**
- * @author lulf
- * @since 5.1
+ * @author Ulf Lilleengen
  */
 public class MockFileDBHandler implements FileDistribution {
     public int sendDeployedFilesCalled = 0;
     public int reloadDeployFileDistributorCalled = 0;
-    public int limitSendingOfDeployedFilesToCalled = 0;
     public int removeDeploymentsThatHaveDifferentApplicationIdCalled = 0;
 
     @Override
@@ -23,13 +21,13 @@ public class MockFileDBHandler implements FileDistribution {
     }
 
     @Override
-    public void reloadDeployFileDistributor() {
-        reloadDeployFileDistributorCalled++;
+    public void startDownload(String hostName, int port, Set<FileReference> fileReferences) {
+        throw new UnsupportedOperationException("Not valid for this Filedistribution implementation");
     }
 
     @Override
-    public void limitSendingOfDeployedFilesTo(Collection<String> hostNames) {
-        limitSendingOfDeployedFilesToCalled++;
+    public void reloadDeployFileDistributor() {
+        reloadDeployFileDistributorCalled++;
     }
 
     @Override

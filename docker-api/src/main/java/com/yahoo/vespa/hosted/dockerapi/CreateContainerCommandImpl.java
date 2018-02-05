@@ -9,6 +9,7 @@ import com.github.dockerjava.api.model.Ulimit;
 
 import java.net.Inet6Address;
 import java.net.InetAddress;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -19,10 +20,12 @@ import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 class CreateContainerCommandImpl implements Docker.CreateContainerCommand {
     private final DockerClient docker;
     private final DockerImage dockerImage;
+    private final ContainerResources containerResources;
     private final ContainerName containerName;
     private final String hostName;
     private final Map<String, String> labels = new HashMap<>();
@@ -30,8 +33,6 @@ class CreateContainerCommandImpl implements Docker.CreateContainerCommand {
     private final List<String> volumeBindSpecs = new ArrayList<>();
     private final List<Ulimit> ulimits = new ArrayList<>();
 
-    private Optional<Long> memoryInB = Optional.empty();
-    private Optional<Integer> cpuShares = Optional.empty();
     private Optional<String> networkMode = Optional.empty();
     private Optional<String> ipv4Address = Optional.empty();
     private Optional<String> ipv6Address = Optional.empty();
@@ -41,10 +42,12 @@ class CreateContainerCommandImpl implements Docker.CreateContainerCommand {
 
     CreateContainerCommandImpl(DockerClient docker,
                                DockerImage dockerImage,
+                               ContainerResources containerResources,
                                ContainerName containerName,
                                String hostName) {
         this.docker = docker;
         this.dockerImage = dockerImage;
+        this.containerResources = containerResources;
         this.containerName = containerName;
         this.hostName = hostName;
     }
@@ -101,18 +104,6 @@ class CreateContainerCommandImpl implements Docker.CreateContainerCommand {
     }
 
     @Override
-    public Docker.CreateContainerCommand withMemoryInMb(long megaBytes) {
-        memoryInB = Optional.of(megaBytes * 1024 * 1024);
-        return this;
-    }
-
-    @Override
-    public Docker.CreateContainerCommand withCpuShares(int shares) {
-        cpuShares = Optional.of(shares);
-        return this;
-    }
-
-    @Override
     public Docker.CreateContainerCommand withNetworkMode(String mode) {
         networkMode = Optional.of(mode);
         return this;
@@ -142,6 +133,8 @@ class CreateContainerCommandImpl implements Docker.CreateContainerCommand {
 
         final CreateContainerCmd containerCmd = docker
                 .createContainerCmd(dockerImage.asString())
+                .withCpuShares(containerResources.cpuShares)
+                .withMemory(containerResources.memoryBytes)
                 .withName(containerName.asString())
                 .withHostName(hostName)
                 .withLabels(labels)
@@ -153,10 +146,8 @@ class CreateContainerCommandImpl implements Docker.CreateContainerCommand {
 
         networkMode
                 .filter(mode -> ! mode.toLowerCase().equals("host"))
-                .ifPresent(mode -> containerCmd.withMacAddress(generateRandomMACAddress()));
+                .ifPresent(mode -> containerCmd.withMacAddress(generateMACAddress(hostName, ipv4Address, ipv6Address)));
 
-        memoryInB.ifPresent(containerCmd::withMemory);
-        cpuShares.ifPresent(containerCmd::withCpuShares);
         networkMode.ifPresent(containerCmd::withNetworkMode);
         ipv4Address.ifPresent(containerCmd::withIpv4Address);
         ipv6Address.ifPresent(containerCmd::withIpv6Address);
@@ -189,14 +180,14 @@ class CreateContainerCommandImpl implements Docker.CreateContainerCommand {
 
         return "--name " + containerName.asString() + " "
                 + "--hostname " + hostName + " "
+                + "--cpu-shares " + containerResources.cpuShares + " "
+                + "--memory " + containerResources.memoryBytes + " "
                 + toRepeatedOption("--label", labelList)
                 + toRepeatedOption("--ulimit", ulimitList)
                 + toRepeatedOption("--env", environmentAssignments)
                 + toRepeatedOption("--volume", volumeBindSpecs)
                 + toRepeatedOption("--cap-add", addCapabilitiesList)
                 + toRepeatedOption("--cap-drop", dropCapabilitiesList)
-                + toOptionalOption("--memory", memoryInB)
-                + toOptionalOption("--cpu-shares", cpuShares)
                 + toOptionalOption("--net", networkMode)
                 + toOptionalOption("--ip", ipv4Address)
                 + toOptionalOption("--ip6", ipv6Address)
@@ -204,18 +195,29 @@ class CreateContainerCommandImpl implements Docker.CreateContainerCommand {
                 + dockerImage.asString();
     }
 
-    private String generateRandomMACAddress() {
-        Random rand = new SecureRandom();
+    /**
+     * Generates a pseudo-random MAC address based on the hostname, IPv4- and IPv6-address.
+     */
+    static String generateMACAddress(String hostname, Optional<String> ipv4Address, Optional<String> ipv6Address) {
+        final String seed = hostname + ipv4Address.orElse("") + ipv6Address.orElse("");
+        Random rand = getPRNG(seed);
         byte[] macAddr = new byte[6];
         rand.nextBytes(macAddr);
 
         // Set second-last bit (locally administered MAC address), unset last bit (unicast)
         macAddr[0] = (byte) ((macAddr[0] | 2) & 254);
-        StringBuilder sb = new StringBuilder(18);
-        for (byte b : macAddr) {
-            sb.append(":").append(String.format("%02x", b));
-        }
+        return IntStream.range(0, macAddr.length)
+                .mapToObj(i -> String.format("%02x", macAddr[i]))
+                .collect(Collectors.joining(":"));
+    }
 
-        return sb.substring(1);
+    private static Random getPRNG(String seed) {
+        try {
+            SecureRandom rand = SecureRandom.getInstance("SHA1PRNG");
+            rand.setSeed(seed.getBytes());
+            return rand;
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("Failed to get pseudo-random number generator", e);
+        }
     }
 }

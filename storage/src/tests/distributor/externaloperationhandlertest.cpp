@@ -2,12 +2,14 @@
 
 #include <tests/distributor/distributortestutil.h>
 #include <vespa/storage/distributor/externaloperationhandler.h>
-#include <vespa/storage/distributor/operation_sequencer.h>
-#include <vespa/storageapi/message/persistence.h>
 #include <vespa/storage/distributor/distributor.h>
+#include <vespa/storage/distributor/distributormetricsset.h>
+#include <vespa/storageapi/message/persistence.h>
+#include <vespa/document/test/make_document_bucket.h>
 
-namespace storage {
-namespace distributor {
+using document::test::makeDocumentBucket;
+
+namespace storage::distributor {
 
 class ExternalOperationHandlerTest : public CppUnit::TestFixture,
                                      public DistributorTestUtil
@@ -56,6 +58,12 @@ class ExternalOperationHandlerTest : public CppUnit::TestFixture,
             const metrics::LoadMetric<PersistenceOperationMetricSet>& metrics) const {
         return metrics[documentapi::LoadType::DEFAULT].failures
                 .safe_time_not_reached.getLongValue("count");
+    }
+
+    int64_t concurrent_mutatations_metric_count(
+            const metrics::LoadMetric<PersistenceOperationMetricSet>& metrics) const {
+        return metrics[documentapi::LoadType::DEFAULT].failures
+                .concurrent_mutations.getLongValue("count");
     }
 
     void set_up_distributor_for_sequencing_test();
@@ -150,7 +158,7 @@ ExternalOperationHandlerTest::findNonOwnedUserBucketInState(
     lib::ClusterState state(statestr);
     for (uint64_t i = 1; i < 1000; ++i) {
         document::BucketId bucket(32, i);
-        if (!getExternalOperationHandler().ownsBucketInState(state, bucket)) {
+        if (!getExternalOperationHandler().ownsBucketInState(state, makeDocumentBucket(bucket))) {
             return bucket;
         }
     }
@@ -166,8 +174,8 @@ ExternalOperationHandlerTest::findOwned1stNotOwned2ndInStates(
     lib::ClusterState state2(statestr2);
     for (uint64_t i = 1; i < 1000; ++i) {
         document::BucketId bucket(32, i);
-        if (getExternalOperationHandler().ownsBucketInState(state1, bucket)
-            && !getExternalOperationHandler().ownsBucketInState(state2, bucket))
+        if (getExternalOperationHandler().ownsBucketInState(state1, makeDocumentBucket(bucket))
+            && !getExternalOperationHandler().ownsBucketInState(state2, makeDocumentBucket(bucket)))
         {
             return bucket;
         }
@@ -177,13 +185,13 @@ ExternalOperationHandlerTest::findOwned1stNotOwned2ndInStates(
 
 std::shared_ptr<api::GetCommand>
 ExternalOperationHandlerTest::makeGetCommand(const vespalib::string& id) const {
-    return std::make_shared<api::GetCommand>(document::BucketId(0), DocumentId(id), "[all]");
+    return std::make_shared<api::GetCommand>(makeDocumentBucket(document::BucketId(0)), DocumentId(id), "[all]");
 }
 
 std::shared_ptr<api::GetCommand>
 ExternalOperationHandlerTest::makeGetCommandForUser(uint64_t id) const {
     DocumentId docId(document::UserDocIdString(vespalib::make_string("userdoc:foo:%lu:bar", id)));
-    return std::make_shared<api::GetCommand>(document::BucketId(0), docId, "[all]");
+    return std::make_shared<api::GetCommand>(makeDocumentBucket(document::BucketId(0)), docId, "[all]");
 }
 
 std::shared_ptr<api::UpdateCommand> ExternalOperationHandlerTest::makeUpdateCommand(
@@ -193,7 +201,7 @@ std::shared_ptr<api::UpdateCommand> ExternalOperationHandlerTest::makeUpdateComm
             *_testDocMan.getTypeRepo().getDocumentType(doc_type),
             document::DocumentId(id));
     return std::make_shared<api::UpdateCommand>(
-            document::BucketId(0), std::move(update), api::Timestamp(0));
+            makeDocumentBucket(document::BucketId(0)), std::move(update), api::Timestamp(0));
 }
 
 std::shared_ptr<api::UpdateCommand>
@@ -206,11 +214,11 @@ std::shared_ptr<api::PutCommand> ExternalOperationHandlerTest::makePutCommand(
         const vespalib::string& id) const {
     auto doc = _testDocMan.createDocument(doc_type, id);
     return std::make_shared<api::PutCommand>(
-            document::BucketId(0), std::move(doc), api::Timestamp(0));
+            makeDocumentBucket(document::BucketId(0)), std::move(doc), api::Timestamp(0));
 }
 
 std::shared_ptr<api::RemoveCommand> ExternalOperationHandlerTest::makeRemoveCommand(const vespalib::string& id) const {
-    return std::make_shared<api::RemoveCommand>(document::BucketId(0), DocumentId(id), api::Timestamp(0));
+    return std::make_shared<api::RemoveCommand>(makeDocumentBucket(document::BucketId(0)), DocumentId(id), api::Timestamp(0));
 }
 
 void
@@ -331,7 +339,7 @@ void ExternalOperationHandlerTest::mutation_not_rejected_when_safe_point_reached
     DocumentId id("id:foo:testdoctype1::bar");
     getExternalOperationHandler().handleMessage(
             std::make_shared<api::RemoveCommand>(
-                document::BucketId(0), id, api::Timestamp(0)),
+                makeDocumentBucket(document::BucketId(0)), id, api::Timestamp(0)),
             generated);
     CPPUNIT_ASSERT(generated.get() != nullptr);
     CPPUNIT_ASSERT_EQUAL(size_t(0), _sender.replies.size());
@@ -393,35 +401,41 @@ void ExternalOperationHandlerTest::reject_put_with_concurrent_mutation_to_same_i
     assert_second_command_rejected_due_to_concurrent_mutation(
             makePutCommand("testdoctype1", _dummy_id),
             makePutCommand("testdoctype1", _dummy_id), _dummy_id);
+    CPPUNIT_ASSERT_EQUAL(int64_t(1), concurrent_mutatations_metric_count(getDistributor().getMetrics().puts));
 }
 
 void ExternalOperationHandlerTest::do_not_reject_put_operations_to_different_ids() {
     assert_second_command_not_rejected_due_to_concurrent_mutation(
             makePutCommand("testdoctype1", "id:foo:testdoctype1::baz"),
             makePutCommand("testdoctype1", "id:foo:testdoctype1::foo"));
+    CPPUNIT_ASSERT_EQUAL(int64_t(0), concurrent_mutatations_metric_count(getDistributor().getMetrics().puts));
 }
 
 void ExternalOperationHandlerTest::reject_remove_with_concurrent_mutation_to_same_id() {
     assert_second_command_rejected_due_to_concurrent_mutation(
             makeRemoveCommand(_dummy_id), makeRemoveCommand(_dummy_id), _dummy_id);
+    CPPUNIT_ASSERT_EQUAL(int64_t(1), concurrent_mutatations_metric_count(getDistributor().getMetrics().removes));
 }
 
 void ExternalOperationHandlerTest::do_not_reject_remove_operations_to_different_ids() {
     assert_second_command_not_rejected_due_to_concurrent_mutation(
             makeRemoveCommand("id:foo:testdoctype1::baz"),
             makeRemoveCommand("id:foo:testdoctype1::foo"));
+    CPPUNIT_ASSERT_EQUAL(int64_t(0), concurrent_mutatations_metric_count(getDistributor().getMetrics().removes));
 }
 
 void ExternalOperationHandlerTest::reject_update_with_concurrent_mutation_to_same_id() {
     assert_second_command_rejected_due_to_concurrent_mutation(
             makeUpdateCommand("testdoctype1", _dummy_id),
             makeUpdateCommand("testdoctype1", _dummy_id), _dummy_id);
+    CPPUNIT_ASSERT_EQUAL(int64_t(1), concurrent_mutatations_metric_count(getDistributor().getMetrics().updates));
 }
 
 void ExternalOperationHandlerTest::do_not_reject_update_operations_to_different_ids() {
     assert_second_command_not_rejected_due_to_concurrent_mutation(
             makeUpdateCommand("testdoctype1", "id:foo:testdoctype1::baz"),
             makeUpdateCommand("testdoctype1", "id:foo:testdoctype1::foo"));
+    CPPUNIT_ASSERT_EQUAL(int64_t(0), concurrent_mutatations_metric_count(getDistributor().getMetrics().updates));
 }
 
 void ExternalOperationHandlerTest::operation_destruction_allows_new_mutations_for_id() {
@@ -468,5 +482,4 @@ void ExternalOperationHandlerTest::sequencing_can_be_explicitly_config_disabled(
 // pseudo-locks in the sequencer. I.e. if we get a RemoveLocation with id.user==123456, this
 // prevents any handles from being acquired to any GID under location BucketId(32, 123456).
 
-} // distributor
-} // storage
+}

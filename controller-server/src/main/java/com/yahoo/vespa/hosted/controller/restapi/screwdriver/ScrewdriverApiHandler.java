@@ -5,7 +5,6 @@ import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.container.jdisc.HttpRequest;
 import com.yahoo.container.jdisc.HttpResponse;
 import com.yahoo.container.jdisc.LoggingRequestHandler;
-import com.yahoo.container.logging.AccessLog;
 import com.yahoo.io.IOUtils;
 import com.yahoo.jdisc.http.HttpRequest.Method;
 import com.yahoo.slime.Cursor;
@@ -17,7 +16,9 @@ import com.yahoo.vespa.hosted.controller.api.integration.BuildService.BuildJob;
 import com.yahoo.vespa.hosted.controller.application.DeploymentJobs.JobError;
 import com.yahoo.vespa.hosted.controller.application.DeploymentJobs.JobReport;
 import com.yahoo.vespa.hosted.controller.application.DeploymentJobs.JobType;
+import com.yahoo.vespa.hosted.controller.application.SourceRevision;
 import com.yahoo.vespa.hosted.controller.restapi.ErrorResponse;
+import com.yahoo.vespa.hosted.controller.restapi.Path;
 import com.yahoo.vespa.hosted.controller.restapi.SlimeJsonResponse;
 import com.yahoo.vespa.hosted.controller.restapi.StringResponse;
 import com.yahoo.vespa.hosted.controller.versions.VespaVersion;
@@ -27,7 +28,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.Executor;
+import java.util.Scanner;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -36,39 +37,29 @@ import java.util.logging.Logger;
  * on completion.
  * 
  * @author bratseth
+ * @author mpolden
  */
+@SuppressWarnings("unused") // Handler
 public class ScrewdriverApiHandler extends LoggingRequestHandler {
 
     private final static Logger log = Logger.getLogger(ScrewdriverApiHandler.class.getName());
 
     private final Controller controller;
-    // TODO: Remember to distinguish between PR jobs and component ones, by adding reports to the right jobs?
 
-    public ScrewdriverApiHandler(Executor executor, AccessLog accessLog, Controller controller) {
-        super(executor, accessLog);
+    public ScrewdriverApiHandler(LoggingRequestHandler.Context parentCtx, Controller controller) {
+        super(parentCtx);
         this.controller = controller;
     }
 
     @Override
     public HttpResponse handle(HttpRequest request) {
+        Method method = request.getMethod();
         try {
-            Method method = request.getMethod();
-            String path = request.getUri().getPath();
             switch (method) {
-                case GET: switch (path) {
-                    case "/screwdriver/v1/release/vespa": return vespaVersion();
-                    case "/screwdriver/v1/jobsToRun": return buildJobResponse(controller.applications().deploymentTrigger().buildSystem().jobs());
-                    default: return ErrorResponse.notFoundError(String.format( "No '%s' handler at '%s'", method, path));
-                }
-                case POST: switch (path) {
-                    case "/screwdriver/v1/jobreport": return handleJobReportPost(request);
-                    default: return ErrorResponse.notFoundError(String.format( "No '%s' handler at '%s'", method, path));
-                }
-                case DELETE: switch (path) {
-                    case "/screwdriver/v1/jobsToRun": return buildJobResponse(controller.applications().deploymentTrigger().buildSystem().takeJobsToRun());
-                    default: return ErrorResponse.notFoundError(String.format( "No '%s' handler at '%s'", method, path));
-                }
-                default: return ErrorResponse.methodNotAllowed("Method '" + request.getMethod() + "' is not supported");
+                case GET: return get(request);
+                case POST: return post(request);
+                case DELETE: return delete(request);
+                default: return ErrorResponse.methodNotAllowed("Method '" + method + "' is unsupported");
             }
         } catch (IllegalArgumentException|IllegalStateException e) {
             return ErrorResponse.badRequest(Exceptions.toMessageString(e));
@@ -77,7 +68,60 @@ public class ScrewdriverApiHandler extends LoggingRequestHandler {
             return ErrorResponse.internalServerError(Exceptions.toMessageString(e));
         }
     }
-    
+
+    private HttpResponse get(HttpRequest request) {
+        Path path = new Path(request.getUri().getPath());
+        if (path.matches("/screwdriver/v1/release/vespa")) {
+            return vespaVersion();
+        }
+        if (path.matches("/screwdriver/v1/jobsToRun")) {
+            return buildJobs(controller.applications().deploymentTrigger().buildSystem().jobs());
+        }
+        return notFound(request);
+    }
+
+    private HttpResponse post(HttpRequest request) {
+        Path path = new Path(request.getUri().getPath());
+        if (path.matches("/screwdriver/v1/jobreport")) {
+            return notifyJobCompletion(request);
+        }
+        if (path.matches("/screwdriver/v1/trigger/tenant/{tenant}/application/{application}")) {
+            return trigger(request, path.get("tenant"), path.get("application"));
+        }
+        return notFound(request);
+    }
+
+    private HttpResponse delete(HttpRequest request) {
+        Path path = new Path(request.getUri().getPath());
+        if (path.matches("/screwdriver/v1/jobsToRun")) {
+            return buildJobs(controller.applications().deploymentTrigger().buildSystem().takeJobsToRun());
+        }
+        return notFound(request);
+    }
+
+    private HttpResponse trigger(HttpRequest request, String tenantName, String applicationName) {
+        JobType jobType = Optional.of(asString(request.getData()))
+                .filter(s -> !s.isEmpty())
+                .map(JobType::fromJobName)
+                .orElse(JobType.component);
+
+        ApplicationId applicationId = ApplicationId.from(tenantName, applicationName, "default");
+        controller.applications().lockOrThrow(applicationId, application -> {
+            // Since this is a manual operation we likely want it to trigger as soon as possible so we add it at to the
+            // front of the queue
+            application = controller.applications().deploymentTrigger().triggerAllowParallel(
+                    jobType, application, true, true,
+                    "Triggered from screwdriver/v1"
+            );
+            controller.applications().store(application);
+        });
+
+        Slime slime = new Slime();
+        Cursor cursor = slime.setObject();
+        cursor.setString("message", "Triggered " + jobType.jobName() + " for " + applicationId);
+        return new SlimeJsonResponse(slime);
+    }
+
     private HttpResponse vespaVersion() {
         VespaVersion version = controller.versionStatus().version(controller.systemVersion());
         if (version == null) 
@@ -92,7 +136,7 @@ public class ScrewdriverApiHandler extends LoggingRequestHandler {
         
     }
 
-    private HttpResponse buildJobResponse(List<BuildJob> buildJobs) {
+    private HttpResponse buildJobs(List<BuildJob> buildJobs) {
         Slime slime = new Slime();
         Cursor buildJobArray = slime.setArray();
         for (BuildJob buildJob : buildJobs) {
@@ -103,24 +147,7 @@ public class ScrewdriverApiHandler extends LoggingRequestHandler {
         return new SlimeJsonResponse(slime);
     }
 
-    /**
-     * Parse a JSON blob of the form:
-     * {
-     *     "tenant"        :   String
-     *     "application"   :   String
-     *     "instance"      :   String
-     *     "jobName"       :   String
-     *     "projectId"     :   long
-     *     "success"       :   boolean
-     *     "selfTriggering":   boolean
-     *     "vespaVersion"  :   String
-     * }
-     * and notify the controller of the report.
-     *
-     * @param request The JSON blob.
-     * @return 200
-     */
-    private HttpResponse handleJobReportPost(HttpRequest request) {
+    private HttpResponse notifyJobCompletion(HttpRequest request) {
         controller.applications().notifyJobCompletion(toJobReport(toSlime(request.getData()).get()));
         return new StringResponse("ok");
     }
@@ -144,12 +171,35 @@ public class ScrewdriverApiHandler extends LoggingRequestHandler {
                         report.field("tenant").asString(),
                         report.field("application").asString(),
                         report.field("instance").asString()),
-                JobType.fromId(report.field("jobName").asString()),
+                JobType.fromJobName(report.field("jobName").asString()),
                 report.field("projectId").asLong(),
                 report.field("buildNumber").asLong(),
-                jobError,
-                report.field("selfTriggering").asBool()
+                toSourceRevision(report.field("sourceRevision")),
+                jobError
         );
+    }
+
+    private static Optional<SourceRevision> toSourceRevision(Inspector object) {
+        if (!object.field("repository").valid() ||
+            !object.field("branch").valid() ||
+            !object.field("commit").valid()) {
+            return Optional.empty();
+        }
+        return Optional.of(new SourceRevision(object.field("repository").asString(), object.field("branch").asString(),
+                                              object.field("commit").asString()));
+    }
+
+    private static String asString(InputStream in) {
+        Scanner scanner = new Scanner(in).useDelimiter("\\A");
+        if (scanner.hasNext()) {
+            return scanner.next();
+        }
+        return "";
+    }
+
+    private static HttpResponse notFound(HttpRequest request) {
+        return ErrorResponse.notFoundError(String.format("No '%s' handler at '%s'", request.getMethod(),
+                                                         request.getUri().getPath()));
     }
 
 }

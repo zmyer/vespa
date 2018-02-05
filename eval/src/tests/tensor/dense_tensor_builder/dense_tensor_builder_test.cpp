@@ -10,6 +10,15 @@ using vespalib::IllegalArgumentException;
 using Builder = DenseTensorBuilder;
 using vespalib::eval::TensorSpec;
 using vespalib::eval::ValueType;
+using vespalib::ConstArrayRef;
+
+template <typename T> std::vector<T> make_vector(const ConstArrayRef<T> &ref) {
+    std::vector<T> vec;
+    for (const T &t: ref) {
+        vec.push_back(t);
+    }
+    return vec;
+}
 
 void
 assertTensor(const std::vector<ValueType::Dimension> &expDims,
@@ -18,7 +27,7 @@ assertTensor(const std::vector<ValueType::Dimension> &expDims,
 {
     const DenseTensor &realTensor = dynamic_cast<const DenseTensor &>(tensor);
     EXPECT_EQUAL(ValueType::tensor_type(expDims), realTensor.type());
-    EXPECT_EQUAL(expCells, realTensor.cells());
+    EXPECT_EQUAL(expCells, make_vector(realTensor.cellsRef()));
 }
 
 void
@@ -147,7 +156,7 @@ TEST_F("require that builder can be re-used", Fixture)
 }
 
 void
-assertTensorCell(const std::vector<size_t> &expAddress,
+assertTensorCell(const DenseTensor::Address &expAddress,
                  double expCell,
                  const DenseTensor::CellsIterator &itr)
 {
@@ -240,7 +249,7 @@ TEST_F("require that dimensions are sorted", Fixture)
     assertTensor({{"x", 5}, {"y", 3}},
                  {10, 11, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
                  denseTensor);
-    EXPECT_EQUAL("tensor(x[5],y[3])", denseTensor.getType().to_spec());
+    EXPECT_EQUAL("tensor(x[5],y[3])", denseTensor.type().to_spec());
 }
 
 

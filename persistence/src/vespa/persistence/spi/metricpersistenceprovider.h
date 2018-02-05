@@ -6,10 +6,10 @@
 #pragma once
 
 #include "persistenceprovider.h"
-#include <vespa/metrics/metrics.h>
+#include <vespa/metrics/metricset.h>
+#include <vespa/metrics/valuemetric.h>
 
-namespace storage {
-namespace spi {
+namespace storage::spi {
 
 class MetricPersistenceProvider : public PersistenceProvider,
                                   public metrics::MetricSet
@@ -34,8 +34,8 @@ public:
     // Implementation of the PersistenceProvider API
     Result initialize() override;
     PartitionStateListResult getPartitionStates() const override;
-    BucketIdListResult listBuckets(PartitionId) const override;
-    Result setClusterState(const ClusterState&) override;
+    BucketIdListResult listBuckets(BucketSpace bucketSpace, PartitionId) const override;
+    Result setClusterState(BucketSpace bucketSpace, const ClusterState&) override;
     Result setActiveState(const Bucket&, BucketInfo::ActiveState) override;
     BucketInfoResult getBucketInfo(const Bucket&) const override;
     Result put(const Bucket&, Timestamp, const DocumentSP&, Context&) override;
@@ -51,7 +51,7 @@ public:
     Result destroyIterator(IteratorId, Context&) override;
     Result createBucket(const Bucket&, Context&) override;
     Result deleteBucket(const Bucket&, Context&) override;
-    BucketIdListResult getModifiedBuckets() const override;
+    BucketIdListResult getModifiedBuckets(BucketSpace bucketSpace) const override;
     Result maintain(const Bucket&, MaintenanceLevel level) override;
     Result split(const Bucket& source, const Bucket& target1, const Bucket& target2, Context&) override;
     Result join(const Bucket& source1, const Bucket& source2, const Bucket& target, Context&) override;
@@ -61,5 +61,5 @@ private:
     void defineResultMetrics(int index, const char* name);
 };
 
-} // spi
-} // storage
+}
+

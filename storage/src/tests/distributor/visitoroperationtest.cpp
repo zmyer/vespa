@@ -9,18 +9,20 @@
 #include <vespa/storageapi/message/state.h>
 #include <vespa/storage/distributor/operations/external/visitoroperation.h>
 #include <vespa/storage/distributor/operations/external/visitororder.h>
+#include <vespa/storage/distributor/distributormetricsset.h>
 #include <tests/distributor/distributortestutil.h>
 #include <vespa/storage/distributor/distributor.h>
 #include <tests/common/dummystoragelink.h>
 #include <vespa/vdstestlib/cppunit/macros.h>
+#include <vespa/document/test/make_bucket_space.h>
 
 using namespace document;
 using namespace storage::api;
 using namespace storage::lib;
 using namespace std::string_literals;
+using document::test::makeBucketSpace;
 
-namespace storage {
-namespace distributor {
+namespace storage::distributor {
 
 class VisitorOperationTest : public CppUnit::TestFixture,
                              public DistributorTestUtil {
@@ -148,7 +150,7 @@ private:
                          const std::string& docSelection = "")
     {
         api::CreateVisitorCommand::SP cmd(
-                new api::CreateVisitorCommand(libraryName, instanceId, docSelection));
+                new api::CreateVisitorCommand(makeBucketSpace(), libraryName, instanceId, docSelection));
         cmd->setControlDestination("controldestination");
         cmd->setDataDestination("datadestination");
         cmd->setFieldSet("[header]");
@@ -200,6 +202,7 @@ private:
     {
         return std::make_unique<VisitorOperation>(
                 getExternalOperationHandler(),
+                getDistributorBucketSpace(),
                 msg,
                 config,
                 getDistributor().getMetrics().visits[msg->getLoadType()]);
@@ -265,7 +268,8 @@ VisitorOperationTest::doStandardVisitTest(const std::string& clusterState)
     vespalib::string libraryName("dumpvisitor");
     vespalib::string docSelection("");
     api::CreateVisitorCommand::SP msg(
-            new api::CreateVisitorCommand(libraryName,
+            new api::CreateVisitorCommand(makeBucketSpace(),
+                                          libraryName,
                                           instanceId,
                                           docSelection));
     vespalib::string controlDestination("controldestination");
@@ -333,7 +337,8 @@ VisitorOperationTest::testShutdown()
     vespalib::string libraryName("dumpvisitor");
     vespalib::string docSelection("");
     api::CreateVisitorCommand::SP msg(
-            new api::CreateVisitorCommand(libraryName,
+            new api::CreateVisitorCommand(makeBucketSpace(),
+                                          libraryName,
                                           instanceId,
                                           docSelection));
     msg->addBucketToBeVisited(id);
@@ -361,7 +366,7 @@ VisitorOperationTest::testNoBucket()
 
     // Send create visitor
     api::CreateVisitorCommand::SP msg(new api::CreateVisitorCommand(
-            "dumpvisitor", "instance", ""));
+            makeBucketSpace(), "dumpvisitor", "instance", ""));
 
     CPPUNIT_ASSERT_EQUAL(std::string(
                      "CreateVisitorReply(last=BucketId(0x0000000000000000)) "
@@ -377,7 +382,7 @@ VisitorOperationTest::testOnlySuperBucketAndProgressAllowed()
 
     // Send create visitor
     api::CreateVisitorCommand::SP msg(new api::CreateVisitorCommand(
-            "dumpvisitor", "instance", ""));
+            makeBucketSpace(), "dumpvisitor", "instance", ""));
     msg->addBucketToBeVisited(nullId);
     msg->addBucketToBeVisited(nullId);
     msg->addBucketToBeVisited(nullId);
@@ -449,7 +454,8 @@ VisitorOperationTest::testInvalidOrderDocSelection()
     CPPUNIT_ASSERT_EQUAL(
             std::string("CreateVisitorReply(last=BucketId(0x0000000000000000)) "
                         "ReturnCode(ILLEGAL_PARAMETERS, Failed to parse document select "
-                        "string 'id.order(10,3)=1 and dummy': Document type dummy not found)"),
+                        "string 'id.order(10,3)=1 and dummy': Document type 'dummy' not "
+                        "found at column 22 when parsing selection 'id.order(10,3)=1 and dummy')"),
             runEmptyVisitor(
                     createVisitorCommand("invalidOrderDoc",
                             id,
@@ -1668,5 +1674,4 @@ VisitorOperationTest::statistical_metrics_not_updated_on_wrong_distribution()
     CPPUNIT_ASSERT_EQUAL(0.0, defaultVisitorMetrics().latency.getCount());
 }
 
-} // distributor
-} // storage
+}

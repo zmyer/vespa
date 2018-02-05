@@ -6,15 +6,17 @@ import com.yahoo.component.AbstractComponent;
 import com.yahoo.container.jdisc.config.HealthMonitorConfig;
 import com.yahoo.jdisc.Timer;
 import com.yahoo.jdisc.application.MetricConsumer;
+import com.yahoo.log.LogLevel;
 
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 /**
- * A statemonitor keeps track of the current metrics state of a container.
+ * A state monitor keeps track of the current health and metrics state of a container.
  * It is used by jDisc to hand out metric update API endpoints to workers through {@link #newMetricConsumer},
  * and to inspect the current accumulated state of metrics through {@link #snapshot}.
  *
@@ -23,27 +25,33 @@ import java.util.logging.Logger;
 public class StateMonitor extends AbstractComponent {
 
     private final static Logger log = Logger.getLogger(StateMonitor.class.getName());
+
+    public enum Status {up, down, initializing};
+
     private final CopyOnWriteArrayList<StateMetricConsumer> consumers = new CopyOnWriteArrayList<>();
     private final Thread thread;
     private final Timer timer;
     private final long snapshotIntervalMs;
-    private long lastSnapshotTimeMs;
+    private volatile long lastSnapshotTimeMs;
     private volatile MetricSnapshot snapshot;
+    private volatile Status status;
     private final TreeSet<String> valueNames = new TreeSet<>();
 
     @Inject
     public StateMonitor(HealthMonitorConfig config, Timer timer) {
+        this(config, timer, runnable -> {
+            Thread thread = new Thread(runnable, "StateMonitor");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    StateMonitor(HealthMonitorConfig config, Timer timer, ThreadFactory threadFactory) {
         this.timer = timer;
         this.snapshotIntervalMs = (long)(config.snapshot_interval() * TimeUnit.SECONDS.toMillis(1));
         this.lastSnapshotTimeMs = timer.currentTimeMillis();
-        thread = new Thread(new Runnable() {
-
-            @Override
-            public void run() {
-                StateMonitor.this.run();
-            }
-        }, "StateMonitor");
-        thread.setDaemon(true);
+        this.status = Status.valueOf(config.initialStatus());
+        thread = threadFactory.newThread(this::run);
         thread.start();
     }
 
@@ -54,6 +62,13 @@ public class StateMonitor extends AbstractComponent {
         return consumer;
     }
 
+    public void status(Status status) {
+        log.log(LogLevel.INFO, "Changing health status code from '" + this.status + "' to '" + status.name() + "'");
+        this.status = status;
+    }
+
+    public Status status() { return status; }
+
     /** Returns the last snapshot taken of the metrics in this system */
     public MetricSnapshot snapshot() {
         return snapshot;
@@ -62,6 +77,7 @@ public class StateMonitor extends AbstractComponent {
     /** Returns the interval between each metrics snapshot used by this */
     public long getSnapshotIntervalMillis() { return snapshotIntervalMs; }
 
+    /** NOTE: For unit testing only. May lead to undefined behaviour if StateMonitor thread is running simultaneously **/
     boolean checkTime() {
         long now = timer.currentTimeMillis();
         if (now < lastSnapshotTimeMs + snapshotIntervalMs) {

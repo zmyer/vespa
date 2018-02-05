@@ -6,10 +6,10 @@
 #include <vespa/storageapi/messageapi/storagereply.h>
 #include <vespa/storageapi/messageapi/maintenancecommand.h>
 #include <vespa/document/bucket/bucketid.h>
-#include <vespa/storageframework/generic/memory/memorymanagerinterface.h>
 
 namespace storage::distributor {
 
+class DistributorBucketSpace;
 class PendingMessageTracker;
 class IdealStateManager;
 
@@ -29,18 +29,18 @@ public:
     /**
        Constructor for operations having only one node.
 
-       @param id Target bucket
+       @param bucket Target bucket
        @param node Target node
     */
-    BucketAndNodes(const document::BucketId& id, uint16_t node);
+    BucketAndNodes(const document::Bucket &bucket, uint16_t node);
 
     /**
        Constructor for operations with multiple target nodes.
 
-       @param id Target bucket
+       @param bucket Target bucket
        @param nodes Target nodes
     */
-    BucketAndNodes(const document::BucketId& id,
+    BucketAndNodes(const document::Bucket &bucket,
                    const std::vector<uint16_t>& nodes);
 
     /**
@@ -48,14 +48,16 @@ public:
 
        @param id The new target bucket
     */
-    void setBucketId(const document::BucketId& id) { _id = id; }
+    void setBucketId(const document::BucketId &id);
 
     /**
        Returns the target bucket.
 
        @return Returns the target bucket.
     */
-    const document::BucketId& getBucketId() const { return _id; }
+    document::BucketId getBucketId() const { return _bucket.getBucketId(); }
+
+    document::Bucket getBucket() const { return _bucket; }
 
     /**
        Returns the target nodes
@@ -79,7 +81,7 @@ public:
     std::string toString() const;
 
 private:
-    document::BucketId _id;
+    document::Bucket      _bucket;
     std::vector<uint16_t> _nodes;
 };
 
@@ -140,7 +142,9 @@ public:
 
        @return The target bucket.
     */
-    const document::BucketId& getBucketId() const { return _bucketAndNodes.getBucketId(); }
+    document::BucketId getBucketId() const { return _bucketAndNodes.getBucketId(); }
+
+    document::Bucket getBucket() const { return _bucketAndNodes.getBucket(); }
 
     /**
        Returns the target of the operation.
@@ -161,9 +165,7 @@ public:
 
        @param manager The ideal state manager.
     */
-    void setIdealStateManager(IdealStateManager* manager) {
-        _manager = manager;
-    };
+    void setIdealStateManager(IdealStateManager* manager);
 
     /**
        Returns the type of operation this is.
@@ -220,12 +222,12 @@ protected:
     friend class IdealStateManager;
 
     IdealStateManager* _manager;
+    DistributorBucketSpace *_bucketSpace;
     BucketAndNodes _bucketAndNodes;
     std::string _detailedReason;
 
     bool _ok;
     api::StorageMessage::Priority _priority;
-    framework::MemoryToken::UP _memoryToken;
 
     /**
      * Checks if the given bucket is blocked by any pending messages to any
@@ -233,8 +235,8 @@ protected:
      * operations to other nodes for this bucket, these will not be part of
      * the set of messages checked.
      */
-    bool checkBlock(const document::BucketId& bId, const PendingMessageTracker& tracker) const;
-    bool checkBlockForAllNodes(const document::BucketId& bId, const PendingMessageTracker& tracker) const;
+    bool checkBlock(const document::Bucket &bucket, const PendingMessageTracker& tracker) const;
+    bool checkBlockForAllNodes(const document::Bucket &bucket, const PendingMessageTracker& tracker) const;
 
 };
 

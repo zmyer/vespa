@@ -1,14 +1,16 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
 #include <logd/errhandle.h>
-#include <logd/sigterm.h>
 #include <logd/service.h>
 #include <logd/forward.h>
 #include <logd/conf.h>
 #include <logd/watch.h>
+#include <logd/state.h>
+#include <logd/metrics.h>
 #include <vespa/config/common/exceptions.h>
 #include <csignal>
 #include <unistd.h>
+#include <vespa/vespalib/util/sig_catch.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP("logdemon");
@@ -20,18 +22,18 @@ using config::FileSpec;
 
 int main(int, char**)
 {
-    Forwarder fwd;
+    StateReporter stateReporter;
+    Metrics metrics(stateReporter.metrics());
+    Forwarder fwd(metrics);
 
     EV_STARTED("logdemon");
 
-    hook_signals();
+    vespalib::SigCatch catcher;
 
     const char *cfid = getenv("VESPA_CONFIG_ID");
 
     try {
-        std::unique_ptr<ConfSub> subscriberP;
-        subscriberP.reset(new ConfSub(fwd, config::ConfigUri(cfid)));
-        ConfSub & subscriber(*subscriberP);
+        ConfSub subscriber(fwd, config::ConfigUri(cfid));
 
         int sleepcount = 0;
         while (true) {
@@ -39,6 +41,8 @@ int main(int, char**)
 
             try {
                 subscriber.latch();
+                stateReporter.setStatePort(subscriber.getStatePort());
+                stateReporter.gotConf(subscriber.generation());
                 int fd = subscriber.getservfd();
                 if (fd >= 0) {
                     sleepcount = 0 ; // connection OK, reset sleep time
@@ -50,7 +54,7 @@ int main(int, char**)
                 LOG(debug, "connection exception: %s", ex.what());
                 subscriber.closeConn();
             }
-            if (gotSignaled()) {
+            if (catcher.receivedStopSignal()) {
                 throw SigTermException("caught signal");
             }
             if (sleepcount < 60) {
@@ -60,10 +64,10 @@ int main(int, char**)
             }
             LOG(debug, "sleep %d...", sleepcount);
             for (int i = 0; i < sleepcount; i++) {
-                    sleep(1);
-                    if (gotSignaled()) {
-                        throw SigTermException("caught signal");
-                    }
+                sleep(1);
+                if (catcher.receivedStopSignal()) {
+                    throw SigTermException("caught signal");
+                }
             }
         }
     } catch (config::ConfigRuntimeException & ex) {
@@ -75,15 +79,8 @@ int main(int, char**)
         EV_STOPPING("logdemon", "bad config");
         return 1;
     } catch (SigTermException& ex) {
-        if (gotSignalNumber() == SIGTERM) {
-            LOG(debug, "stopping on SIGTERM");
-            EV_STOPPING("logdemon", "done ok.");
-        } else {
-            LOG(warning, "stopping on signal %d", gotSignalNumber());
-            char buf[100];
-            snprintf(buf, sizeof buf, "got signal %d", gotSignalNumber());
-            EV_STOPPING("logdemon", buf);
-        }
+        LOG(debug, "stopping on SIGTERM");
+        EV_STOPPING("logdemon", "done ok.");
         return 0;
     } catch (MsgException& ex) {
         LOG(error, "stopping on error: %s", ex.what());

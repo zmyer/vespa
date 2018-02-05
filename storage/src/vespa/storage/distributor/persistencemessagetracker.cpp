@@ -4,6 +4,8 @@
 #include <vespa/storage/common/vectorprinter.h>
 #include <vespa/storage/common/bucketoperationlogger.h>
 #include <vespa/storageapi/message/persistence.h>
+#include "distributor_bucket_space_repo.h"
+#include "distributor_bucket_space.h"
 
 #include <vespa/log/log.h>
 
@@ -83,7 +85,7 @@ PersistenceMessageTrackerImpl::receiveReply(
 void
 PersistenceMessageTrackerImpl::revert(
         MessageSender& sender,
-        const std::vector<std::pair<document::BucketId, uint16_t> > revertNodes)
+        const std::vector<BucketNodePair> revertNodes)
 {
     if (_revertTimestamp != 0) {
         // Since we're reverting, all received bucket info is voided.
@@ -123,8 +125,9 @@ PersistenceMessageTrackerImpl::canSendReplyEarly() const
         LOG(spam, "Can't return early because we have already replied or failed");
         return false;
     }
-
-    const lib::Distribution& distribution = _manager.getDistribution();
+    auto &bucketSpaceRepo(_manager.getBucketSpaceRepo());
+    auto &bucketSpace(bucketSpaceRepo.get(_reply->getBucket().getBucketSpace()));
+    const lib::Distribution& distribution = bucketSpace.getDistribution();
 
     if (distribution.getInitialRedundancy() == 0) {
         LOG(spam, "Not returning early because initial redundancy wasn't set");
@@ -163,12 +166,14 @@ PersistenceMessageTrackerImpl::checkCopiesDeleted()
 
     // Don't check the buckets that have been remapped here, as we will
     // create them.
+    const auto &bucketSpaceRepo(_manager.getBucketSpaceRepo());
     for (BucketInfoMap::const_iterator iter = _bucketInfo.begin();
          iter != _bucketInfo.end();
          iter++)
     {
-        BucketDatabase::Entry dbentry =
-            _manager.getBucketDatabase().get(iter->first);
+        const auto &bucketSpace(bucketSpaceRepo.get(iter->first.getBucketSpace()));
+        const auto &bucketDb(bucketSpace.getBucketDatabase());
+        BucketDatabase::Entry dbentry = bucketDb.get(iter->first.getBucketId());
 
         if (!dbentry.valid()) {
             continue;
@@ -187,7 +192,7 @@ PersistenceMessageTrackerImpl::checkCopiesDeleted()
 
         if (!missing.empty()) {
             std::ostringstream msg;
-            msg << iter->first << " was deleted from nodes [" 
+            msg << iter->first.toString() << " was deleted from nodes ["
                 << commaSeparated(missing)
                 << "] after message was sent but before it was done. Sent to ["
                 << commaSeparated(total)
@@ -206,7 +211,7 @@ PersistenceMessageTrackerImpl::addBucketInfoFromReply(
         uint16_t node,
         const api::BucketInfoReply& reply)
 {
-    const document::BucketId& bucket(reply.getBucketId());
+    document::Bucket bucket(reply.getBucket());
     const api::BucketInfo& bucketInfo(reply.getBucketInfo());
 
     if (reply.hasBeenRemapped()) {
@@ -294,7 +299,7 @@ PersistenceMessageTrackerImpl::handleCreateBucketReply(
         && reply.getResult().getResult() != api::ReturnCode::EXISTS)
     {
         LOG(spam, "Create bucket reply failed, so deleting it from bucket db");
-        _manager.removeNodeFromDB(reply.getBucketId(), node);
+        _manager.removeNodeFromDB(reply.getBucket(), node);
         LOG_BUCKET_OPERATION_NO_LOCK(
                 reply.getBucketId(),
                 vespalib::make_string(
@@ -313,8 +318,7 @@ PersistenceMessageTrackerImpl::handlePersistenceReply(
     }
     if (reply.getResult().success()) {
         logSuccessfulReply(node, reply);
-        _revertNodes.push_back(std::pair<document::BucketId, uint16_t>(
-                        reply.getBucketId(), node));
+        _revertNodes.emplace_back(reply.getBucket(), node);
     } else if (!hasSentReply()) {
         updateFailureResult(reply);
     }

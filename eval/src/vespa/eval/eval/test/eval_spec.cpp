@@ -104,12 +104,6 @@ EvalSpec::add_terminal_cases() {
     add_expression({}, "10").add_case({}, 10.0);
     add_expression({}, "100").add_case({}, 100.0);
     add_rule({"a", -5.0, 5.0}, "a", [](double a){ return a; });
-    add_expression({}, "[]").add_case({}, 0.0);
-    add_expression({}, "[1]").add_case({}, 1.0);
-    add_expression({}, "[1,2]").add_case({}, 2.0);
-    add_expression({}, "[1,2,3]").add_case({}, 3.0);
-    add_expression({}, "[3,2,1]").add_case({}, 3.0);
-    add_expression({}, "[1,1,1,1,1]").add_case({}, 5.0);
     add_expression({}, "\"\"").add_case({}, vespalib::hash_code(""));
     add_expression({}, "\"foo\"").add_case({}, vespalib::hash_code("foo"));
     add_expression({}, "\"foo bar baz\"").add_case({}, vespalib::hash_code("foo bar baz"));
@@ -156,6 +150,7 @@ EvalSpec::add_function_call_cases() {
         .add_case({my_nan}, 1.0).add_case({my_inf}, 0.0).add_case({-my_inf}, 0.0);
     add_rule({"a", -1.0, 1.0}, "relu(a)", [](double a){ return std::max(a, 0.0); });
     add_rule({"a", -1.0, 1.0}, "sigmoid(a)", [](double a){ return 1.0 / (1.0 + std::exp(-1.0 * a)); });
+    add_rule({"a", -1.0, 1.0}, "elu(a)", [](double a){ return (a < 0) ? std::exp(a)-1 : a; });
     add_rule({"a", -1.0, 1.0}, {"b", -1.0, 1.0}, "atan2(a,b)", [](double a, double b){ return std::atan2(a, b); });
     add_rule({"a", -1.0, 1.0}, {"b", -1.0, 1.0}, "ldexp(a,b)", [](double a, double b){ return std::ldexp(a, b); });
     add_rule({"a", -1.0, 1.0}, {"b", -1.0, 1.0}, "pow(a,b)", [](double a, double b){ return std::pow(a, b); });
@@ -166,7 +161,6 @@ EvalSpec::add_function_call_cases() {
 
 void
 EvalSpec::add_tensor_operation_cases() {
-    add_rule({"a", -1.0, 1.0}, "sum(a)", [](double a){ return a; });
     add_rule({"a", -1.0, 1.0}, "map(a,f(x)(sin(x)))", [](double x){ return std::sin(x); });
     add_rule({"a", -1.0, 1.0}, "map(a,f(x)(x+x*3))", [](double x){ return (x + (x * 3)); });
     add_rule({"a", -1.0, 1.0}, {"b", -1.0, 1.0}, "join(a,b,f(x,y)(x+y))", [](double x, double y){ return (x + y); });
@@ -278,52 +272,27 @@ EvalSpec::add_set_membership_cases()
 {
     add_expression({"a"}, "(a in [])")
         .add_case({0.0}, 0.0)
-        .add_case({1.0}, 0.0)
-        .add_case({2.0}, 0.0);
+        .add_case({1.0}, 0.0);
 
-    add_expression({"a"}, "(a in [[]])")
-        .add_case({0.0}, 1.0)
-        .add_case({1.0}, 0.0)
-        .add_case({2.0}, 0.0);
+    add_expression({"a"}, "(a in [2.0])")
+        .add_case({my_nan},      0.0)
+        .add_case({1.0},         0.0)
+        .add_case({2.0 - 1e-10}, 0.0)
+        .add_case({2.0},         1.0)
+        .add_case({2.0 + 1e-10}, 0.0)
+        .add_case({3.0},         0.0);
 
-    add_expression({"a"}, "(a in [[[]]])")
-        .add_case({0.0}, 0.0)
-        .add_case({1.0}, 1.0)
-        .add_case({2.0}, 0.0);
+    add_expression({"a"}, "(a in [10,20,30])")
+        .add_case({0.0},  0.0)
+        .add_case({3.0},  0.0)
+        .add_case({10.0}, 1.0)
+        .add_case({20.0}, 1.0)
+        .add_case({30.0}, 1.0);
 
-    add_expression({"a", "b"}, "(a in b)")
-        .add_case({my_nan, 2.0},      0.0)
-        .add_case({2.0, my_nan},      0.0)
-        .add_case({my_nan, my_nan},   0.0)
-        .add_case({1.0, 2.0},         0.0)
-        .add_case({2.0 - 1e-10, 2.0}, 0.0)
-        .add_case({2.0, 2.0},         1.0)
-        .add_case({2.0 + 1e-10, 2.0}, 0.0)
-        .add_case({3.0, 2.0},         0.0);
-
-    add_expression({"a", "b"}, "(a in [b])")
-        .add_case({my_nan, 2.0},      0.0)
-        .add_case({2.0, my_nan},      0.0)
-        .add_case({my_nan, my_nan},   0.0)
-        .add_case({1.0, 2.0},         0.0)
-        .add_case({2.0 - 1e-10, 2.0}, 0.0)
-        .add_case({2.0, 2.0},         1.0)
-        .add_case({2.0 + 1e-10, 2.0}, 0.0)
-        .add_case({3.0, 2.0},         0.0);
-
-    add_expression({"a", "b"}, "(a in [[b]])")
-        .add_case({1.0, 2.0},         1.0)
-        .add_case({2.0, 2.0},         0.0);
-
-    add_expression({"a", "b", "c", "d"}, "(a in [b,c,d])")
-        .add_case({0.0, 10.0, 20.0, 30.0}, 0.0)
-        .add_case({3.0, 10.0, 20.0, 30.0}, 0.0)
-        .add_case({10.0, 10.0, 20.0, 30.0}, 1.0)
-        .add_case({20.0, 10.0, 20.0, 30.0}, 1.0)
-        .add_case({30.0, 10.0, 20.0, 30.0}, 1.0)
-        .add_case({10.0, 30.0, 20.0, 10.0}, 1.0)
-        .add_case({20.0, 30.0, 20.0, 10.0}, 1.0)
-        .add_case({30.0, 30.0, 20.0, 10.0}, 1.0);
+    add_expression({"a"}, "(a in [30,20,10])")
+        .add_case({10.0}, 1.0)
+        .add_case({20.0}, 1.0)
+        .add_case({30.0}, 1.0);
 }
 
 void
@@ -378,20 +347,6 @@ EvalSpec::add_if_cases() {
     add_expression({"a"}, "if(a,1,0,0.75)")
         .add_cases({my_nan, -my_inf, -123.0, -1.0, -0.001, 0.0, 0.001, 1.0, 123.0, my_inf},
                    [](double a){ if (a) { return 1.0; } else { return 0.0; } });
-}
-
-void
-EvalSpec::add_let_cases() {
-    add_rule({"a", -10.0, 10.0}, "let(tmp,(a+1),(tmp*tmp))", [](double a){ return (a+1)*(a+1); });
-    add_rule({"a", -10.0, 10.0}, "let(a,(a+1),((a*a)*a))", [](double a){ return (a+1)*(a+1)*(a+1); });
-    add_rule({"a", -10.0, 10.0}, "let(a,(a+1),let(a,(a+1),let(b,2,let(a,(a+1),(a+b)))))", [](double a) { return (a + 5.0); });
-    add_rule({"a", -10.0, 10.0}, {"b", -10.0, 10.0}, "let(a,(a*b),let(b,(b+a),(a*b)))",
-             [](double a, double b)
-             {
-                 double let_a = (a * b);
-                 double let_b = (b + let_a);
-                 return (let_a * let_b);
-             });
 }
 
 void

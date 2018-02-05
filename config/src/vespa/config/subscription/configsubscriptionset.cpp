@@ -38,12 +38,6 @@ ConfigSubscriptionSet::acquireSnapshot(uint64_t timeoutInMillis, bool ignoreChan
     int64_t lastGeneration = _currentGeneration;
     bool inSync = false;
 
-    for (SubscriptionList::iterator it(_subscriptionList.begin()), mt(_subscriptionList.end());
-         it != mt;
-         it++) {
-        (*it)->reset();
-    }
-
     LOG(debug, "Going into nextConfig loop, time left is %d", timeLeft);
     while (_state != CLOSED && timeLeft >= 0 && !inSync) {
         size_t numChanged = 0;
@@ -52,13 +46,12 @@ ConfigSubscriptionSet::acquireSnapshot(uint64_t timeoutInMillis, bool ignoreChan
         int64_t generation = -1;
 
         // Run nextUpdate on all subscribers to get them in sync.
-        for (SubscriptionList::iterator it(_subscriptionList.begin()), mt(_subscriptionList.end());
-             it != mt;
-             it++) {
-            ConfigSubscription::SP subscription = *it;
+        for (const auto & subscription : _subscriptionList) {
 
-            if (!subscription->nextUpdate(_currentGeneration, timeLeft))
-                break;
+            if (!subscription->nextUpdate(_currentGeneration, timeLeft) && !subscription->hasGenerationChanged()) {
+                subscription->reset();
+                continue;
+            }
 
             const ConfigKey & key(subscription->getKey());
             if (subscription->hasChanged()) {
@@ -91,10 +84,14 @@ ConfigSubscriptionSet::acquireSnapshot(uint64_t timeoutInMillis, bool ignoreChan
         LOG(spam, "Config was updated from %ld to %ld", _currentGeneration, lastGeneration);
         _currentGeneration = lastGeneration;
         _state = CONFIGURED;
-        for (SubscriptionList::iterator it(_subscriptionList.begin()), mt(_subscriptionList.end());
-             it != mt;
-             it++) {
-            (*it)->flip();
+        for (const auto & subscription : _subscriptionList) {
+            const ConfigKey & key(subscription->getKey());
+            LOG(debug, "Updated config id(%s), defname(%s), has changed: %s, lastGenerationChanged: %ld",
+                key.getConfigId().c_str(),
+                key.getDefName().c_str(),
+                (subscription->hasChanged() ? "true" : "false"),
+                subscription->getLastGenerationChanged());
+            subscription->flip();
         }
     }
     return updated;
@@ -104,9 +101,9 @@ void
 ConfigSubscriptionSet::close()
 {
     _state = CLOSED;
-    for (SubscriptionList::iterator it(_subscriptionList.begin()), mt(_subscriptionList.end()); it != mt; it++) {
-        _mgr.unsubscribe(*it);
-        (*it)->close();
+    for (const auto & subscription : _subscriptionList) {
+        _mgr.unsubscribe(subscription);
+        subscription->close();
     }
 }
 

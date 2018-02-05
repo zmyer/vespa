@@ -13,7 +13,10 @@
 #include <vespa/storage/distributor/operations/external/twophaseupdateoperation.h>
 #include <vespa/storageapi/message/batch.h>
 #include <tests/distributor/distributortestutil.h>
+#include <vespa/document/test/make_document_bucket.h>
 #include <vespa/storage/distributor/distributor.h>
+
+using document::test::makeDocumentBucket;
 
 namespace storage {
 namespace distributor {
@@ -321,7 +324,7 @@ TwoPhaseUpdateOperationTest::sendUpdate(const std::string& bucketState,
     }
 
     auto msg(std::make_shared<api::UpdateCommand>(
-            document::BucketId(0), update, api::Timestamp(0)));
+            makeDocumentBucket(document::BucketId(0)), update, api::Timestamp(0)));
     // Misc settings for checking that propagation works.
     msg->getTrace().setLevel(6);
     msg->setTimeout(6789);
@@ -334,7 +337,7 @@ TwoPhaseUpdateOperationTest::sendUpdate(const std::string& bucketState,
 
     ExternalOperationHandler& handler = getExternalOperationHandler();
     return std::make_shared<TwoPhaseUpdateOperation>(
-            handler, msg, getDistributor().getMetrics());
+            handler, getDistributorBucketSpace(), msg, getDistributor().getMetrics());
 }
 
 
@@ -1067,9 +1070,8 @@ TwoPhaseUpdateOperationTest::testSafePathConditionParseFailureFailsWithIllegalPa
                          "timestamp 0, timestamp of updated doc: 0) "
                          "ReturnCode(ILLEGAL_PARAMETERS, "
                                      "Failed to parse test and set condition: "
-                                     "Unexpected token at position 16 "
-                                     "('==fran...c') in query 'testdoctype1."
-                                     "san==fran...cisco',)"s,
+                                     "syntax error, unexpected . at column 24 when "
+                                     "parsing selection 'testdoctype1.san==fran...cisco')"s,
             sender.getLastReply(true));
 }
 
@@ -1093,7 +1095,8 @@ TwoPhaseUpdateOperationTest::testSafePathConditonUnknownDocTypeFailsWithIllegalP
                          "timestamp 0, timestamp of updated doc: 0) "
                          "ReturnCode(ILLEGAL_PARAMETERS, "
                                     "Failed to parse test and set condition: "
-                                    "Document type langbein not found)"s,
+                                    "Document type 'langbein' not found at column 1 "
+                                    "when parsing selection 'langbein.headerval=1234')"s,
             sender.getLastReply(true));
 }
 

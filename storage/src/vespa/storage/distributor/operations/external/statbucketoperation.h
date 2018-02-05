@@ -8,20 +8,20 @@
 #pragma once
 
 #include <vespa/storage/distributor/operations/operation.h>
+#include <map>
 
-namespace storage {
+namespace storage::api { class StatBucketCommand; }
 
-namespace api { class StatBucketCommand; }
-
-namespace distributor {
+namespace storage::distributor {
 
 class DistributorComponent;
+class DistributorBucketSpace;
 
 class StatBucketOperation : public Operation
 {
 public:
-    StatBucketOperation(DistributorComponent& manager,
-                 const std::shared_ptr<api::StatBucketCommand> & cmd);
+    StatBucketOperation(DistributorComponent& manager, DistributorBucketSpace &bucketSpace,
+                        const std::shared_ptr<api::StatBucketCommand> & cmd);
     ~StatBucketOperation();
 
     const char* getName() const override { return "statBucket"; }
@@ -31,13 +31,12 @@ public:
     void onReceive(DistributorMessageSender& sender, const std::shared_ptr<api::StorageReply> & msg) override;
 private:
     DistributorComponent& _manager;
+    DistributorBucketSpace &_bucketSpace;
 
     std::shared_ptr<api::StatBucketCommand> _command;
 
-    std::map<uint64_t, uint16_t> _sent;
+    std::map<uint64_t, uint16_t>    _sent;
     std::map<uint16_t, std::string> _results;
 };
 
-} // distributor
-} // storage
-
+}

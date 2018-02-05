@@ -7,8 +7,7 @@
 #include <vespa/eval/eval/value_type.h>
 #include "dense_tensor_cells_iterator.h"
 
-namespace vespalib {
-namespace tensor {
+namespace vespalib::tensor {
 
 class DenseTensor;
 
@@ -22,9 +21,11 @@ public:
     using Cells = std::vector<double>;
     using CellsRef = ConstArrayRef<double>;
     using CellsIterator = DenseTensorCellsIterator;
+    using Address = std::vector<eval::ValueType::Dimension::size_type>;
 
 private:
     const eval::ValueType &_typeRef;
+    Tensor::UP reduce_all(join_fun_t op, const std::vector<vespalib::string> &dimensions) const;
 protected:
     CellsRef _cellsRef;
 
@@ -42,33 +43,20 @@ public:
             : _typeRef(type_in),
               _cellsRef()
     {}
-    const eval::ValueType &type() const { return _typeRef; }
+    const eval::ValueType &fast_type() const { return _typeRef; }
     const CellsRef &cellsRef() const { return _cellsRef; }
     bool operator==(const DenseTensorView &rhs) const;
     CellsIterator cellsIterator() const { return CellsIterator(_typeRef, _cellsRef); }
 
-    virtual const eval::ValueType &getType() const override;
-    virtual double sum() const override;
-    virtual Tensor::UP add(const Tensor &arg) const override;
-    virtual Tensor::UP subtract(const Tensor &arg) const override;
-    virtual Tensor::UP multiply(const Tensor &arg) const override;
-    virtual Tensor::UP min(const Tensor &arg) const override;
-    virtual Tensor::UP max(const Tensor &arg) const override;
-    virtual Tensor::UP match(const Tensor &arg) const override;
-    virtual Tensor::UP apply(const CellFunction &func) const override;
-    virtual Tensor::UP sum(const vespalib::string &dimension) const override;
-    virtual Tensor::UP apply(const eval::BinaryOperation &op,
-                             const Tensor &arg) const override;
-    virtual Tensor::UP reduce(const eval::BinaryOperation &op,
-                              const std::vector<vespalib::string> &dimensions)
-        const override;
-    virtual bool equals(const Tensor &arg) const override;
-    virtual void print(std::ostream &out) const override;
-    virtual vespalib::string toString() const override;
-    virtual Tensor::UP clone() const override;
-    virtual eval::TensorSpec toSpec() const override;
-    virtual void accept(TensorVisitor &visitor) const override;
+    const eval::ValueType &type() const override;
+    double as_double() const override;
+    Tensor::UP apply(const CellFunction &func) const override;
+    Tensor::UP join(join_fun_t function, const Tensor &arg) const override;
+    Tensor::UP reduce(join_fun_t op, const std::vector<vespalib::string> &dimensions) const override;
+    bool equals(const Tensor &arg) const override;
+    Tensor::UP clone() const override;
+    eval::TensorSpec toSpec() const override;
+    void accept(TensorVisitor &visitor) const override;
 };
 
-} // namespace vespalib::tensor
-} // namespace vespalib
+}

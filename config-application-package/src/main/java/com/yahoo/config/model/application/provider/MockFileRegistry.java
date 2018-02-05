@@ -17,7 +17,7 @@ import java.util.Set;
 public class MockFileRegistry implements FileRegistry {
 
     public FileReference addFile(String relativePath) {
-        return FileReferenceCreator.create("0123456789abcdef");
+        return new FileReference("0123456789abcdef");
     }
 
     @Override
@@ -25,14 +25,19 @@ public class MockFileRegistry implements FileRegistry {
         return "localhost.fortestingpurposesonly";
     }
 
-    public static final Entry entry1 = new Entry("component/path1", FileReferenceCreator.create("1234"));
-    public static final Entry entry2 = new Entry("component/path2", FileReferenceCreator.create("56789"));
+    public static final Entry entry1 = new Entry("component/path1", new FileReference("1234"));
+    public static final Entry entry2 = new Entry("component/path2", new FileReference("56789"));
 
     public List<Entry> export() {
         List<Entry> result = new ArrayList<>();
         result.add(entry1);
         result.add(entry2);
         return result;
+    }
+
+    @Override
+    public FileReference addUri(String uri) {
+        throw new IllegalArgumentException("FileReference addUri(String uri) is not implemented for " + getClass().getCanonicalName());
     }
 
 }

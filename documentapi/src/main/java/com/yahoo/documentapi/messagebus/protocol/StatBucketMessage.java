@@ -2,10 +2,12 @@
 package com.yahoo.documentapi.messagebus.protocol;
 
 import com.yahoo.document.BucketId;
+import com.yahoo.document.FixedBucketSpaces;
 
 public class StatBucketMessage extends DocumentMessage {
 
     private BucketId bucketId;
+    private String bucketSpace = FixedBucketSpaces.defaultSpace();
     private String documentSelection;
 
     StatBucketMessage() {
@@ -13,7 +15,12 @@ public class StatBucketMessage extends DocumentMessage {
     }
 
     public StatBucketMessage(BucketId bucket, String documentSelection) {
-        this.bucketId = bucket;
+        this(bucket, FixedBucketSpaces.defaultSpace(), documentSelection);
+    }
+
+    public StatBucketMessage(BucketId bucketId, String bucketSpace, String documentSelection) {
+        this.bucketId = bucketId;
+        this.bucketSpace = bucketSpace;
         this.documentSelection = documentSelection;
     }
 
@@ -33,6 +40,14 @@ public class StatBucketMessage extends DocumentMessage {
         this.documentSelection = documentSelection;
     }
 
+    public String getBucketSpace() {
+        return bucketSpace;
+    }
+
+    public void setBucketSpace(String bucketSpace) {
+        this.bucketSpace = bucketSpace;
+    }
+
     @Override
     public DocumentReply createReply() {
         return new StatBucketReply();
@@ -40,7 +55,7 @@ public class StatBucketMessage extends DocumentMessage {
 
     @Override
     public int getApproxSize() {
-        return super.getApproxSize() + 8 + documentSelection.length();
+        return super.getApproxSize() + 8 + bucketSpace.length() + documentSelection.length();
     }
 
     @Override

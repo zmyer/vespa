@@ -12,14 +12,17 @@
 #include <vespa/storageapi/message/bucket.h>
 #include <vespa/storageapi/message/persistence.h>
 #include <vespa/vdslib/distribution/idealnodecalculatorimpl.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
 
 LOG_SETUP(".distributor.callback.doc.put");
 
 
 using namespace storage::distributor;
 using namespace storage;
+using document::BucketSpace;
 
 PutOperation::PutOperation(DistributorComponent& manager,
+                           DistributorBucketSpace &bucketSpace,
                            const std::shared_ptr<api::PutCommand> & msg,
                            PersistenceOperationMetricSet& metric,
                            SequencingHandle sequencingHandle)
@@ -30,7 +33,8 @@ PutOperation::PutOperation(DistributorComponent& manager,
                msg->getTimestamp()),
       _tracker(_trackerInstance),
       _msg(msg),
-      _manager(manager)
+      _manager(manager),
+      _bucketSpace(bucketSpace)
 {
 };
 
@@ -115,8 +119,9 @@ PutOperation::checkCreateBucket(const lib::Distribution& dist,
     // Send create buckets for all nodes in ideal state where we don't
     // currently have copies.
     for (uint32_t i = 0; i < createNodes.size(); i++) {
+        document::Bucket bucket(originalCommand.getBucket().getBucketSpace(), entry.getBucketId());
         std::shared_ptr<api::CreateBucketCommand> cbc(
-                new api::CreateBucketCommand(entry.getBucketId()));
+                new api::CreateBucketCommand(bucket));
         if (active.contains(createNodes[i])) {
             BucketCopy copy(*entry->getNode(createNodes[i]));
             copy.setActive(true);
@@ -180,7 +185,7 @@ PutOperation::insertDatabaseEntryAndScheduleCreateBucket(
         // subsequently arriving from the storage node will always overwrite it.
         BucketCopy copy(BucketCopy::recentlyCreatedCopy(
                 0, copies[i].getNode().getIndex()));
-        _manager.updateBucketDatabase(lastBucket, copy,
+        _manager.updateBucketDatabase(document::Bucket(originalCommand.getBucket().getBucketSpace(), lastBucket), copy,
                                       DatabaseUpdate::CREATE_IF_NONEXISTING);
     }
     ActiveList active;
@@ -188,11 +193,11 @@ PutOperation::insertDatabaseEntryAndScheduleCreateBucket(
         assert(!multipleBuckets);
         (void) multipleBuckets;
         BucketDatabase::Entry entry(
-                _manager.getBucketDatabase().get(lastBucket));
+                _bucketSpace.getBucketDatabase().get(lastBucket));
         std::vector<uint16_t> idealState(
-                _manager.getDistribution().getIdealStorageNodes(
+                _bucketSpace.getDistribution().getIdealStorageNodes(
                     _manager.getClusterState(), lastBucket, "ui"));
-        active = ActiveCopy::calculate(idealState, _manager.getDistribution(),
+        active = ActiveCopy::calculate(idealState, _bucketSpace.getDistribution(),
                                        entry);
         LOG(debug, "Active copies for bucket %s: %s",
             entry.getBucketId().toString().c_str(), active.toString().c_str());
@@ -201,12 +206,13 @@ PutOperation::insertDatabaseEntryAndScheduleCreateBucket(
             copy.setActive(true);
             entry->updateNode(copy);
         }
-        _manager.getBucketDatabase().update(entry);
+        _bucketSpace.getBucketDatabase().update(entry);
     }
     for (uint32_t i=0, n=copies.size(); i<n; ++i) {
         if (!copies[i].isNewCopy()) continue;
+        document::Bucket bucket(originalCommand.getBucket().getBucketSpace(), copies[i].getBucketId());
         std::shared_ptr<api::CreateBucketCommand> cbc(
-                new api::CreateBucketCommand(copies[i].getBucketId()));
+                new api::CreateBucketCommand(bucket));
         if (setOneActive && active.contains(copies[i].getNode().getIndex())) {
             cbc->setActive(true);
         }
@@ -221,13 +227,15 @@ PutOperation::insertDatabaseEntryAndScheduleCreateBucket(
 
 void
 PutOperation::sendPutToBucketOnNode(
+        document::BucketSpace bucketSpace,
         const document::BucketId& bucketId,
         const uint16_t node,
         std::vector<PersistenceMessageTracker::ToSend>& putBatch)
 {
+    document::Bucket bucket(bucketSpace, bucketId);
     std::shared_ptr<api::PutCommand> command(
             new api::PutCommand(
-                    bucketId,
+                    bucket,
                     _msg->getDocument(),
                     _msg->getTimestamp()));
     LOG(debug,
@@ -269,20 +277,21 @@ PutOperation::onStart(DistributorMessageSender& sender)
         std::vector<document::BucketId> bucketsToCheckForSplit;
 
         lib::IdealNodeCalculatorImpl idealNodeCalculator;
-        idealNodeCalculator.setDistribution(_manager.getDistribution());
+        idealNodeCalculator.setDistribution(_bucketSpace.getDistribution());
         idealNodeCalculator.setClusterState(_manager.getClusterState());
         OperationTargetResolverImpl targetResolver(
-                _manager.getBucketDatabase(),
+                _bucketSpace.getBucketDatabase(),
                 idealNodeCalculator,
                 _manager.getDistributor().getConfig().getMinimalBucketSplit(),
-                _manager.getDistribution().getRedundancy());
+                _bucketSpace.getDistribution().getRedundancy(),
+                _msg->getBucket().getBucketSpace());
         OperationTargetList targets(targetResolver.getTargets(
                 OperationTargetResolver::PUT, bid));
 
         for (size_t i = 0; i < targets.size(); ++i) {
             if (_manager.getDistributor().getPendingMessageTracker().
                 hasPendingMessage(targets[i].getNode().getIndex(),
-                                  targets[i].getBucketId(),
+                                  targets[i].getBucket(),
                                   api::MessageType::DELETEBUCKET_ID))
             {
                 _tracker.fail(sender, api::ReturnCode(api::ReturnCode::BUCKET_DELETED,
@@ -294,7 +303,7 @@ PutOperation::onStart(DistributorMessageSender& sender)
 
         // Mark any entries we're not feeding to as not trusted.
         std::vector<BucketDatabase::Entry> entries;
-        _manager.getBucketDatabase().getParents(bid, entries);
+        _bucketSpace.getBucketDatabase().getParents(bid, entries);
 
         std::vector<PersistenceMessageTracker::ToSend> createBucketBatch;
         if (targets.hasAnyNewCopies()) {
@@ -314,7 +323,8 @@ PutOperation::onStart(DistributorMessageSender& sender)
         // Now send PUTs
         for (uint32_t i = 0; i < targets.size(); i++) {
             const OperationTarget& target(targets[i]);
-            sendPutToBucketOnNode(target.getBucketId(), target.getNode().getIndex(),
+            sendPutToBucketOnNode(_msg->getBucket().getBucketSpace(),
+                                  target.getBucketId(), target.getNode().getIndex(),
                                   putBatch);
         }
 
@@ -332,6 +342,7 @@ PutOperation::onStart(DistributorMessageSender& sender)
         // TODO(vekterli): only check entries for sendToExisting?
         for (uint32_t i = 0; i < entries.size(); ++i) {
             _manager.getDistributor().checkBucketForSplit(
+                    _msg->getBucket().getBucketSpace(),
                     entries[i],
                     _msg->getPriority());
         }

@@ -13,7 +13,6 @@ import com.yahoo.config.provision.TenantName;
 import com.yahoo.config.provision.Zone;
 import com.yahoo.container.jdisc.HttpRequest;
 import com.yahoo.container.jdisc.HttpResponse;
-import com.yahoo.container.logging.AccessLog;
 import com.yahoo.jdisc.Response;
 import com.yahoo.path.Path;
 import com.yahoo.vespa.config.server.ApplicationRepository;
@@ -24,15 +23,12 @@ import com.yahoo.vespa.config.server.TestComponentRegistry;
 import com.yahoo.vespa.config.server.application.ApplicationConvergenceChecker;
 import com.yahoo.vespa.config.server.application.HttpProxy;
 import com.yahoo.vespa.config.server.application.LogServerLogGrabber;
-import com.yahoo.vespa.config.server.application.TenantApplications;
-import com.yahoo.vespa.config.server.application.ZKTenantApplications;
 import com.yahoo.vespa.config.server.http.HandlerTest;
 import com.yahoo.vespa.config.server.http.HttpErrorResponse;
 import com.yahoo.vespa.config.server.http.StaticResponse;
 import com.yahoo.vespa.config.server.http.SessionHandlerTest;
 import com.yahoo.vespa.config.server.http.SimpleHttpFetcher;
 import com.yahoo.vespa.config.server.modelfactory.ModelFactoryRegistry;
-import com.yahoo.vespa.config.server.monitoring.Metrics;
 import com.yahoo.vespa.config.server.provision.HostProvisionerProvider;
 import com.yahoo.vespa.config.server.session.LocalSession;
 import com.yahoo.vespa.config.server.session.MockSessionZKClient;
@@ -40,7 +36,6 @@ import com.yahoo.vespa.config.server.session.RemoteSession;
 import com.yahoo.vespa.config.server.session.SessionContext;
 import com.yahoo.vespa.config.server.session.SessionZooKeeperClient;
 import com.yahoo.vespa.config.server.tenant.Tenant;
-import com.yahoo.vespa.config.server.tenant.TenantBuilder;
 import com.yahoo.vespa.config.server.tenant.Tenants;
 import com.yahoo.vespa.curator.mock.MockCurator;
 import com.yahoo.vespa.model.VespaModelFactory;
@@ -70,7 +65,6 @@ import static org.mockito.Mockito.when;
 
 /**
  * @author hmusum
- * @since 5.4
  */
 public class ApplicationHandlerTest {
 
@@ -86,7 +80,7 @@ public class ApplicationHandlerTest {
     private final HttpProxy mockHttpProxy = mock(HttpProxy.class);
 
     @Before
-    public void setup() throws Exception {
+    public void setup() {
         TestTenantBuilder testBuilder = new TestTenantBuilder();
         testBuilder.createTenant(mytenantName).withReloadHandler(new MockReloadHandler());
         testBuilder.createTenant(foobar).withReloadHandler(new MockReloadHandler());
@@ -99,7 +93,8 @@ public class ApplicationHandlerTest {
                 mockHttpProxy,
                 new MockLogServerLogGrabber());
         listApplicationsHandler = new ListApplicationsHandler(
-                Runnable::run, AccessLog.voidAccessLog(), tenants, Zone.defaultZone());
+                ListApplicationsHandler.testOnlyContext(),
+                tenants, Zone.defaultZone());
     }
 
     private ApplicationHandler createMockApplicationHandler(
@@ -108,12 +103,10 @@ public class ApplicationHandlerTest {
             HttpProxy httpProxy,
             LogServerLogGrabber logServerLogGrabber) {
         return new ApplicationHandler(
-                Runnable::run,
-                AccessLog.voidAccessLog(),
+                ApplicationHandler.testOnlyContext(),
                 Zone.defaultZone(),
                 new ApplicationRepository(tenants,
                                           HostProvisionerProvider.withProvisioner(provisioner),
-                                          new MockCurator(),
                                           logServerLogGrabber,
                                           convergeChecker,
                                           httpProxy,
@@ -122,12 +115,10 @@ public class ApplicationHandlerTest {
 
     private ApplicationHandler createApplicationHandler(Tenants tenants) {
         return new ApplicationHandler(
-                Runnable::run,
-                AccessLog.voidAccessLog(),
+                ApplicationHandler.testOnlyContext(),
                 Zone.defaultZone(),
                 new ApplicationRepository(tenants,
                                           HostProvisionerProvider.withProvisioner(provisioner),
-                                          new MockCurator(),
                                           new LogServerLogGrabber(),
                                           new ApplicationConvergenceChecker(stateApiFactory),
                                           new HttpProxy(new SimpleHttpFetcher()),
@@ -281,7 +272,28 @@ public class ApplicationHandlerTest {
         tenant.getRemoteSessionRepo().addSession(new RemoteSession(tenant.getName(), sessionId, componentRegistry, new MockSessionZKClient(app), clock));
     }
 
-    static Tenants addApplication(ApplicationId applicationId, long sessionId) throws Exception {
+    @Test
+    public void testFileDistributionStatus() throws Exception {
+        long sessionId = 1;
+        ApplicationId application = new ApplicationId.Builder().applicationName(ApplicationName.defaultName()).tenant(mytenantName).build();
+        addMockApplication(tenants.getTenant(mytenantName), application, sessionId, Clock.systemUTC());
+        Zone zone = Zone.defaultZone();
+
+        HttpResponse response = fileDistributionStatus(application, zone);
+        assertEquals(200, response.getStatus());
+        SessionHandlerTest.getRenderedString(response);
+        assertEquals("{\"hosts\":[{\"hostname\":\"mytesthost\",\"status\":\"UNKNOWN\",\"message\":\"error: Connection error(104)\",\"fileReferences\":[]}],\"status\":\"UNKNOWN\"}",
+                     SessionHandlerTest.getRenderedString(response));
+
+        // 404 for unknown application
+        ApplicationId unknown = new ApplicationId.Builder().applicationName("unknown").tenant(mytenantName).build();
+        HttpResponse responseForUnknown = fileDistributionStatus(unknown, zone);
+        assertEquals(404, responseForUnknown.getStatus());
+        assertEquals("{\"error-code\":\"NOT_FOUND\",\"message\":\"No such application id: mytenant.unknown\"}",
+                     SessionHandlerTest.getRenderedString(responseForUnknown));
+    }
+
+    private static Tenants addApplication(ApplicationId applicationId, long sessionId) throws Exception {
         // This method is a good illustration of the spaghetti wiring resulting from no design
         // TODO: When this setup looks sane we have refactored sufficiently that there is a design
 
@@ -291,18 +303,15 @@ public class ApplicationHandlerTest {
         Path sessionPath = tenantPath.append(Tenant.SESSIONS).append(String.valueOf(sessionId));
 
         MockCurator curator = new MockCurator();
-        GlobalComponentRegistry globalComponents = new TestComponentRegistry.Builder().curator(curator).build();
+        GlobalComponentRegistry componentRegistry = new TestComponentRegistry.Builder()
+                .curator(curator)
+                .modelFactoryRegistry(new ModelFactoryRegistry(
+                        Collections.singletonList(new VespaModelFactory(new NullConfigModelRegistry()))))
+                .build();
         
-        Tenants tenants = new Tenants(globalComponents, Metrics.createTestMetrics()); // Creates the application path element in zk
-        tenants.writeTenantPath(tenantName);
-        TenantApplications tenantApplications = ZKTenantApplications.create(curator, 
-                                                                            tenantPath.append(Tenant.APPLICATIONS), 
-                                                                            new MockReloadHandler(), // TODO: Use the real one
-                                                                            tenantName);
-        Tenant tenant = TenantBuilder.create(globalComponents, applicationId.tenant(), tenantPath)
-                                     .withApplicationRepo(tenantApplications)
-                                     .build();
-        tenants.addTenant(tenant);
+        Tenants tenants = new Tenants(componentRegistry); // Creates the application path element in zk
+        tenants.addTenant(tenantName);
+        Tenant tenant = tenants.getTenant(tenantName);
 
         tenant.getApplicationRepo().createPutApplicationTransaction(applicationId, sessionId).commit();
         ApplicationPackage app = FilesApplicationPackage.fromFile(testApp);
@@ -319,11 +328,7 @@ public class ApplicationHandlerTest {
 
         tenant.getRemoteSessionRepo().addSession(
                 new RemoteSession(tenantName, sessionId,
-                                  new TestComponentRegistry.Builder()
-                                          .curator(curator)
-                                          .modelFactoryRegistry(new ModelFactoryRegistry(
-                                                  Collections.singletonList(new VespaModelFactory(new NullConfigModelRegistry()))))
-                                          .build(),
+                                  componentRegistry,
                                   sessionClient,
                                   Clock.systemUTC()));
         return tenants;
@@ -405,6 +410,11 @@ public class ApplicationHandlerTest {
         HttpResponse response = mockHandler.handle(HttpRequest.createTestRequest(restartUrl, com.yahoo.jdisc.http.HttpRequest.Method.POST));
         HandlerTest.assertHttpStatusCodeAndMessage(response, 200, "");
         return SessionHandlerTest.getRenderedString(response);
+    }
+
+    private HttpResponse fileDistributionStatus(ApplicationId application, Zone zone) {
+        String restartUrl = toUrlPath(application, zone, true) + "/filedistributionstatus";
+        return mockHandler.handle(HttpRequest.createTestRequest(restartUrl, com.yahoo.jdisc.http.HttpRequest.Method.GET));
     }
 
     private static class MockStateApiFactory implements ApplicationConvergenceChecker.StateApiFactory {

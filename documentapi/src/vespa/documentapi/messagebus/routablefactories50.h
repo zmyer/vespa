@@ -200,16 +200,6 @@ public:
         DocumentReply::UP doDecode(document::ByteBuffer &buf) const override;
         bool doEncode(const DocumentReply &reply, vespalib::GrowableByteBuffer &buf) const override;
     };
-    class DocBlockMessageFactory : public DocumentMessageFactory {
-    protected:
-        DocumentMessage::UP doDecode(document::ByteBuffer &buf) const override;
-        bool doEncode(const DocumentMessage &msg, vespalib::GrowableByteBuffer &buf) const override;
-    };
-    class DocBlockReplyFactory : public DocumentReplyFactory {
-    protected:
-        DocumentReply::UP doDecode(document::ByteBuffer &buf) const override;
-        bool doEncode(const DocumentReply &reply, vespalib::GrowableByteBuffer &buf) const override;
-    };
     class DocumentListMessageFactory : public DocumentMessageFactory {
         const document::DocumentTypeRepo &_repo;
         DocumentMessage::UP doDecode(document::ByteBuffer &buf) const override;
@@ -244,6 +234,8 @@ public:
         bool doEncode(const DocumentReply &reply, vespalib::GrowableByteBuffer &buf) const override;
     };
     class GetBucketListMessageFactory : public DocumentMessageFactory {
+        virtual bool encodeBucketSpace(vespalib::stringref bucketSpace, vespalib::GrowableByteBuffer& buf) const;
+        virtual string decodeBucketSpace(document::ByteBuffer&) const;
     protected:
         DocumentMessage::UP doDecode(document::ByteBuffer &buf) const override;
         bool doEncode(const DocumentMessage &msg, vespalib::GrowableByteBuffer &buf) const override;
@@ -356,6 +348,8 @@ public:
         bool doEncode(const DocumentReply &reply, vespalib::GrowableByteBuffer &buf) const override;
     };
     class StatBucketMessageFactory : public DocumentMessageFactory {
+        virtual bool encodeBucketSpace(vespalib::stringref bucketSpace, vespalib::GrowableByteBuffer& buf) const;
+        virtual string decodeBucketSpace(document::ByteBuffer&) const;
     protected:
         DocumentMessage::UP doDecode(document::ByteBuffer &buf) const override;
         bool doEncode(const DocumentMessage &msg, vespalib::GrowableByteBuffer &buf) const override;

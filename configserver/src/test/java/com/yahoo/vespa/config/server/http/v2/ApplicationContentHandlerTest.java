@@ -12,7 +12,6 @@ import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.vespa.config.server.ApplicationRepository;
 import com.yahoo.vespa.config.server.http.ContentHandlerTestBase;
 import com.yahoo.vespa.config.server.session.Session;
-import com.yahoo.vespa.curator.mock.MockCurator;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -53,12 +52,10 @@ public class ApplicationContentHandlerTest extends ContentHandlerTestBase {
         testTenantBuilder.tenants().get(tenant2).getLocalSessionRepo().addSession(new MockSession(3l, FilesApplicationPackage.fromFile(new File("src/test/apps/content2"))));
         testTenantBuilder.tenants().get(tenant1).getApplicationRepo().createPutApplicationTransaction(idTenant1, 2l).commit();
         testTenantBuilder.tenants().get(tenant2).getApplicationRepo().createPutApplicationTransaction(idTenant2, 3l).commit();
-        handler = new ApplicationHandler(Runnable::run,
-                                         AccessLog.voidAccessLog(),
+        handler = new ApplicationHandler(ApplicationHandler.testOnlyContext(),
                                          Zone.defaultZone(),
                                          new ApplicationRepository(testTenantBuilder.createTenants(),
                                                                    new MockProvisioner(),
-                                                                   new MockCurator(),
                                                                    Clock.systemUTC()));
         pathPrefix = createPath(idTenant1, Zone.defaultZone());
         baseUrl = baseServer + pathPrefix;

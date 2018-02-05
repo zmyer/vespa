@@ -19,6 +19,8 @@
 #include <vespa/storageapi/message/removelocation.h>
 #include <vespa/storageapi/message/batch.h>
 #include <vespa/storageapi/message/stat.h>
+#include "distributor_bucket_space_repo.h"
+#include "distributor_bucket_space.h"
 
 #include <vespa/log/log.h>
 LOG_SETUP(".distributor.manager");
@@ -27,10 +29,10 @@ namespace storage::distributor {
 
 ExternalOperationHandler::ExternalOperationHandler(
         Distributor& owner,
-        ManagedBucketSpace& bucketSpace,
+        DistributorBucketSpaceRepo& bucketSpaceRepo,
         const MaintenanceOperationGenerator& gen,
         DistributorComponentRegister& compReg)
-    : ManagedBucketSpaceComponent(owner, bucketSpace, compReg, "External operation handler"),
+    : DistributorComponent(owner, bucketSpaceRepo, compReg, "External operation handler"),
       _operationGenerator(gen),
       _rejectFeedBeforeTimeReached() // At epoch
 { }
@@ -79,9 +81,10 @@ ExternalOperationHandler::checkSafeTimeReached(api::StorageCommand& cmd)
 bool
 ExternalOperationHandler::checkTimestampMutationPreconditions(
         api::StorageCommand& cmd,
-        const document::BucketId& bucket,
+        const document::BucketId &bucketId,
         PersistenceOperationMetricSet& persistenceMetrics)
 {
+    document::Bucket bucket(cmd.getBucket().getBucketSpace(), bucketId);
     if (!checkDistribution(cmd, bucket)) {
         LOG(debug,
             "Distributor manager received %s, bucket %s with wrong "
@@ -102,12 +105,15 @@ ExternalOperationHandler::checkTimestampMutationPreconditions(
 std::shared_ptr<api::StorageMessage>
 ExternalOperationHandler::makeConcurrentMutationRejectionReply(
         api::StorageCommand& cmd,
-        const document::DocumentId& docId) const {
+        const document::DocumentId& docId,
+        PersistenceOperationMetricSet& persistenceMetrics) const {
+    auto err_msg = vespalib::make_string(
+            "A mutating operation for document '%s' is already in progress",
+            docId.toString().c_str());
+    LOG(debug, "Aborting incoming %s operation: %s", cmd.getType().toString().c_str(), err_msg.c_str());
+    persistenceMetrics.failures.concurrent_mutations++;
     api::StorageReply::UP reply(cmd.makeReply());
-    reply->setResult(api::ReturnCode(
-            api::ReturnCode::BUSY, vespalib::make_string(
-                    "A mutating operation for document '%s' is already in progress",
-                    docId.toString().c_str())));
+    reply->setResult(api::ReturnCode(api::ReturnCode::BUSY, err_msg));
     return std::shared_ptr<api::StorageMessage>(reply.release());
 }
 
@@ -122,10 +128,8 @@ bool ExternalOperationHandler::allowMutation(const SequencingHandle& handle) con
 
 IMPL_MSG_COMMAND_H(ExternalOperationHandler, Put)
 {
-    if (!checkTimestampMutationPreconditions(
-            *cmd, getBucketId(cmd->getDocumentId()),
-            getMetrics().puts[cmd->getLoadType()]))
-    {
+    auto& metrics = getMetrics().puts[cmd->getLoadType()];
+    if (!checkTimestampMutationPreconditions(*cmd, getBucketId(cmd->getDocumentId()), metrics)) {
         return true;
     }
 
@@ -135,9 +139,11 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, Put)
 
     auto handle = _mutationSequencer.try_acquire(cmd->getDocumentId());
     if (allowMutation(handle)) {
-        _op = std::make_shared<PutOperation>(*this, cmd, getMetrics().puts[cmd->getLoadType()], std::move(handle));
+        _op = std::make_shared<PutOperation>(*this,
+                                             _bucketSpaceRepo.get(cmd->getBucket().getBucketSpace()),
+                                             cmd, getMetrics().puts[cmd->getLoadType()], std::move(handle));
     } else {
-        sendUp(makeConcurrentMutationRejectionReply(*cmd, cmd->getDocumentId()));
+        sendUp(makeConcurrentMutationRejectionReply(*cmd, cmd->getDocumentId(), metrics));
     }
 
     return true;
@@ -146,10 +152,8 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, Put)
 
 IMPL_MSG_COMMAND_H(ExternalOperationHandler, Update)
 {
-    if (!checkTimestampMutationPreconditions(
-            *cmd, getBucketId(cmd->getDocumentId()),
-            getMetrics().updates[cmd->getLoadType()]))
-    {
+    auto& metrics = getMetrics().updates[cmd->getLoadType()];
+    if (!checkTimestampMutationPreconditions(*cmd, getBucketId(cmd->getDocumentId()), metrics)) {
         return true;
     }
 
@@ -158,9 +162,11 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, Update)
     }
     auto handle = _mutationSequencer.try_acquire(cmd->getDocumentId());
     if (allowMutation(handle)) {
-        _op = std::make_shared<TwoPhaseUpdateOperation>(*this, cmd, getMetrics(), std::move(handle));
+        _op = std::make_shared<TwoPhaseUpdateOperation>(*this,
+                                                        _bucketSpaceRepo.get(cmd->getBucket().getBucketSpace()),
+                                                        cmd, getMetrics(), std::move(handle));
     } else {
-        sendUp(makeConcurrentMutationRejectionReply(*cmd, cmd->getDocumentId()));
+        sendUp(makeConcurrentMutationRejectionReply(*cmd, cmd->getDocumentId(), metrics));
     }
 
     return true;
@@ -169,10 +175,8 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, Update)
 
 IMPL_MSG_COMMAND_H(ExternalOperationHandler, Remove)
 {
-    if (!checkTimestampMutationPreconditions(
-            *cmd, getBucketId(cmd->getDocumentId()),
-            getMetrics().removes[cmd->getLoadType()]))
-    {
+    auto& metrics = getMetrics().removes[cmd->getLoadType()];
+    if (!checkTimestampMutationPreconditions(*cmd, getBucketId(cmd->getDocumentId()), metrics)) {
         return true;
     }
 
@@ -181,13 +185,15 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, Remove)
     }
     auto handle = _mutationSequencer.try_acquire(cmd->getDocumentId());
     if (allowMutation(handle)) {
+        auto &distributorBucketSpace(_bucketSpaceRepo.get(cmd->getBucket().getBucketSpace()));
         _op = std::make_shared<RemoveOperation>(
                 *this,
+                distributorBucketSpace,
                 cmd,
                 getMetrics().removes[cmd->getLoadType()],
                 std::move(handle));
     } else {
-        sendUp(makeConcurrentMutationRejectionReply(*cmd, cmd->getDocumentId()));
+        sendUp(makeConcurrentMutationRejectionReply(*cmd, cmd->getDocumentId(), metrics));
     }
 
     return true;
@@ -197,8 +203,9 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, RemoveLocation)
 {
     document::BucketId bid;
     RemoveLocationOperation::getBucketId(*this, *cmd, bid);
+    document::Bucket bucket(cmd->getBucket().getBucketSpace(), bid);
 
-    if (!checkDistribution(*cmd, bid)) {
+    if (!checkDistribution(*cmd, bucket)) {
         LOG(debug,
             "Distributor manager received %s with wrong distribution",
             cmd->toString().c_str());
@@ -210,6 +217,7 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, RemoveLocation)
 
     _op = Operation::SP(new RemoveLocationOperation(
                                 *this,
+                                _bucketSpaceRepo.get(cmd->getBucket().getBucketSpace()),
                                 cmd,
                                 getMetrics().removelocations[cmd->getLoadType()]));
     return true;
@@ -217,12 +225,13 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, RemoveLocation)
 
 IMPL_MSG_COMMAND_H(ExternalOperationHandler, Get)
 {
-    if (!checkDistribution(*cmd, getBucketId(cmd->getDocumentId()))) {
+    document::Bucket bucket(cmd->getBucket().getBucketSpace(), getBucketId(cmd->getDocumentId()));
+    if (!checkDistribution(*cmd, bucket)) {
         LOG(debug,
             "Distributor manager received get for %s, "
             "bucket %s with wrong distribution",
             cmd->getDocumentId().toString().c_str(),
-            getBucketId(cmd->getDocumentId()).toString().c_str());
+            bucket.toString().c_str());
 
         getMetrics().gets[cmd->getLoadType()].failures.wrongdistributor++;
         return true;
@@ -230,6 +239,7 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, Get)
 
     _op = Operation::SP(new GetOperation(
                                 *this,
+                                _bucketSpaceRepo.get(cmd->getBucket().getBucketSpace()),
                                 cmd,
                                 getMetrics().gets[cmd->getLoadType()]));
     return true;
@@ -237,16 +247,17 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, Get)
 
 IMPL_MSG_COMMAND_H(ExternalOperationHandler, MultiOperation)
 {
-    if (!checkDistribution(*cmd, cmd->getBucketId())) {
+    if (!checkDistribution(*cmd, cmd->getBucket())) {
         LOG(debug,
             "Distributor manager received multi-operation message, "
             "bucket %s with wrong distribution",
-            cmd->getBucketId().toString().c_str());
+            cmd->getBucket().toString().c_str());
         return true;
     }
 
     _op = Operation::SP(new MultiOperationOperation(
                                 *this,
+                                _bucketSpaceRepo.get(cmd->getBucket().getBucketSpace()),
                                 cmd,
                                 getMetrics().multioperations[cmd->getLoadType()]));
     return true;
@@ -254,21 +265,24 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, MultiOperation)
 
 IMPL_MSG_COMMAND_H(ExternalOperationHandler, StatBucket)
 {
-    if (!checkDistribution(*cmd, cmd->getBucketId())) {
+    if (!checkDistribution(*cmd, cmd->getBucket())) {
         return true;
     }
-
-    _op = Operation::SP(new StatBucketOperation(*this, cmd));
+    auto &distributorBucketSpace(_bucketSpaceRepo.get(cmd->getBucket().getBucketSpace()));
+    _op = Operation::SP(new StatBucketOperation(*this, distributorBucketSpace, cmd));
     return true;
 }
 
 IMPL_MSG_COMMAND_H(ExternalOperationHandler, GetBucketList)
 {
-    if (!checkDistribution(*cmd, cmd->getBucketId())) {
+    if (!checkDistribution(*cmd, cmd->getBucket())) {
         return true;
     }
+    auto bucketSpace(cmd->getBucket().getBucketSpace());
+    auto &distributorBucketSpace(_bucketSpaceRepo.get(bucketSpace));
+    auto &bucketDatabase(distributorBucketSpace.getBucketDatabase());
     _op = Operation::SP(new StatBucketListOperation(
-            getBucketDatabase(), _operationGenerator, getIndex(), cmd));
+            bucketDatabase, _operationGenerator, getIndex(), cmd));
     return true;
 }
 
@@ -277,7 +291,8 @@ IMPL_MSG_COMMAND_H(ExternalOperationHandler, CreateVisitor)
     const DistributorConfiguration& config(getDistributor().getConfig());
     VisitorOperation::Config visitorConfig(config.getMinBucketsPerVisitor(),
                                            config.getMaxVisitorsPerNodePerClientVisitor());
-    _op = Operation::SP(new VisitorOperation(*this, cmd, visitorConfig, getMetrics().visits[cmd->getLoadType()]));
+    auto &distributorBucketSpace(_bucketSpaceRepo.get(cmd->getBucket().getBucketSpace()));
+    _op = Operation::SP(new VisitorOperation(*this, distributorBucketSpace, cmd, visitorConfig, getMetrics().visits[cmd->getLoadType()]));
     return true;
 }
 

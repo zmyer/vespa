@@ -5,25 +5,27 @@
 #include <vespa/storage/distributor/operations/sequenced_operation.h>
 #include <vespa/storageapi/messageapi/returncode.h>
 #include <vespa/storage/distributor/persistencemessagetracker.h>
-#include <vespa/storage/distributor/operationtargetresolver.h>
 
 namespace document {
     class Document;
 }
-namespace storage {
-namespace lib {
+namespace storage::lib {
     class Distribution;
 }
-namespace api {
+namespace storage::api {
     class CreateBucketReply;
     class PutCommand;
 }
-namespace distributor {
+namespace storage::distributor {
+
+class DistributorBucketSpace;
+class OperationTargetList;
 
 class PutOperation : public SequencedOperation
 {
 public:
     PutOperation(DistributorComponent& manager,
+                 DistributorBucketSpace &bucketSpace,
                  const std::shared_ptr<api::PutCommand> & msg,
                  PersistenceOperationMetricSet& metric,
                  SequencingHandle sequencingHandle = SequencingHandle());
@@ -63,6 +65,7 @@ private:
             std::vector<MessageTracker::ToSend>& messagesToSend);
 
     void sendPutToBucketOnNode(
+            document::BucketSpace bucketSpace,
             const document::BucketId& bucketId,
             const uint16_t node,
             std::vector<PersistenceMessageTracker::ToSend>& putBatch);
@@ -71,7 +74,7 @@ private:
 
     std::shared_ptr<api::PutCommand> _msg;
     DistributorComponent& _manager;
+    DistributorBucketSpace &_bucketSpace;
 };
 
-} // distributor
-} // storage
+}

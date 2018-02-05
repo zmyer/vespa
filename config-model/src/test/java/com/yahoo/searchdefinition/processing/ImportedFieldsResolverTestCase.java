@@ -18,6 +18,8 @@ import com.yahoo.searchdefinition.document.SDField;
 import com.yahoo.searchdefinition.document.TemporaryImportedField;
 import com.yahoo.searchdefinition.document.TemporarySDField;
 import com.yahoo.tensor.TensorType;
+import com.yahoo.vespa.documentmodel.DocumentSummary;
+import com.yahoo.vespa.documentmodel.SummaryField;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
@@ -36,18 +38,23 @@ public class ImportedFieldsResolverTestCase {
     @Rule
     public final ExpectedException exceptionRule = ExpectedException.none();
 
-    @Test
-    public void valid_imported_fields_are_resolved() {
+    private void resolve_imported_field(String fieldName, String targetFieldName) {
         SearchModel model = new SearchModel();
-        model.addImportedField("my_attribute_field", "ref", "attribute_field").resolve();
+        model.addImportedField(fieldName, "ref", targetFieldName).resolve();
 
         assertEquals(1, model.importedFields.fields().size());
-        ImportedField myField = model.importedFields.fields().get("my_attribute_field");
+        ImportedField myField = model.importedFields.fields().get(fieldName);
         assertNotNull(myField);
-        assertEquals("my_attribute_field", myField.fieldName());
+        assertEquals(fieldName, myField.fieldName());
         assertSame(model.childSearch.getConcreteField("ref"), myField.reference().referenceField());
         assertSame(model.parentSearch, myField.reference().targetSearch());
-        assertSame(model.parentSearch.getConcreteField("attribute_field"), myField.targetField());
+        assertSame(model.parentSearch.getConcreteField(targetFieldName), myField.targetField());
+    }
+
+    @Test
+    public void valid_imported_fields_are_resolved() {
+	resolve_imported_field("my_attribute_field", "attribute_field");
+	resolve_imported_field("my_tensor_field", "tensor_field");
     }
 
     @Test
@@ -86,17 +93,6 @@ public class ImportedFieldsResolverTestCase {
     }
 
     @Test
-    public void resolver_fails_if_imported_field_is_tensor_type() {
-        exceptionRule.expect(IllegalArgumentException.class);
-        exceptionRule.expectMessage(
-                "For search 'child', import field 'my_tensor_field': " +
-                        "Field 'tensor_field' via reference field 'ref': Is of type 'tensor'. Not supported");
-        new SearchModel()
-                .addImportedField("my_tensor_field", "ref", "tensor_field")
-                .resolve();
-    }
-
-    @Test
     public void resolver_fails_if_imported_field_is_also_an_imported_field() {
         exceptionRule.expect(IllegalArgumentException.class);
         exceptionRule.expectMessage(
@@ -107,7 +103,7 @@ public class ImportedFieldsResolverTestCase {
                 .resolve();
     }
 
-    private static class SearchModel {
+    static class SearchModel {
 
         private final ApplicationPackage app = MockApplicationPackage.createEmpty();
         public final Search grandParentSearch;
@@ -124,6 +120,7 @@ public class ImportedFieldsResolverTestCase {
             parentSearch.getDocument().addField(createField("attribute_and_index", DataType.INT, "{ attribute | index }"));
             parentSearch.getDocument().addField(new TemporarySDField("not_attribute", DataType.INT));
             parentSearch.getDocument().addField(createField("tensor_field", new TensorDataType(TensorType.fromSpec("tensor(x[])")), "{ attribute }"));
+            parentSearch.getDocument().addField(createField("predicate_field", DataType.PREDICATE, "{ attribute }"));
             addRefField(parentSearch, grandParentSearch, "ref");
             addImportedField(parentSearch, "ancient_field", "ref", "ancient_field");
 
@@ -160,6 +157,16 @@ public class ImportedFieldsResolverTestCase {
 
         private SearchModel addImportedField(Search search, String fieldName, String referenceFieldName, String targetFieldName) {
             search.temporaryImportedFields().get().add(new TemporaryImportedField(fieldName, referenceFieldName, targetFieldName));
+            return this;
+        }
+
+        public SearchModel addSummaryField(String fieldName, DataType dataType) {
+            DocumentSummary summary = childSearch.getSummary("my_summary");
+            if (summary == null) {
+                summary = new DocumentSummary("my_summary");
+                childSearch.addSummary(summary);
+            }
+            summary.add(new SummaryField(fieldName, dataType));
             return this;
         }
 

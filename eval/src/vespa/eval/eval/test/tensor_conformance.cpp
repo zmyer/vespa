@@ -12,6 +12,8 @@
 #include <vespa/vespalib/objects/nbostream.h>
 #include <vespa/vespalib/data/slime/slime.h>
 #include <vespa/vespalib/io/mapped_file_input.h>
+#include "tensor_model.hpp"
+#include "test_io.h"
 
 namespace vespalib {
 namespace eval {
@@ -21,237 +23,6 @@ namespace {
 using slime::Cursor;
 using slime::Inspector;
 using slime::JsonFormat;
-
-// Random access sequence of numbers
-struct Sequence {
-    virtual double operator[](size_t i) const = 0;
-    virtual ~Sequence() {}
-};
-
-// Sequence of natural numbers (starting at 1)
-struct N : Sequence {
-    double operator[](size_t i) const override { return (1.0 + i); }
-};
-
-// Sequence of another sequence divided by 10
-struct Div10 : Sequence {
-    const Sequence &seq;
-    Div10(const Sequence &seq_in) : seq(seq_in) {}
-    double operator[](size_t i) const override { return (seq[i] / 10.0); }
-};
-
-// Sequence of another sequence minus 2
-struct Sub2 : Sequence {
-    const Sequence &seq;
-    Sub2(const Sequence &seq_in) : seq(seq_in) {}
-    double operator[](size_t i) const override { return (seq[i] - 2.0); }
-};
-
-// Sequence of a unary operator applied to a sequence
-struct OpSeq : Sequence {
-    const Sequence &seq;
-    const UnaryOperation &op;
-    OpSeq(const Sequence &seq_in, const UnaryOperation &op_in) : seq(seq_in), op(op_in) {}
-    double operator[](size_t i) const override { return op.eval(seq[i]); }
-};
-
-// Sequence of applying sigmoid to another sequence
-struct Sigmoid : Sequence {
-    const Sequence &seq;
-    Sigmoid(const Sequence &seq_in) : seq(seq_in) {}
-    double operator[](size_t i) const override { return operation::Sigmoid().eval(seq[i]); }
-};
-
-// pre-defined sequence of numbers
-struct Seq : Sequence {
-    std::vector<double> seq;
-    Seq() : seq() {}
-    Seq(const std::vector<double> &seq_in) : seq(seq_in) {}
-    double operator[](size_t i) const override {
-        ASSERT_LESS(i, seq.size());
-        return seq[i];
-    }
-};
-
-// Random access bit mask
-struct Mask {
-    virtual bool operator[](size_t i) const = 0;
-    virtual ~Mask() {}
-};
-
-// Mask with all bits set
-struct All : Mask {
-    bool operator[](size_t) const override { return true; }
-};
-
-// Mask with no bits set
-struct None : Mask {
-    bool operator[](size_t) const override { return false; }
-};
-
-// Mask with false for each Nth index
-struct SkipNth : Mask {
-    size_t n;
-    SkipNth(size_t n_in) : n(n_in) {}
-    bool operator[](size_t i) const override { return (i % n) != 0; }
-};
-
-// pre-defined mask
-struct Bits : Mask {
-    std::vector<bool> bits;
-    Bits(const std::vector<bool> &bits_in) : bits(bits_in) {}
-    ~Bits() { }
-    bool operator[](size_t i) const override {
-        ASSERT_LESS(i, bits.size());
-        return bits[i];
-    }
-};
-
-// A mask converted to a sequence of two unique values (mapped from true and false)
-struct Mask2Seq : Sequence {
-    const Mask &mask;
-    double true_value;
-    double false_value;
-    Mask2Seq(const Mask &mask_in, double true_value_in = 1.0, double false_value_in = 0.0)
-        : mask(mask_in), true_value(true_value_in), false_value(false_value_in) {}
-    double operator[](size_t i) const override { return mask[i] ? true_value : false_value; }
-};
-
-// custom op1
-struct MyOp : CustomUnaryOperation {
-    double eval(double a) const override { return ((a + 1) * 2); }
-};
-
-// A collection of labels for a single dimension
-struct Domain {
-    vespalib::string dimension;
-    size_t size; // indexed
-    std::vector<vespalib::string> keys; // mapped
-    Domain(const vespalib::string &dimension_in, size_t size_in)
-        : dimension(dimension_in), size(size_in), keys() {}
-    Domain(const vespalib::string &dimension_in, const std::vector<vespalib::string> &keys_in)
-        : dimension(dimension_in), size(0), keys(keys_in) {}
-    ~Domain();
-};
-
-Domain::~Domain() { }
-
-using Layout = std::vector<Domain>;
-
-Domain x() { return Domain("x", {}); }
-Domain x(size_t size) { return Domain("x", size); }
-Domain x(const std::vector<vespalib::string> &keys) { return Domain("x", keys); }
-
-Domain y() { return Domain("y", {}); }
-Domain y(size_t size) { return Domain("y", size); }
-Domain y(const std::vector<vespalib::string> &keys) { return Domain("y", keys); }
-
-Domain z(size_t size) { return Domain("z", size); }
-Domain z(const std::vector<vespalib::string> &keys) { return Domain("z", keys); }
-
-// Infer the tensor type spanned by the given spaces
-vespalib::string infer_type(const Layout &layout) {
-    if (layout.empty()) {
-        return "double";
-    }
-    std::vector<ValueType::Dimension> dimensions;
-    for (const auto &domain: layout) {
-        if (domain.size == 0) {
-            dimensions.emplace_back(domain.dimension); // mapped
-        } else {
-            dimensions.emplace_back(domain.dimension, domain.size); // indexed
-        }
-    }
-    return ValueType::tensor_type(dimensions).to_spec();
-}
-
-// Wrapper for the things needed to generate a tensor
-struct Source {
-    using Address = TensorSpec::Address;
-
-    const Layout   &layout;
-    const Sequence &seq;
-    const Mask     &mask;
-    Source(const Layout &layout_in, const Sequence &seq_in, const Mask &mask_in)
-        : layout(layout_in), seq(seq_in), mask(mask_in) {}
-};
-
-// Mix layout with a number sequence to make a tensor spec
-class TensorSpecBuilder
-{
-private:
-    using Label = TensorSpec::Label;
-    using Address = TensorSpec::Address;
-
-    Source     _source;
-    TensorSpec _spec;
-    Address    _addr;
-    size_t     _idx;
-
-    void generate(size_t layout_idx) {
-        if (layout_idx == _source.layout.size()) {
-            if (_source.mask[_idx]) {
-                _spec.add(_addr, _source.seq[_idx]);
-            }
-            ++_idx;
-        } else {
-            const Domain &domain = _source.layout[layout_idx];
-            if (domain.size > 0) { // indexed
-                for (size_t i = 0; i < domain.size; ++i) {
-                    _addr.emplace(domain.dimension, Label(i)).first->second = Label(i);
-                    generate(layout_idx + 1);
-                }
-            } else { // mapped
-                for (const vespalib::string &key: domain.keys) {
-                    _addr.emplace(domain.dimension, Label(key)).first->second = Label(key);
-                    generate(layout_idx + 1);
-                }
-            }
-        }
-    }
-
-public:
-    TensorSpecBuilder(const Layout &layout, const Sequence &seq, const Mask &mask)
-        : _source(layout, seq, mask), _spec(infer_type(layout)), _addr(), _idx(0) {}
-    TensorSpec build() {
-        generate(0);
-        return _spec;
-    }
-};
-TensorSpec spec(const Layout &layout, const Sequence &seq, const Mask &mask) {
-    return TensorSpecBuilder(layout, seq, mask).build();
-}
-TensorSpec spec(const Layout &layout, const Sequence &seq) {
-    return spec(layout, seq, All());
-}
-TensorSpec spec(const Layout &layout) {
-    return spec(layout, Seq(), None());
-}
-TensorSpec spec(const Domain &domain, const Sequence &seq, const Mask &mask) {
-    return spec(Layout({domain}), seq, mask);
-}
-TensorSpec spec(const Domain &domain, const Sequence &seq) {
-    return spec(Layout({domain}), seq);
-}
-TensorSpec spec(const Domain &domain) {
-    return spec(Layout({domain}));
-}
-TensorSpec spec(double value) {
-    return spec(Layout({}), Seq({value}));
-}
-TensorSpec spec() {
-    return spec(Layout({}));
-}
-
-TensorSpec spec(const vespalib::string &type,
-                const std::vector<std::pair<TensorSpec::Address, TensorSpec::Value>> &cells) {
-    TensorSpec spec("tensor(" + type + ")");
-
-    for (const auto &cell : cells) {
-        spec.add(cell.first, cell.second);
-    }
-    return spec;
-}
 
 double as_double(const TensorSpec &spec) {
     return spec.cells().empty() ? 0.0 : spec.cells().begin()->second.value;
@@ -267,18 +38,17 @@ struct Eval {
         double _number;
         TensorSpec _tensor;
     public:
-        Result(const Value &value) : _type(Type::ERROR), _number(error_value), _tensor("error") {
+        Result() : _type(Type::ERROR), _number(error_value), _tensor("error") {}
+        Result(const TensorEngine &engine, const Value &value) : _type(Type::ERROR), _number(error_value), _tensor("error") {
             if (value.is_double()) {
                 _type = Type::NUMBER;
-                _number = value.as_double();
-                _tensor = TensorSpec("double").add({}, _number);
-            } else if (value.is_tensor()) {
-                _type = Type::TENSOR;
-                _tensor = value.as_tensor()->engine().to_spec(*value.as_tensor());
-                if (_tensor.type() == "double") {
-                    _number = as_double(_tensor);
-                }
             }
+            if (value.is_tensor()) {
+                EXPECT_TRUE(_type == Type::ERROR);
+                _type = Type::TENSOR;
+            }
+            _number = value.as_double();
+            _tensor = engine.to_spec(value);
         }
         bool is_error() const { return (_type == Type::ERROR); }
         bool is_number() const { return (_type == Type::NUMBER); }
@@ -289,20 +59,20 @@ struct Eval {
         }
         const TensorSpec &tensor() const {
             EXPECT_TRUE(is_tensor());
-            return _tensor;            
+            return _tensor;
         }
     };
     virtual Result eval(const TensorEngine &) const {
         TEST_ERROR("wrong signature");
-        return Result(ErrorValue());
+        return Result();
     }
     virtual Result eval(const TensorEngine &, const TensorSpec &) const {
         TEST_ERROR("wrong signature");
-        return Result(ErrorValue());
+        return Result();
     }
     virtual Result eval(const TensorEngine &, const TensorSpec &, const TensorSpec &) const {
         TEST_ERROR("wrong signature");
-        return Result(ErrorValue());
+        return Result();
     }
     virtual ~Eval() {}
 };
@@ -316,7 +86,7 @@ struct SafeEval : Eval {
             return unsafe.eval(engine);
         } catch (std::exception &e) {
             TEST_ERROR(e.what());
-            return Result(ErrorValue());
+            return Result();
         }
     }
     Result eval(const TensorEngine &engine, const TensorSpec &a) const override {
@@ -324,7 +94,7 @@ struct SafeEval : Eval {
             return unsafe.eval(engine, a);
         } catch (std::exception &e) {
             TEST_ERROR(e.what());
-            return Result(ErrorValue());
+            return Result();
         }
 
     }
@@ -333,7 +103,7 @@ struct SafeEval : Eval {
             return unsafe.eval(engine, a, b);
         } catch (std::exception &e) {
             TEST_ERROR(e.what());
-            return Result(ErrorValue());
+            return Result();
         }
     }
 };
@@ -353,8 +123,8 @@ struct Expr_V : Eval {
         NodeTypes types(fun, {});
         InterpretedFunction ifun(engine, fun, types);
         InterpretedFunction::Context ctx(ifun);
-        InterpretedFunction::SimpleObjectParams params({});
-        return Result(check_type(ifun.eval(ctx, params), types.get_type(fun.root())));
+        SimpleObjectParams params({});
+        return Result(engine, check_type(ifun.eval(ctx, params), types.get_type(fun.root())));
     }
 };
 
@@ -368,9 +138,9 @@ struct Expr_T : Eval {
         NodeTypes types(fun, {a_type});
         InterpretedFunction ifun(engine, fun, types);
         InterpretedFunction::Context ctx(ifun);
-        TensorValue va(engine.create(a));
-        InterpretedFunction::SimpleObjectParams params({va});
-        return Result(check_type(ifun.eval(ctx, params), types.get_type(fun.root())));
+        Value::UP va = engine.from_spec(a);
+        SimpleObjectParams params({*va});
+        return Result(engine, check_type(ifun.eval(ctx, params), types.get_type(fun.root())));
     }
 };
 
@@ -385,53 +155,16 @@ struct Expr_TT : Eval {
         NodeTypes types(fun, {a_type, b_type});
         InterpretedFunction ifun(engine, fun, types);
         InterpretedFunction::Context ctx(ifun);
-        TensorValue va(engine.create(a));
-        TensorValue vb(engine.create(b));
-        InterpretedFunction::SimpleObjectParams params({va,vb});
-        return Result(check_type(ifun.eval(ctx, params), types.get_type(fun.root())));
+        Value::UP va = engine.from_spec(a);
+        Value::UP vb = engine.from_spec(b);
+        SimpleObjectParams params({*va,*vb});
+        return Result(engine, check_type(ifun.eval(ctx, params), types.get_type(fun.root())));
     }
 };
 
 const Value &make_value(const TensorEngine &engine, const TensorSpec &spec, Stash &stash) {
-    if (spec.type() == "double") {
-        double number = as_double(spec);
-        return stash.create<DoubleValue>(number);
-    }
-    return stash.create<TensorValue>(engine.create(spec));
+    return *stash.create<Value::UP>(engine.from_spec(spec));
 }
-
-// evaluate tensor reduce operation using tensor engine immediate api
-struct ImmediateReduceOld : Eval {
-    const BinaryOperation &op;
-    std::vector<vespalib::string> dimensions;
-    ImmediateReduceOld(const BinaryOperation &op_in) : op(op_in), dimensions() {}
-    ImmediateReduceOld(const BinaryOperation &op_in, const vespalib::string &dimension)
-        : op(op_in), dimensions({dimension}) {}    
-    Result eval(const TensorEngine &engine, const TensorSpec &a) const override {
-        Stash stash;
-        return Result(engine.reduce(*engine.create(a), op, dimensions, stash));
-    }
-};
-
-// evaluate tensor map operation using tensor engine immediate api
-struct ImmediateMapOld : Eval {
-    const UnaryOperation &op;
-    ImmediateMapOld(const UnaryOperation &op_in) : op(op_in) {}
-    Result eval(const TensorEngine &engine, const TensorSpec &a) const override {
-        Stash stash;
-        return Result(engine.map(op, *engine.create(a), stash));
-    }
-};
-
-// evaluate tensor apply operation using tensor engine immediate api
-struct ImmediateApplyOld : Eval {
-    const BinaryOperation &op;
-    ImmediateApplyOld(const BinaryOperation &op_in) : op(op_in) {}
-    Result eval(const TensorEngine &engine, const TensorSpec &a, const TensorSpec &b) const override {
-        Stash stash;
-        return Result(engine.apply(op, *engine.create(a), *engine.create(b), stash));
-    }
-};
 
 //-----------------------------------------------------------------------------
 
@@ -441,34 +174,36 @@ struct ImmediateReduce : Eval {
     std::vector<vespalib::string> dimensions;
     ImmediateReduce(Aggr aggr_in) : aggr(aggr_in), dimensions() {}
     ImmediateReduce(Aggr aggr_in, const vespalib::string &dimension)
-        : aggr(aggr_in), dimensions({dimension}) {}    
+        : aggr(aggr_in), dimensions({dimension}) {}
     Result eval(const TensorEngine &engine, const TensorSpec &a) const override {
         Stash stash;
         const auto &lhs = make_value(engine, a, stash);
-        return Result(engine.reduce(lhs, aggr, dimensions, stash));
+        return Result(engine, engine.reduce(lhs, aggr, dimensions, stash));
     }
 };
 
 // evaluate tensor map operation using tensor engine immediate api
 struct ImmediateMap : Eval {
-    std::function<double(double)> function;
-    ImmediateMap(const std::function<double(double)> &function_in) : function(function_in) {}
+    using fun_t = double (*)(double);
+    fun_t function;
+    ImmediateMap(fun_t function_in) : function(function_in) {}
     Result eval(const TensorEngine &engine, const TensorSpec &a) const override {
         Stash stash;
         const auto &lhs = make_value(engine, a, stash);
-        return Result(engine.map(lhs, function, stash));
+        return Result(engine, engine.map(lhs, function, stash));
     }
 };
 
-// evaluate tensor map operation using tensor engine immediate api
+// evaluate tensor join operation using tensor engine immediate api
 struct ImmediateJoin : Eval {
-    std::function<double(double,double)> function;
-    ImmediateJoin(const std::function<double(double,double)> &function_in) : function(function_in) {}
+    using fun_t = double (*)(double, double);
+    fun_t function;
+    ImmediateJoin(fun_t function_in) : function(function_in) {}
     Result eval(const TensorEngine &engine, const TensorSpec &a, const TensorSpec &b) const override {
         Stash stash;
         const auto &lhs = make_value(engine, a, stash);
         const auto &rhs = make_value(engine, b, stash);
-        return Result(engine.join(lhs, rhs, function, stash));
+        return Result(engine, engine.join(lhs, rhs, function, stash));
     }
 };
 
@@ -480,7 +215,7 @@ struct ImmediateConcat : Eval {
         Stash stash;
         const auto &lhs = make_value(engine, a, stash);
         const auto &rhs = make_value(engine, b, stash);
-        return Result(engine.concat(lhs, rhs, dimension, stash));
+        return Result(engine, engine.concat(lhs, rhs, dimension, stash));
     }
 };
 
@@ -493,91 +228,11 @@ struct ImmediateRename : Eval {
     Result eval(const TensorEngine &engine, const TensorSpec &a) const override {
         Stash stash;
         const auto &lhs = make_value(engine, a, stash);
-        return Result(engine.rename(lhs, from, to, stash));
+        return Result(engine, engine.rename(lhs, from, to, stash));
     }
 };
 
 //-----------------------------------------------------------------------------
-
-const size_t tensor_id_a = 11;
-const size_t tensor_id_b = 12;
-const size_t map_operation_id = 22;
-
-// input used when evaluating in retained mode
-struct Input : TensorFunction::Input {
-    std::vector<TensorValue> tensors;
-    const UnaryOperation *map_op;
-    Input(std::unique_ptr<Tensor> a) : tensors(), map_op(nullptr) {
-        tensors.emplace_back(std::move(a));
-    }
-    Input(std::unique_ptr<Tensor> a, const UnaryOperation &op) : tensors(), map_op(&op) {
-        tensors.emplace_back(std::move(a));
-    }
-    Input(std::unique_ptr<Tensor> a, std::unique_ptr<Tensor> b) : tensors(), map_op(nullptr) {
-        tensors.emplace_back(std::move(a));
-        tensors.emplace_back(std::move(b));
-    }
-    const Value &get_tensor(size_t id) const override {
-        size_t offset = (id - tensor_id_a);
-        ASSERT_GREATER(tensors.size(), offset);
-        return tensors[offset];
-    }
-    const UnaryOperation &get_map_operation(size_t id) const override {
-        ASSERT_TRUE(map_op != nullptr);
-        ASSERT_EQUAL(id, map_operation_id);
-        return *map_op;
-    }
-};
-
-// evaluate tensor reduce operation using tensor engine retained api
-struct RetainedReduce : Eval {
-    const BinaryOperation &op;
-    std::vector<vespalib::string> dimensions;
-    RetainedReduce(const BinaryOperation &op_in) : op(op_in), dimensions() {}
-    RetainedReduce(const BinaryOperation &op_in, const vespalib::string &dimension)
-        : op(op_in), dimensions({dimension}) {}
-    Result eval(const TensorEngine &engine, const TensorSpec &a) const override {
-        auto a_type = ValueType::from_spec(a.type());
-        auto ir = tensor_function::reduce(tensor_function::inject(a_type, tensor_id_a), op, dimensions);
-        ValueType expect_type = ir->result_type;
-        auto fun = engine.compile(std::move(ir));
-        Input input(engine.create(a));
-        Stash stash;
-        return Result(check_type(fun->eval(input, stash), expect_type));
-    }
-};
-
-// evaluate tensor map operation using tensor engine retained api
-struct RetainedMap : Eval {
-    const UnaryOperation &op;
-    RetainedMap(const UnaryOperation &op_in) : op(op_in) {}
-    Result eval(const TensorEngine &engine, const TensorSpec &a) const override {
-        auto a_type = ValueType::from_spec(a.type());
-        auto ir = tensor_function::map(map_operation_id, tensor_function::inject(a_type, tensor_id_a));
-        ValueType expect_type = ir->result_type;
-        auto fun = engine.compile(std::move(ir));
-        Input input(engine.create(a), op);
-        Stash stash;
-        return Result(check_type(fun->eval(input, stash), expect_type));
-    }
-};
-
-// evaluate tensor apply operation using tensor engine retained api
-struct RetainedApply : Eval {
-    const BinaryOperation &op;
-    RetainedApply(const BinaryOperation &op_in) : op(op_in) {}
-    Result eval(const TensorEngine &engine, const TensorSpec &a, const TensorSpec &b) const override {
-        auto a_type = ValueType::from_spec(a.type());
-        auto b_type = ValueType::from_spec(b.type());
-        auto ir = tensor_function::apply(op, tensor_function::inject(a_type, tensor_id_a),
-                                         tensor_function::inject(b_type, tensor_id_b));
-        ValueType expect_type = ir->result_type;
-        auto fun = engine.compile(std::move(ir));
-        Input input(engine.create(a), engine.create(b));
-        Stash stash;
-        return Result(check_type(fun->eval(input, stash), expect_type));
-    }
-};
 
 // placeholder used for unused values in a sequence
 const double X = error_value;
@@ -638,21 +293,15 @@ struct TestContext {
     TestContext(const vespalib::string &module_path_in, const TensorEngine &engine_in)
         : module_path(module_path_in), ref_engine(SimpleTensorEngine::ref()), engine(engine_in) {}
 
-    std::unique_ptr<Tensor> tensor(const TensorSpec &spec) {
-        auto result = engine.create(spec);
-        EXPECT_EQUAL(spec.type(), engine.type_of(*result).to_spec());
-        return result;
-    }
-
     //-------------------------------------------------------------------------
 
     void verify_create_type(const vespalib::string &type_spec) {
-        auto tensor = engine.create(TensorSpec(type_spec));
-        EXPECT_TRUE(&engine == &tensor->engine());
-        EXPECT_EQUAL(type_spec, engine.type_of(*tensor).to_spec());
+        Value::UP value = engine.from_spec(TensorSpec(type_spec));
+        EXPECT_EQUAL(type_spec, value->type().to_spec());
     }
 
     void test_tensor_create_type() {
+        TEST_DO(verify_create_type("error"));
         TEST_DO(verify_create_type("double"));
         TEST_DO(verify_create_type("tensor(x{})"));
         TEST_DO(verify_create_type("tensor(x{},y{})"));
@@ -664,103 +313,8 @@ struct TestContext {
 
     //-------------------------------------------------------------------------
 
-    void verify_equal(const TensorSpec &a, const TensorSpec &b) {
-        auto ta = tensor(a);
-        auto tb = tensor(b);
-        EXPECT_EQUAL(a, b);
-        EXPECT_EQUAL(*ta, *tb);
-        TensorSpec spec = engine.to_spec(*ta);
-        TensorSpec ref_spec = ref_engine.to_spec(*ref_engine.create(a));
-        EXPECT_EQUAL(spec, ref_spec);
-    }
-
-    void test_tensor_equality() {
-        TEST_DO(verify_equal(spec(), spec()));
-        TEST_DO(verify_equal(spec(10.0), spec(10.0)));
-        TEST_DO(verify_equal(spec(x()), spec(x())));
-        TEST_DO(verify_equal(spec(x({"a"}), Seq({1})), spec(x({"a"}), Seq({1}))));
-        TEST_DO(verify_equal(spec({x({"a"}),y({"a"})}, Seq({1})), spec({y({"a"}),x({"a"})}, Seq({1}))));
-        TEST_DO(verify_equal(spec(x(3)), spec(x(3))));
-        TEST_DO(verify_equal(spec({x(1),y(1)}, Seq({1})), spec({y(1),x(1)}, Seq({1}))));
-        TEST_DO(verify_equal(spec({x({"a"}),y(1)}, Seq({1})), spec({y(1),x({"a"})}, Seq({1}))));
-        TEST_DO(verify_equal(spec({y({"a"}),x(1)}, Seq({1})), spec({x(1),y({"a"})}, Seq({1}))));
-    }
-
-    //-------------------------------------------------------------------------
-
-    void verify_not_equal(const TensorSpec &a, const TensorSpec &b) {
-        auto ta = tensor(a);
-        auto tb = tensor(b);
-        EXPECT_NOT_EQUAL(a, b);
-        EXPECT_NOT_EQUAL(b, a);
-        EXPECT_NOT_EQUAL(*ta, *tb);
-        EXPECT_NOT_EQUAL(*tb, *ta);
-    }
-
-    void test_tensor_inequality() {
-        TEST_DO(verify_not_equal(spec(1.0), spec(2.0)));
-        TEST_DO(verify_not_equal(spec(), spec(x())));
-        TEST_DO(verify_not_equal(spec(), spec(x(1))));
-        TEST_DO(verify_not_equal(spec(x()), spec(x(1))));
-        TEST_DO(verify_not_equal(spec(x()), spec(y())));
-        TEST_DO(verify_not_equal(spec(x(1)), spec(x(2))));
-        TEST_DO(verify_not_equal(spec(x(1)), spec(y(1))));
-        TEST_DO(verify_not_equal(spec(x({"a"}), Seq({1})), spec(x({"a"}), Seq({2}))));
-        TEST_DO(verify_not_equal(spec(x({"a"}), Seq({1})), spec(x({"b"}), Seq({1}))));
-        TEST_DO(verify_not_equal(spec(x({"a"}), Seq({1})), spec({x({"a"}),y({"a"})}, Seq({1}))));
-        TEST_DO(verify_not_equal(spec(x(1), Seq({1})), spec(x(1), Seq({2}))));
-        TEST_DO(verify_not_equal(spec(x(1), Seq({1})), spec(x(2), Seq({1}), Bits({1,0}))));
-        TEST_DO(verify_not_equal(spec(x(2), Seq({1,1}), Bits({1,0})),
-                                 spec(x(2), Seq({1,1}), Bits({0,1}))));
-        TEST_DO(verify_not_equal(spec(x(1), Seq({1})), spec({x(1),y(1)}, Seq({1}))));
-        TEST_DO(verify_not_equal(spec({x({"a"}),y(1)}, Seq({1})), spec({x({"a"}),y(1)}, Seq({2}))));
-        TEST_DO(verify_not_equal(spec({x({"a"}),y(1)}, Seq({1})), spec({x({"b"}),y(1)}, Seq({1}))));
-        TEST_DO(verify_not_equal(spec({x(2),y({"a"})}, Seq({1}), Bits({1,0})),
-                                 spec({x(2),y({"a"})}, Seq({X,1}), Bits({0,1}))));
-    }
-
-    //-------------------------------------------------------------------------
-
     void verify_reduce_result(const Eval &eval, const TensorSpec &a, const Eval::Result &expect) {
         TEST_DO(verify_result(eval.eval(engine, a), expect));
-    }
-
-    void test_reduce_op(Aggr aggr, const BinaryOperation &op, const Sequence &seq) {
-        std::vector<Layout> layouts = {
-            {x(3)},
-            {x(3),y(5)},
-            {x(3),y(5),z(7)},
-            {x({"a","b","c"})},
-            {x({"a","b","c"}),y({"foo","bar"})},
-            {x({"a","b","c"}),y({"foo","bar"}),z({"i","j","k","l"})},
-            {x(3),y({"foo", "bar"}),z(7)},
-            {x({"a","b","c"}),y(5),z({"i","j","k","l"})}
-        };
-        for (const Layout &layout: layouts) {
-            TensorSpec input = spec(layout, seq);
-            for (const Domain &domain: layout) {
-                Eval::Result expect = ImmediateReduceOld(op, domain.dimension).eval(ref_engine, input);
-                TEST_STATE(make_string("shape: %s, reduce dimension: %s",
-                                       infer_type(layout).c_str(), domain.dimension.c_str()).c_str());
-                vespalib::string expr = make_string("reduce(a,%s,%s)",
-                        AggrNames::name_of(aggr)->c_str(), domain.dimension.c_str());
-                TEST_DO(verify_reduce_result(Expr_T(expr), input, expect));
-                TEST_DO(verify_reduce_result(ImmediateReduceOld(op, domain.dimension), input, expect));
-                TEST_DO(verify_reduce_result(ImmediateReduce(aggr, domain.dimension), input, expect));
-                TEST_DO(verify_reduce_result(RetainedReduce(op, domain.dimension), input, expect));
-            }
-            {
-                Eval::Result expect = ImmediateReduceOld(op).eval(ref_engine, input);
-                TEST_STATE(make_string("shape: %s, reduce all dimensions",
-                                       infer_type(layout).c_str()).c_str());
-                vespalib::string expr = make_string("reduce(a,%s)",
-                        AggrNames::name_of(aggr)->c_str());
-                TEST_DO(verify_reduce_result(Expr_T(expr), input, expect));
-                TEST_DO(verify_reduce_result(ImmediateReduceOld(op), input, expect));
-                TEST_DO(verify_reduce_result(ImmediateReduce(aggr), input, expect));
-                TEST_DO(verify_reduce_result(RetainedReduce(op), input, expect));
-            }
-        }
     }
 
     void test_reduce_op(Aggr aggr, const Sequence &seq) {
@@ -799,15 +353,15 @@ struct TestContext {
     void test_tensor_reduce() {
         TEST_DO(test_reduce_op(Aggr::AVG, N()));
         TEST_DO(test_reduce_op(Aggr::COUNT, N()));
-        TEST_DO(test_reduce_op(Aggr::PROD, operation::Mul(), Sigmoid(N())));
-        TEST_DO(test_reduce_op(Aggr::SUM, operation::Add(), N()));
-        TEST_DO(test_reduce_op(Aggr::MAX, operation::Max(), N()));
-        TEST_DO(test_reduce_op(Aggr::MIN, operation::Min(), N()));
+        TEST_DO(test_reduce_op(Aggr::PROD, Sigmoid(N())));
+        TEST_DO(test_reduce_op(Aggr::SUM, N()));
+        TEST_DO(test_reduce_op(Aggr::MAX, N()));
+        TEST_DO(test_reduce_op(Aggr::MIN, N()));
     }
 
     //-------------------------------------------------------------------------
 
-    void test_map_op(const Eval &eval, const UnaryOperation &ref_op, const Sequence &seq) {
+    void test_map_op(const Eval &eval, map_fun_t ref_op, const Sequence &seq) {
         std::vector<Layout> layouts = {
             {},
             {x(3)},
@@ -824,38 +378,37 @@ struct TestContext {
         }
     }
 
-    void test_map_op(const vespalib::string &expr, const UnaryOperation &op, const Sequence &seq) {
-        auto function = [&op](double a){ return op.eval(a); };
-        TEST_DO(test_map_op(ImmediateMapOld(op), op, seq));
-        TEST_DO(test_map_op(ImmediateMap(function), op, seq));
-        TEST_DO(test_map_op(RetainedMap(op), op, seq));
+    void test_map_op(const vespalib::string &expr, map_fun_t op, const Sequence &seq) {
+        TEST_DO(test_map_op(ImmediateMap(op), op, seq));
         TEST_DO(test_map_op(Expr_T(expr), op, seq));
         TEST_DO(test_map_op(Expr_T(make_string("map(x,f(a)(%s))", expr.c_str())), op, seq));
     }
 
     void test_tensor_map() {
-        TEST_DO(test_map_op("-a", operation::Neg(), Sub2(Div10(N()))));
-        TEST_DO(test_map_op("!a", operation::Not(), Mask2Seq(SkipNth(3))));
-        TEST_DO(test_map_op("cos(a)", operation::Cos(), Div10(N())));
-        TEST_DO(test_map_op("sin(a)", operation::Sin(), Div10(N())));
-        TEST_DO(test_map_op("tan(a)", operation::Tan(), Div10(N())));
-        TEST_DO(test_map_op("cosh(a)", operation::Cosh(), Div10(N())));
-        TEST_DO(test_map_op("sinh(a)", operation::Sinh(), Div10(N())));
-        TEST_DO(test_map_op("tanh(a)", operation::Tanh(), Div10(N())));
-        TEST_DO(test_map_op("acos(a)", operation::Acos(), Sigmoid(Div10(N()))));
-        TEST_DO(test_map_op("asin(a)", operation::Asin(), Sigmoid(Div10(N()))));
-        TEST_DO(test_map_op("atan(a)", operation::Atan(), Div10(N())));
-        TEST_DO(test_map_op("exp(a)", operation::Exp(), Div10(N())));
-        TEST_DO(test_map_op("log10(a)", operation::Log10(), Div10(N())));
-        TEST_DO(test_map_op("log(a)", operation::Log(), Div10(N())));
-        TEST_DO(test_map_op("sqrt(a)", operation::Sqrt(), Div10(N())));
-        TEST_DO(test_map_op("ceil(a)", operation::Ceil(), Div10(N())));
-        TEST_DO(test_map_op("fabs(a)", operation::Fabs(), Div10(N())));
-        TEST_DO(test_map_op("floor(a)", operation::Floor(), Div10(N())));
-        TEST_DO(test_map_op("isNan(a)", operation::IsNan(), Mask2Seq(SkipNth(3), 1.0, my_nan)));
-        TEST_DO(test_map_op("relu(a)", operation::Relu(), Sub2(Div10(N()))));
-        TEST_DO(test_map_op("sigmoid(a)", operation::Sigmoid(), Sub2(Div10(N()))));
-        TEST_DO(test_map_op("(a+1)*2", MyOp(), Div10(N())));
+        TEST_DO(test_map_op("-a", operation::Neg::f, Sub2(Div10(N()))));
+        TEST_DO(test_map_op("!a", operation::Not::f, Mask2Seq(SkipNth(3))));
+        TEST_DO(test_map_op("cos(a)", operation::Cos::f, Div10(N())));
+        TEST_DO(test_map_op("sin(a)", operation::Sin::f, Div10(N())));
+        TEST_DO(test_map_op("tan(a)", operation::Tan::f, Div10(N())));
+        TEST_DO(test_map_op("cosh(a)", operation::Cosh::f, Div10(N())));
+        TEST_DO(test_map_op("sinh(a)", operation::Sinh::f, Div10(N())));
+        TEST_DO(test_map_op("tanh(a)", operation::Tanh::f, Div10(N())));
+        TEST_DO(test_map_op("acos(a)", operation::Acos::f, Sigmoid(Div10(N()))));
+        TEST_DO(test_map_op("asin(a)", operation::Asin::f, Sigmoid(Div10(N()))));
+        TEST_DO(test_map_op("atan(a)", operation::Atan::f, Div10(N())));
+        TEST_DO(test_map_op("exp(a)", operation::Exp::f, Div10(N())));
+        TEST_DO(test_map_op("log10(a)", operation::Log10::f, Div10(N())));
+        TEST_DO(test_map_op("log(a)", operation::Log::f, Div10(N())));
+        TEST_DO(test_map_op("sqrt(a)", operation::Sqrt::f, Div10(N())));
+        TEST_DO(test_map_op("ceil(a)", operation::Ceil::f, Div10(N())));
+        TEST_DO(test_map_op("fabs(a)", operation::Fabs::f, Div10(N())));
+        TEST_DO(test_map_op("floor(a)", operation::Floor::f, Div10(N())));
+        TEST_DO(test_map_op("isNan(a)", operation::IsNan::f, Mask2Seq(SkipNth(3), 1.0, my_nan)));
+        TEST_DO(test_map_op("relu(a)", operation::Relu::f, Sub2(Div10(N()))));
+        TEST_DO(test_map_op("sigmoid(a)", operation::Sigmoid::f, Sub2(Div10(N()))));
+        TEST_DO(test_map_op("elu(a)", operation::Elu::f, Sub2(Div10(N()))));
+        TEST_DO(test_map_op("a in [1,5,7,13,42]", MyIn::f, N()));
+        TEST_DO(test_map_op("(a+1)*2", MyOp::f, Div10(N())));
     }
 
     //-------------------------------------------------------------------------
@@ -868,26 +421,26 @@ struct TestContext {
     }
 
     void test_fixed_sparse_cases_apply_op(const Eval &eval,
-                                          const BinaryOperation &op)
+                                          join_fun_t op)
     {
         TEST_DO(test_apply_op(eval,
                               spec("x{}", {}),
                               spec("x{}", { { {{"x","1"}}, 3 } }),
                               spec("x{}", { { {{"x","2"}}, 5 } })));
         TEST_DO(test_apply_op(eval,
-                              spec("x{}", { { {{"x","1"}}, op.eval(3,5) } }),
+                              spec("x{}", { { {{"x","1"}}, op(3,5) } }),
                               spec("x{}", { { {{"x","1"}}, 3 } }),
                               spec("x{}", { { {{"x","1"}}, 5 } })));
         TEST_DO(test_apply_op(eval,
-                              spec("x{}", { { {{"x","1"}}, op.eval(3,-5) } }),
+                              spec("x{}", { { {{"x","1"}}, op(3,-5) } }),
                               spec("x{}", { { {{"x","1"}},  3 } }),
                               spec("x{}", { { {{"x","1"}}, -5 } })));
         TEST_DO(test_apply_op(eval,
                               spec("x{},y{},z{}",
                                    {   { {{"x","-"},{"y","2"},{"z","-"}},
-                                               op.eval(5,7) },
+                                               op(5,7) },
                                        { {{"x","1"},{"y","-"},{"z","3"}},
-                                               op.eval(3,11) } }),
+                                               op(3,11) } }),
                               spec("x{},y{}",
                                    {   { {{"x","-"},{"y","2"}},  5 },
                                        { {{"x","1"},{"y","-"}},  3 } }),
@@ -897,9 +450,9 @@ struct TestContext {
         TEST_DO(test_apply_op(eval,
                               spec("x{},y{},z{}",
                                    {   { {{"x","-"},{"y","2"},{"z","-"}},
-                                               op.eval(7,5) },
+                                               op(7,5) },
                                        { {{"x","1"},{"y","-"},{"z","3"}},
-                                               op.eval(11,3) } }),
+                                               op(11,3) } }),
                               spec("y{},z{}",
                                    {   { {{"y","-"},{"z","3"}}, 11 },
                                        { {{"y","2"},{"z","-"}},  7 } }),
@@ -909,7 +462,7 @@ struct TestContext {
         TEST_DO(test_apply_op(eval,
                               spec("y{},z{}",
                                    {   { {{"y","2"},{"z","-"}},
-                                               op.eval(5,7) } }),
+                                               op(5,7) } }),
                               spec("y{}", { { {{"y","2"}}, 5 } }),
                               spec("y{},z{}",
                                    {   { {{"y","-"},{"z","3"}}, 11 },
@@ -917,7 +470,7 @@ struct TestContext {
         TEST_DO(test_apply_op(eval,
                               spec("y{},z{}",
                                    {   { {{"y","2"},{"z","-"}},
-                                               op.eval(7,5) } }),
+                                               op(7,5) } }),
                               spec("y{},z{}",
                                    {   { {{"y","-"},{"z","3"}}, 11 },
                                        { {{"y","2"},{"z","-"}},  7 } }),
@@ -925,7 +478,7 @@ struct TestContext {
         TEST_DO(test_apply_op(eval,
                               spec("x{},y{}",
                                    {   { {{"x","-"},{"y","2"}},
-                                               op.eval(5,7) } }),
+                                               op(5,7) } }),
                               spec("x{},y{}",
                                    {   { {{"x","-"},{"y","2"}}, 5 },
                                        { {{"x","1"},{"y","-"}}, 3 } }),
@@ -933,7 +486,7 @@ struct TestContext {
         TEST_DO(test_apply_op(eval,
                               spec("x{},y{}",
                                    {   { {{"x","-"},{"y","2"}},
-                                               op.eval(7,5) } }),
+                                               op(7,5) } }),
                               spec("y{}", { { {{"y","2"}}, 7 } }),
                               spec("x{},y{}",
                                    {   { {{"x","-"},{"y","2"}}, 5 },
@@ -941,21 +494,21 @@ struct TestContext {
         TEST_DO(test_apply_op(eval,
                               spec("x{},z{}",
                                    {   { {{"x","1"},{"z","3"}},
-                                               op.eval(3,11) } }),
+                                               op(3,11) } }),
                               spec("x{}", { { {{"x","1"}},  3 } }),
                               spec("z{}", { { {{"z","3"}}, 11 } })));
         TEST_DO(test_apply_op(eval,
                               spec("x{},z{}",
                                    {   { {{"x","1"},{"z","3"}},
-                                               op.eval(11,3) } }),
+                                               op(11,3) } }),
                               spec("z{}",{ { {{"z","3"}}, 11 } }),
                               spec("x{}",{ { {{"x","1"}},  3 } })));
         TEST_DO(test_apply_op(eval,
                               spec("x{},y{}",
                                    {   { {{"x","1"},{"y","1"}},
-                                               op.eval(3,5) },
+                                               op(3,5) },
                                        { {{"x","2"},{"y","1"}},
-                                               op.eval(7,5) } }),
+                                               op(7,5) } }),
                               spec("x{}",
                                    {   { {{"x","1"}}, 3 },
                                        { {{"x","2"}}, 7 } }),
@@ -964,15 +517,15 @@ struct TestContext {
         TEST_DO(test_apply_op(eval,
                               spec("x{},y{},z{}",
                                    {   { {{"x","1"},{"y","1"},{"z","1"}},
-                                               op.eval(1,7) },
+                                               op(1,7) },
                                        { {{"x","1"},{"y","1"},{"z","2"}},
-                                               op.eval(1,13) },
+                                               op(1,13) },
                                        { {{"x","1"},{"y","2"},{"z","1"}},
-                                               op.eval(5,11) },
+                                               op(5,11) },
                                        { {{"x","2"},{"y","1"},{"z","1"}},
-                                               op.eval(3,7) },
+                                               op(3,7) },
                                        { {{"x","2"},{"y","1"},{"z","2"}},
-                                               op.eval(3,13) } }),
+                                               op(3,13) } }),
                               spec("x{},y{}",
                                    {   { {{"x","1"},{"y","1"}},  1 },
                                        { {{"x","1"},{"y","2"}},  5 },
@@ -984,7 +537,7 @@ struct TestContext {
         TEST_DO(test_apply_op(eval,
                               spec("x{},y{},z{}",
                                    {   { {{"x","1"},{"y","1"},{"z","1"}},
-                                               op.eval(1,7) } }),
+                                               op(1,7) } }),
                               spec("x{},y{}",
                                    {   { {{"x","1"},{"y","-"}},  5 },
                                        { {{"x","1"},{"y","1"}},  1 } }),
@@ -993,9 +546,9 @@ struct TestContext {
         TEST_DO(test_apply_op(eval,
                               spec("x{},y{},z{}",
                                    {   { {{"x","1"},{"y","-"},{"z","1"}},
-                                               op.eval(5,11) },
+                                               op(5,11) },
                                        { {{"x","1"},{"y","1"},{"z","1"}},
-                                               op.eval(1,7) } }),
+                                               op(1,7) } }),
                               spec("x{},y{}",
                                    {   { {{"x","1"},{"y","-"}},  5 },
                                        { {{"x","1"},{"y","1"}},  1 } }),
@@ -1005,7 +558,7 @@ struct TestContext {
         TEST_DO(test_apply_op(eval,
                               spec("x{},y{},z{}",
                                    {   { {{"x","1"},{"y","1"},{"z","1"}},
-                                               op.eval(1,7) } }),
+                                               op(1,7) } }),
                               spec("x{},y{}",
                                    {   { {{"x","-"},{"y","-"}},  5 },
                                        { {{"x","1"},{"y","1"}},  1 } }),
@@ -1014,9 +567,9 @@ struct TestContext {
         TEST_DO(test_apply_op(eval,
                               spec("x{},y{},z{}",
                                    {   { {{"x","-"},{"y","-"},{"z", "-"}},
-                                               op.eval(5,11) },
+                                               op(5,11) },
                                        { {{"x","1"},{"y","1"},{"z","1"}},
-                                               op.eval(1,7) } }),
+                                               op(1,7) } }),
                               spec("x{},y{}",
                                    {   { {{"x","-"},{"y","-"}},  5 },
                                        { {{"x","1"},{"y","1"}},  1 } }),
@@ -1026,40 +579,40 @@ struct TestContext {
     }
 
     void test_fixed_dense_cases_apply_op(const Eval &eval,
-                                         const BinaryOperation &op)
+                                         join_fun_t op)
     {
         TEST_DO(test_apply_op(eval,
-                              spec(op.eval(0.1,0.2)), spec(0.1), spec(0.2)));
+                              spec(op(0.1,0.2)), spec(0.1), spec(0.2)));
         TEST_DO(test_apply_op(eval,
-                              spec(x(1), Seq({ op.eval(3,5) })),
+                              spec(x(1), Seq({ op(3,5) })),
                               spec(x(1), Seq({ 3 })),
                               spec(x(1), Seq({ 5 }))));
         TEST_DO(test_apply_op(eval,
-                              spec(x(1), Seq({ op.eval(3,-5) })),
+                              spec(x(1), Seq({ op(3,-5) })),
                               spec(x(1), Seq({ 3 })),
                               spec(x(1), Seq({ -5 }))));
         TEST_DO(test_apply_op(eval,
-                              spec(x(2), Seq({ op.eval(3,7), op.eval(5,11) })),
+                              spec(x(2), Seq({ op(3,7), op(5,11) })),
                               spec(x(2), Seq({ 3, 5 })),
                               spec(x(2), Seq({ 7, 11 }))));
         TEST_DO(test_apply_op(eval,
-                              spec({x(1),y(1)}, Seq({ op.eval(3,5) })),
+                              spec({x(1),y(1)}, Seq({ op(3,5) })),
                               spec({x(1),y(1)}, Seq({ 3 })),
                               spec({x(1),y(1)}, Seq({ 5 }))));
         TEST_DO(test_apply_op(eval,
-                              spec(x(1), Seq({ op.eval(3, 0) })),
+                              spec(x(1), Seq({ op(3, 0) })),
                               spec(x(1), Seq({ 3 })),
                               spec(x(2), Seq({ 0, 7 }))));
         TEST_DO(test_apply_op(eval,
-                              spec(x(1), Seq({ op.eval(0, 5) })),
+                              spec(x(1), Seq({ op(0, 5) })),
                               spec(x(2), Seq({ 0, 3 })),
                               spec(x(1), Seq({ 5 }))));
         TEST_DO(test_apply_op(eval,
                               spec({x(2),y(2),z(2)},
-                                   Seq({        op.eval(1,  7), op.eval(1, 11),
-                                                op.eval(2, 13), op.eval(2, 17),
-                                                op.eval(3,  7), op.eval(3, 11),
-                                                op.eval(5, 13), op.eval(5, 17)
+                                   Seq({        op(1,  7), op(1, 11),
+                                                op(2, 13), op(2, 17),
+                                                op(3,  7), op(3, 11),
+                                                op(5, 13), op(5, 17)
                                                 })),
                               spec({x(2),y(2)},
                                    Seq({         1,  2,
@@ -1069,7 +622,7 @@ struct TestContext {
                                                 13, 17 }))));
     }
 
-    void test_apply_op(const Eval &eval, const BinaryOperation &op, const Sequence &seq) {
+    void test_apply_op(const Eval &eval, join_fun_t op, const Sequence &seq) {
         std::vector<Layout> layouts = {
             {},                                    {},
             {x(5)},                                {x(5)},
@@ -1094,44 +647,41 @@ struct TestContext {
             TEST_STATE(make_string("lhs shape: %s, rhs shape: %s",
                                    lhs_input.type().c_str(),
                                    rhs_input.type().c_str()).c_str());
-            Eval::Result expect = ImmediateApplyOld(op).eval(ref_engine, lhs_input, rhs_input); 
+            Eval::Result expect = ImmediateJoin(op).eval(ref_engine, lhs_input, rhs_input);
             TEST_DO(verify_result(safe(eval).eval(engine, lhs_input, rhs_input), expect));
         }
         TEST_DO(test_fixed_sparse_cases_apply_op(eval, op));
         TEST_DO(test_fixed_dense_cases_apply_op(eval, op));
     }
 
-    void test_apply_op(const vespalib::string &expr, const BinaryOperation &op, const Sequence &seq) {
-        auto function = [&op](double a, double b){ return op.eval(a, b); };
-        TEST_DO(test_apply_op(ImmediateApplyOld(op), op, seq));
-        TEST_DO(test_apply_op(ImmediateJoin(function), op, seq));
-        TEST_DO(test_apply_op(RetainedApply(op), op, seq));
+    void test_apply_op(const vespalib::string &expr, join_fun_t op, const Sequence &seq) {
+        TEST_DO(test_apply_op(ImmediateJoin(op), op, seq));
         TEST_DO(test_apply_op(Expr_TT(expr), op, seq));
         TEST_DO(test_apply_op(Expr_TT(make_string("join(x,y,f(a,b)(%s))", expr.c_str())), op, seq));
     }
 
     void test_tensor_apply() {
-        TEST_DO(test_apply_op("a+b", operation::Add(), Div10(N())));
-        TEST_DO(test_apply_op("a-b", operation::Sub(), Div10(N())));
-        TEST_DO(test_apply_op("a*b", operation::Mul(), Div10(N())));
-        TEST_DO(test_apply_op("a/b", operation::Div(), Div10(N())));
-        TEST_DO(test_apply_op("a%b", operation::Mod(), Div10(N())));
-        TEST_DO(test_apply_op("a^b", operation::Pow(), Div10(N())));
-        TEST_DO(test_apply_op("pow(a,b)", operation::Pow(), Div10(N())));
-        TEST_DO(test_apply_op("a==b", operation::Equal(), Div10(N())));
-        TEST_DO(test_apply_op("a!=b", operation::NotEqual(), Div10(N())));
-        TEST_DO(test_apply_op("a~=b", operation::Approx(), Div10(N())));
-        TEST_DO(test_apply_op("a<b", operation::Less(), Div10(N())));
-        TEST_DO(test_apply_op("a<=b", operation::LessEqual(), Div10(N())));
-        TEST_DO(test_apply_op("a>b", operation::Greater(), Div10(N())));
-        TEST_DO(test_apply_op("a>=b", operation::GreaterEqual(), Div10(N())));
-        TEST_DO(test_apply_op("a&&b", operation::And(), Mask2Seq(SkipNth(3))));
-        TEST_DO(test_apply_op("a||b", operation::Or(), Mask2Seq(SkipNth(3))));
-        TEST_DO(test_apply_op("atan2(a,b)", operation::Atan2(), Div10(N())));
-        TEST_DO(test_apply_op("ldexp(a,b)", operation::Ldexp(), Div10(N())));
-        TEST_DO(test_apply_op("fmod(a,b)", operation::Mod(), Div10(N())));
-        TEST_DO(test_apply_op("min(a,b)", operation::Min(), Div10(N())));
-        TEST_DO(test_apply_op("max(a,b)", operation::Max(), Div10(N())));
+        TEST_DO(test_apply_op("a+b", operation::Add::f, Div10(N())));
+        TEST_DO(test_apply_op("a-b", operation::Sub::f, Div10(N())));
+        TEST_DO(test_apply_op("a*b", operation::Mul::f, Div10(N())));
+        TEST_DO(test_apply_op("a/b", operation::Div::f, Div10(N())));
+        TEST_DO(test_apply_op("a%b", operation::Mod::f, Div10(N())));
+        TEST_DO(test_apply_op("a^b", operation::Pow::f, Div10(N())));
+        TEST_DO(test_apply_op("pow(a,b)", operation::Pow::f, Div10(N())));
+        TEST_DO(test_apply_op("a==b", operation::Equal::f, Div10(N())));
+        TEST_DO(test_apply_op("a!=b", operation::NotEqual::f, Div10(N())));
+        TEST_DO(test_apply_op("a~=b", operation::Approx::f, Div10(N())));
+        TEST_DO(test_apply_op("a<b", operation::Less::f, Div10(N())));
+        TEST_DO(test_apply_op("a<=b", operation::LessEqual::f, Div10(N())));
+        TEST_DO(test_apply_op("a>b", operation::Greater::f, Div10(N())));
+        TEST_DO(test_apply_op("a>=b", operation::GreaterEqual::f, Div10(N())));
+        TEST_DO(test_apply_op("a&&b", operation::And::f, Mask2Seq(SkipNth(3))));
+        TEST_DO(test_apply_op("a||b", operation::Or::f, Mask2Seq(SkipNth(3))));
+        TEST_DO(test_apply_op("atan2(a,b)", operation::Atan2::f, Div10(N())));
+        TEST_DO(test_apply_op("ldexp(a,b)", operation::Ldexp::f, Div10(N())));
+        TEST_DO(test_apply_op("fmod(a,b)", operation::Mod::f, Div10(N())));
+        TEST_DO(test_apply_op("min(a,b)", operation::Min::f, Div10(N())));
+        TEST_DO(test_apply_op("max(a,b)", operation::Max::f, Div10(N())));
     }
 
     //-------------------------------------------------------------------------
@@ -1140,7 +690,7 @@ struct TestContext {
                           const TensorSpec &lhs,
                           const TensorSpec &rhs)
     {
-        Expr_TT eval("sum(a*b)");
+        Expr_TT eval("reduce(a*b,sum)");
         TEST_DO(verify_result(safe(eval).eval(engine, lhs, rhs), spec(expect)));
     }
 
@@ -1232,8 +782,8 @@ struct TestContext {
     {
         Stash stash;
         nbostream data;
-        encode_engine.encode(make_value(encode_engine, spec, stash), data, stash);
-        TEST_DO(verify_result(Eval::Result(decode_engine.decode(data, stash)), spec));
+        encode_engine.encode(make_value(encode_engine, spec, stash), data);
+        TEST_DO(verify_result(Eval::Result(decode_engine, *decode_engine.decode(data)), spec));
     }
 
     void verify_encode_decode(const TensorSpec &spec) {
@@ -1249,13 +799,13 @@ struct TestContext {
         const Inspector &binary = test["binary"];
         EXPECT_GREATER(binary.entries(), 0u);
         nbostream encoded;
-        engine.encode(make_value(engine, spec, stash), encoded, stash);
+        engine.encode(make_value(engine, spec, stash), encoded);
         test.setData("encoded", Memory(encoded.peek(), encoded.size()));
         bool matched_encode = false;
         for (size_t i = 0; i < binary.entries(); ++i) {
             nbostream data = extract_data(binary[i].asString());
             matched_encode = (matched_encode || is_same(encoded, data));
-            TEST_DO(verify_result(Eval::Result(engine.decode(data, stash)), spec));
+            TEST_DO(verify_result(Eval::Result(engine, *engine.decode(data)), spec));
             EXPECT_EQUAL(data.size(), 0u);
         }
         EXPECT_TRUE(matched_encode);
@@ -1265,20 +815,20 @@ struct TestContext {
         vespalib::string path = module_path;
         path.append("src/apps/make_tensor_binary_format_test_spec/test_spec.json");
         MappedFileInput file(path);
-        Slime slime;
         EXPECT_TRUE(file.valid());
-        EXPECT_EQUAL(JsonFormat::decode(file, slime), file.get().size);
-        int64_t num_tests = slime.get()["num_tests"].asLong();
-        Cursor &tests = slime.get()["tests"];
-        EXPECT_GREATER(num_tests, 0u);
-        EXPECT_EQUAL(size_t(num_tests), tests.entries());
-        for (size_t i = 0; i < tests.entries(); ++i) {
-            size_t fail_cnt = TEST_MASTER.getProgress().failCnt; 
-            TEST_DO(test_binary_format_spec(tests[i]));
-            if (TEST_MASTER.getProgress().failCnt > fail_cnt) {
-                fprintf(stderr, "failed:\n%s", tests[i].toString().c_str());
-            }
-        }
+        auto handle_test = [this](Slime &slime)
+                           {
+                               size_t fail_cnt = TEST_MASTER.getProgress().failCnt;
+                               TEST_DO(test_binary_format_spec(slime.get()));
+                               if (TEST_MASTER.getProgress().failCnt > fail_cnt) {
+                                   fprintf(stderr, "failed:\n%s", slime.get().toString().c_str());
+                               }
+                           };
+        auto handle_summary = [](Slime &slime)
+                              {
+                                  EXPECT_GREATER(slime["num_tests"].asLong(), 0);
+                              };
+        for_each_test(file, handle_test, handle_summary);
     }
 
     void test_binary_format() {
@@ -1298,8 +848,6 @@ struct TestContext {
 
     void run_tests() {
         TEST_DO(test_tensor_create_type());
-        TEST_DO(test_tensor_equality());
-        TEST_DO(test_tensor_inequality());
         TEST_DO(test_tensor_reduce());
         TEST_DO(test_tensor_map());
         TEST_DO(test_tensor_apply());

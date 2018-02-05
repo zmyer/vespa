@@ -4,11 +4,14 @@ vespa_add_library(eval_eval OBJECT
     aggr.cpp
     basic_nodes.cpp
     call_nodes.cpp
+    compile_tensor_function.cpp
     delete_node.cpp
     function.cpp
     gbdt.cpp
     interpreted_function.cpp
     key_gen.cpp
+    lazy_params.cpp
+    make_tensor_function.cpp
     node_types.cpp
     operation.cpp
     operator_nodes.cpp

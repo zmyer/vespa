@@ -7,6 +7,7 @@ import com.yahoo.config.provision.Environment;
 import com.yahoo.test.ManualClock;
 import com.yahoo.vespa.hosted.controller.Application;
 import com.yahoo.vespa.hosted.controller.ApplicationController;
+import com.yahoo.vespa.hosted.controller.ArtifactRepositoryMock;
 import com.yahoo.vespa.hosted.controller.ConfigServerClientMock;
 import com.yahoo.vespa.hosted.controller.Controller;
 import com.yahoo.vespa.hosted.controller.ControllerTester;
@@ -16,15 +17,20 @@ import com.yahoo.vespa.hosted.controller.application.ApplicationPackage;
 import com.yahoo.vespa.hosted.controller.application.Change;
 import com.yahoo.vespa.hosted.controller.application.DeploymentJobs;
 import com.yahoo.vespa.hosted.controller.application.DeploymentJobs.JobType;
-import com.yahoo.vespa.hosted.controller.maintenance.FailureRedeployer;
+import com.yahoo.vespa.hosted.controller.application.SourceRevision;
 import com.yahoo.vespa.hosted.controller.maintenance.JobControl;
+import com.yahoo.vespa.hosted.controller.maintenance.ReadyJobsTrigger;
 import com.yahoo.vespa.hosted.controller.maintenance.Upgrader;
 import com.yahoo.vespa.hosted.controller.versions.VersionStatus;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
+import static com.yahoo.vespa.hosted.controller.application.DeploymentJobs.JobError.unknown;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -37,9 +43,13 @@ import static org.junit.Assert.assertTrue;
  */
 public class DeploymentTester {
 
+    // Set a long interval so that maintainers never do scheduled runs during tests
+    private static final Duration maintenanceInterval = Duration.ofDays(1);
+    private static final int defaultBuildNumber = 42;
+
     private final ControllerTester tester;
     private final Upgrader upgrader;
-    private final FailureRedeployer failureRedeployer;
+    private final ReadyJobsTrigger readyJobTrigger;
 
     public DeploymentTester() {
         this(new ControllerTester());
@@ -47,21 +57,23 @@ public class DeploymentTester {
 
     public DeploymentTester(ControllerTester tester) {
         this.tester = tester;
-        this.upgrader = new Upgrader(tester.controller(), Duration.ofMinutes(2),
-                                     new JobControl(tester.curator()));
-        this.failureRedeployer = new FailureRedeployer(tester.controller(),
-                                                       Duration.ofMinutes(2),
-                                                       new JobControl(tester.curator()));
+        tester.curator().writeUpgradesPerMinute(100);
+        this.upgrader = new Upgrader(tester.controller(), maintenanceInterval, new JobControl(tester.curator()),
+                                     tester.curator());
+        this.readyJobTrigger = new ReadyJobsTrigger(tester.controller(), maintenanceInterval,
+                                                    new JobControl(tester.curator()));
     }
 
     public Upgrader upgrader() { return upgrader; }
 
-    public FailureRedeployer failureRedeployer() { return failureRedeployer; }
+    public ReadyJobsTrigger readyJobTrigger() { return readyJobTrigger; }
 
     public Controller controller() { return tester.controller(); }
 
     public ApplicationController applications() { return tester.controller().applications(); }
 
+    // TODO: This thing simulates the wrong thing: the build system won't hold the jobs that are running,
+    // and so these should be consumed immediately upon triggering, and be "somewhere else" while running.
     public BuildSystem buildSystem() { return tester.controller().applications().deploymentTrigger().buildSystem(); }
 
     public DeploymentTrigger deploymentTrigger() { return tester.controller().applications().deploymentTrigger(); }
@@ -72,6 +84,8 @@ public class DeploymentTester {
 
     public ConfigServerClientMock configServer() { return tester.configServer(); }
 
+    public ArtifactRepositoryMock artifactRepository() { return tester.artifactRepository(); }
+
     public Application application(String name) {
         return application(ApplicationId.from("tenant1", name, "default"));
     }
@@ -80,19 +94,23 @@ public class DeploymentTester {
         return controller().applications().require(application);
     }
 
-    public Optional<Change.VersionChange> versionChange(ApplicationId application) {
-        return application(application).deploying()
-                .filter(c -> c instanceof Change.VersionChange)
-                .map(Change.VersionChange.class::cast);
+    public void updateVersionStatus() {
+        controller().updateVersionStatus(VersionStatus.compute(controller(), tester.controller().systemVersion()));
     }
-    
+
     public void updateVersionStatus(Version currentVersion) {
+        configServer().setDefaultVersion(currentVersion);
         controller().updateVersionStatus(VersionStatus.compute(controller(), currentVersion));
     }
 
     public void upgradeSystem(Version version) {
+        configServer().setDefaultVersion(version);
         updateVersionStatus(version);
         upgrader().maintain();
+    }
+
+    public Version defaultVespaVersion() {
+        return configServer().getDefaultVersion();
     }
 
     public Application createApplication(String applicationName, String tenantName, long projectId, Long propertyId) {
@@ -104,8 +122,13 @@ public class DeploymentTester {
 
     /** Simulate the full lifecycle of an application deployment as declared in given application package */
     public Application createAndDeploy(String applicationName, int projectId, ApplicationPackage applicationPackage) {
-        tester.createTenant("tenant1", "domain1", 1L);
-        Application application = tester.createApplication(new TenantId("tenant1"), applicationName, "default", projectId);
+        TenantId tenantId = tester.createTenant("tenant1", "domain1", 1L);
+        return createAndDeploy(tenantId, applicationName, projectId, applicationPackage);
+    }
+
+    /** Simulate the full lifecycle of an application deployment as declared in given application package */
+    public Application createAndDeploy(TenantId tenantId, String applicationName, int projectId, ApplicationPackage applicationPackage) {
+        Application application = tester.createApplication(tenantId, applicationName, "default", projectId);
         deployCompletely(application, applicationPackage);
         return applications().require(application.id());
     }
@@ -113,6 +136,11 @@ public class DeploymentTester {
     /** Simulate the full lifecycle of an application deployment to prod.us-west-1 with the given upgrade policy */
     public Application createAndDeploy(String applicationName, int projectId, String upgradePolicy) {
         return createAndDeploy(applicationName, projectId, applicationPackage(upgradePolicy));
+    }
+
+    /** Simulate the full lifecycle of an application deployment to prod.us-west-1 with the given upgrade policy */
+    public Application createAndDeploy(TenantId tenantId, String applicationName, int projectId, String upgradePolicy) {
+        return createAndDeploy(tenantId, applicationName, projectId, applicationPackage(upgradePolicy));
     }
 
     /** Complete an ongoing deployment */
@@ -124,39 +152,80 @@ public class DeploymentTester {
     /** Deploy application completely using the given application package */
     public void deployCompletely(Application application, ApplicationPackage applicationPackage) {
         notifyJobCompletion(JobType.component, application, true);
-        assertTrue(applications().require(application.id()).deploying().isPresent());
-        completeDeployment(application, applicationPackage, Optional.empty());
+        assertTrue(applications().require(application.id()).change().isPresent());
+        completeDeployment(application, applicationPackage, Optional.empty(), true);
     }
 
-    private void completeDeployment(Application application, ApplicationPackage applicationPackage, Optional<JobType> failOnJob) {
+    public static DeploymentJobs.JobReport jobReport(Application application, JobType jobType, boolean success) {
+        return jobReport(application, jobType, Optional.ofNullable(success ? null : unknown), Optional.empty(), defaultBuildNumber);
+    }
+
+    public static DeploymentJobs.JobReport jobReport(Application application, JobType jobType,
+                                                     Optional<DeploymentJobs.JobError> jobError,
+                                                     Optional<SourceRevision> sourceRevision, long buildNumber) {
+        return new DeploymentJobs.JobReport(
+                application.id(),
+                jobType,
+                application.deploymentJobs().projectId().get(),
+                buildNumber,
+                sourceRevision,
+                jobError
+        );
+    }
+
+    /** Deploy application using the given application package, but expecting to stop after test phases */
+    public void deployTestOnly(Application application, ApplicationPackage applicationPackage) {
+        notifyJobCompletion(JobType.component, application, true);
+        assertTrue(applications().require(application.id()).change().isPresent());
+        completeDeployment(application, applicationPackage, Optional.empty(), false);
+    }
+
+    private void completeDeployment(Application application, ApplicationPackage applicationPackage,
+                                    Optional<JobType> failOnJob, boolean includingProductionZones) {
         DeploymentOrder order = new DeploymentOrder(controller());
-        for (JobType job : order.jobsFrom(applicationPackage.deploymentSpec())) {
+        List<JobType> jobs = order.jobsFrom(applicationPackage.deploymentSpec());
+        if ( ! includingProductionZones)
+            jobs = jobs.stream().filter(job -> ! job.isProduction()).collect(Collectors.toList());
+        for (JobType job : jobs) {
             boolean failJob = failOnJob.map(j -> j.equals(job)).orElse(false);
-            deployAndNotify(application, applicationPackage, !failJob, job);
+            deployAndNotify(application, applicationPackage, ! failJob, false, job);
             if (failJob) {
                 break;
             }
         }
         if (failOnJob.isPresent()) {
-            assertTrue(applications().require(application.id()).deploying().isPresent());
+            assertTrue(applications().require(application.id()).change().isPresent());
             assertTrue(applications().require(application.id()).deploymentJobs().hasFailures());
-        } else {
-            assertFalse(applications().require(application.id()).deploying().isPresent());
+        } else if (includingProductionZones) {
+            assertFalse(applications().require(application.id()).change().isPresent());
+        }
+        else {
+            assertTrue(applications().require(application.id()).change().isPresent());
         }
     }
 
     public void notifyJobCompletion(JobType jobType, Application application, boolean success) {
-        notifyJobCompletion(jobType, application, DeploymentJobs.JobError.from(success));
+        notifyJobCompletion(jobType, application, Optional.ofNullable(success ? null : unknown));
     }
 
     public void notifyJobCompletion(JobType jobType, Application application, Optional<DeploymentJobs.JobError> jobError) {
-        applications().notifyJobCompletion(jobReport(application, jobType, jobError));
+        notifyJobCompletion(jobType, application, jobError, Optional.empty(), defaultBuildNumber);
+    }
+
+    public void notifyJobCompletion(JobType jobType, Application application, Optional<DeploymentJobs.JobError> jobError,
+                                    Optional<SourceRevision> source, long buildNumber) {
+        clock().advance(Duration.ofMillis(1));
+        applications().notifyJobCompletion(jobReport(application, jobType, jobError, source, buildNumber));
     }
 
     public void completeUpgrade(Application application, Version version, String upgradePolicy) {
-        assertTrue(applications().require(application.id()).deploying().isPresent());
-        assertEquals(new Change.VersionChange(version), applications().require(application.id()).deploying().get());
-        completeDeployment(application, applicationPackage(upgradePolicy), Optional.empty());
+        completeUpgrade(application, version, applicationPackage(upgradePolicy));
+    }
+
+    public void completeUpgrade(Application application, Version version, ApplicationPackage applicationPackage) {
+        assertTrue(application + " has a deployment", applications().require(application.id()).change().isPresent());
+        assertEquals(Change.of(version), applications().require(application.id()).change());
+        completeDeployment(application, applicationPackage, Optional.empty(), true);
     }
 
     public void completeUpgradeWithError(Application application, Version version, String upgradePolicy, JobType failOnJob) {
@@ -168,62 +237,92 @@ public class DeploymentTester {
     }
 
     private void completeUpgradeWithError(Application application, Version version, ApplicationPackage applicationPackage, Optional<JobType> failOnJob) {
-        assertTrue(applications().require(application.id()).deploying().isPresent());
-        assertEquals(new Change.VersionChange(version), applications().require(application.id()).deploying().get());
-        completeDeployment(application, applicationPackage, failOnJob);
+        assertTrue(applications().require(application.id()).change().isPresent());
+        assertEquals(Change.of(version), applications().require(application.id()).change());
+        completeDeployment(application, applicationPackage, failOnJob, true);
     }
 
     public void deploy(JobType job, Application application, ApplicationPackage applicationPackage) {
-        deploy(job, application, applicationPackage, false);
+        deploy(job, application, Optional.of(applicationPackage), false);
     }
 
-    public void deploy(JobType job, Application application, ApplicationPackage applicationPackage, boolean deployCurrentVersion) {
-        job.zone(controller().system()).ifPresent(zone -> tester.deploy(application, zone, applicationPackage, deployCurrentVersion));
+    public void deploy(JobType job, Application application, ApplicationPackage applicationPackage,
+                       boolean deployCurrentVersion) {
+        deploy(job, application, Optional.of(applicationPackage), deployCurrentVersion);
     }
 
-    public void deployAndNotify(Application application, ApplicationPackage applicationPackage, boolean success, JobType... jobs) {
-        assertScheduledJob(application, jobs);
+    public void deploy(JobType job, Application application, Optional<ApplicationPackage> applicationPackage,
+                       boolean deployCurrentVersion) {
+        job.zone(controller().system()).ifPresent(zone -> tester.deploy(application, zone, applicationPackage,
+                                                                        deployCurrentVersion));
+    }
+
+    public void deployAndNotify(Application application, String upgradePolicy, boolean success, JobType... jobs) {
+        deployAndNotify(application, applicationPackage(upgradePolicy), success, true, jobs);
+    }
+
+    public void deployAndNotify(Application application, ApplicationPackage applicationPackage, boolean success,
+                                JobType... jobs) {
+        deployAndNotify(application, applicationPackage, success, true, jobs);
+    }
+
+    public void deployAndNotify(Application application, ApplicationPackage applicationPackage, boolean success,
+                                boolean expectOnlyTheseJobs, JobType... jobs) {
+        deployAndNotify(application, Optional.of(applicationPackage), success, expectOnlyTheseJobs, jobs);
+    }
+
+    public void deployAndNotify(Application application, Optional<ApplicationPackage> applicationPackage,
+                                boolean success, boolean expectOnlyTheseJobs, JobType... jobs) {
+        consumeJobs(application, expectOnlyTheseJobs, jobs);
         for (JobType job : jobs) {
             if (success) {
-                deploy(job, application, applicationPackage);
+                // Staging deploys twice, once with current version and once with new version
+                if (job == JobType.stagingTest) {
+                    deploy(job, application, applicationPackage, true);
+                }
+                deploy(job, application, applicationPackage, false);
             }
             notifyJobCompletion(job, application, success);
+            // Deactivate test deployments after deploy. This replicates the behaviour of the tenant pipeline
+            if (job.isTest()) {
+                controller().applications().deactivate(application, job.zone(controller().system()).get());
+            }
         }
     }
 
-    private void assertScheduledJob(Application application, JobType... jobs) {
+    /** Assert that the sceduled jobs of this application are exactly those given, and take them */
+    private void consumeJobs(Application application, boolean expectOnlyTheseJobs, JobType... jobs) {
         for (JobType job : jobs) {
-            Optional<BuildService.BuildJob> buildJob = findJob(application, job);
-            assertTrue(String.format("Job %s is scheduled for %s", job, application), buildJob.isPresent());
-            assertEquals((long) application.deploymentJobs().projectId().get(), buildJob.get().projectId());
-            assertEquals(job.id(), buildJob.get().jobName());
+            BuildService.BuildJob buildJob = findJob(application, job);
+            assertEquals((long) application.deploymentJobs().projectId().get(), buildJob.projectId());
+            assertEquals(job.jobName(), buildJob.jobName());
         }
+        if (expectOnlyTheseJobs)
+            assertEquals(jobs.length, countJobsOf(application));
         buildSystem().removeJobs(application.id());
     }
 
-    private Optional<BuildService.BuildJob> findJob(Application application, JobType jobType) {
-        for (BuildService.BuildJob job : buildSystem().jobs())
-            if (job.projectId() == application.deploymentJobs().projectId().get() && job.jobName().equals(jobType.id()))
-                return Optional.of(job);
-        return Optional.empty();
+    private BuildService.BuildJob findJob(Application application, JobType jobType) {
+        for (BuildService.BuildJob job : buildSystem().jobs()) {
+            if (job.projectId() == application.deploymentJobs().projectId().get() && job.jobName().equals(jobType.jobName()))
+                return job;
+        }
+        throw new NoSuchElementException(jobType + " is not scheduled for " + application);
     }
 
-    private DeploymentJobs.JobReport jobReport(Application application, JobType jobType, Optional<DeploymentJobs.JobError> jobError) {
-        return new DeploymentJobs.JobReport(
-                application.id(),
-                jobType,
-                application.deploymentJobs().projectId().get(),
-                42,
-                jobError,
-                false
-        );
+    private int countJobsOf(Application application) {
+        return (int)buildSystem().jobs().stream()
+                                        .filter(job -> job.projectId() == application.deploymentJobs().projectId().get())
+                                        .count();
     }
 
-    private static ApplicationPackage applicationPackage(String upgradePolicy) {
+    public static ApplicationPackage applicationPackage(String upgradePolicy) {
         return new ApplicationPackageBuilder()
                 .upgradePolicy(upgradePolicy)
                 .environment(Environment.prod)
                 .region("us-west-1")
+                .environment(Environment.prod)
+                .region("us-east-3")
                 .build();
     }
 

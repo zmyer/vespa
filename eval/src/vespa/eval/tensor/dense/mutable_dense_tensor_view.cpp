@@ -4,8 +4,7 @@
 
 using vespalib::eval::ValueType;
 
-namespace vespalib {
-namespace tensor {
+namespace vespalib::tensor {
 
 MutableDenseTensorView::MutableValueType::MutableValueType(ValueType type_in)
     : _type(type_in)
@@ -19,19 +18,19 @@ MutableDenseTensorView::MutableValueType::MutableValueType(ValueType type_in)
     }
 }
 
-MutableDenseTensorView::MutableValueType::~MutableValueType() {}
+MutableDenseTensorView::MutableValueType::~MutableValueType() = default;
 
 MutableDenseTensorView::MutableDenseTensorView(ValueType type_in)
-    : DenseTensorView(_concreteType.type(), CellsRef()),
+    : DenseTensorView(_concreteType.fast_type(), CellsRef()),
       _concreteType(type_in)
 {
 }
 
 MutableDenseTensorView::MutableDenseTensorView(ValueType type_in, CellsRef cells_in)
-    : DenseTensorView(_concreteType.type(), cells_in),
+    : DenseTensorView(_concreteType.fast_type(), cells_in),
       _concreteType(type_in)
 {
 }
 
-} // namespace tensor
-} // namespace vespalib
+}
+

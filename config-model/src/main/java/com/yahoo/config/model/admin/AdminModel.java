@@ -21,8 +21,7 @@ import java.util.*;
 /**
  * Config model adaptor of the Admin class.
  *
- * @author lulf
- * @since 5.1
+ * @author Ulf Lilleengen
  */
 public class AdminModel extends ConfigModel {
 
@@ -46,8 +45,9 @@ public class AdminModel extends ConfigModel {
     @Override
     public void prepare(ConfigModelRepo configModelRepo) {
         verifyClusterControllersOnlyDefinedForContent(configModelRepo);
-        if (admin == null || admin.getClusterControllers() == null) return;
-        admin.getClusterControllers().prepare();
+        if (admin == null) return;
+        if (admin.getClusterControllers() != null)
+            admin.getClusterControllers().prepare();
     }
 
     private void verifyClusterControllersOnlyDefinedForContent(ConfigModelRepo configModelRepo) {
@@ -61,9 +61,9 @@ public class AdminModel extends ConfigModel {
     public static class BuilderV2 extends ConfigModelBuilder<AdminModel> {
 
         public static final List<ConfigModelId> configModelIds =
-                ImmutableList.of(ConfigModelId.fromNameAndVersion("admin", "2.0"), 
+                ImmutableList.of(ConfigModelId.fromNameAndVersion("admin", "2.0"),
                                  ConfigModelId.fromNameAndVersion("admin", "1.0"));
-        
+
         public BuilderV2() {
             super(AdminModel.class);
         }
@@ -75,7 +75,11 @@ public class AdminModel extends ConfigModel {
         public void doBuild(AdminModel model, Element adminElement, ConfigModelContext modelContext) {
             AbstractConfigProducer parent = modelContext.getParentProducer();
             DeployProperties properties = modelContext.getDeployState().getProperties();
-            DomAdminV2Builder domBuilder = new DomAdminV2Builder(modelContext.getApplicationType(), modelContext.getDeployState().getFileRegistry(), properties.multitenant(), properties.configServerSpecs());
+            DomAdminV2Builder domBuilder = new DomAdminV2Builder(modelContext.getApplicationType(),
+                                                                 modelContext.getDeployState().getFileRegistry(),
+                                                                 properties.multitenant(),
+                                                                 properties.configServerSpecs(),
+                                                                 modelContext.getDeployState().disableFiledistributor());
             model.admin = domBuilder.build(parent, adminElement);
             // TODO: Is required since other models depend on admin.
             if (parent instanceof ApplicationConfigProducerRoot) {
@@ -87,7 +91,7 @@ public class AdminModel extends ConfigModel {
     public static class BuilderV4 extends ConfigModelBuilder<AdminModel> {
 
         public static final List<ConfigModelId> configModelIds =
-                ImmutableList.of(ConfigModelId.fromNameAndVersion("admin", "3.0"), 
+                ImmutableList.of(ConfigModelId.fromNameAndVersion("admin", "3.0"),
                                  ConfigModelId.fromNameAndVersion("admin", "4.0"));
 
         public BuilderV4() {
@@ -101,7 +105,11 @@ public class AdminModel extends ConfigModel {
         public void doBuild(AdminModel model, Element adminElement, ConfigModelContext modelContext) {
             AbstractConfigProducer parent = modelContext.getParentProducer();
             DeployProperties properties = modelContext.getDeployState().getProperties();
-            DomAdminV4Builder domBuilder = new DomAdminV4Builder(modelContext, properties.multitenant(), properties.configServerSpecs(), model.getContainerModels());
+            DomAdminV4Builder domBuilder = new DomAdminV4Builder(modelContext,
+                                                                 properties.multitenant(),
+                                                                 properties.configServerSpecs(),
+                                                                 model.getContainerModels(),
+                                                                 modelContext.getDeployState().disableFiledistributor());
             model.admin = domBuilder.build(parent, adminElement);
             // TODO: Is required since other models depend on admin.
             if (parent instanceof ApplicationConfigProducerRoot) {

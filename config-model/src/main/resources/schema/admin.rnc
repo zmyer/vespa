@@ -5,7 +5,6 @@ AdminV2 =
  element admin {
    attribute version { "2.0" } &
    element adminserver { service.attlist } &
-   element minSlobroksPerCluster { xsd:positiveInteger }? & # TODO: Remove when no applications use this
    GenericConfig* &
    LogServer? &
    (ConfigServer | ConfigServers)? &
@@ -13,13 +12,13 @@ AdminV2 =
    AdminSlobroks? &
    (LegacyAdminMonitoring | AdminMonitoring)? &
    (LegacyMetricConsumers | Metrics)? &
-   ClusterControllers?
+   ClusterControllers? &
+   LogForwarding?
  }
 
 AdminV3 =
   element admin {
     attribute version { "3.0"  } &
-    element minSlobroksPerCluster { xsd:positiveInteger }? & # TODO: Remove when no applications use this
     GenericConfig* &
     Nodes
   }
@@ -27,12 +26,12 @@ AdminV3 =
 AdminV4 =
   element admin {
     attribute version { "4.0"  } &
-    element minSlobroksPerCluster { xsd:positiveInteger }? & # TODO: Remove when no applications use this
     AdminV4Slobroks? &
     AdminV4LogServers? &
     GenericConfig* &
     (LegacyAdminMonitoring | AdminMonitoring)? &
-    (LegacyMetricConsumers | Metrics)?
+    (LegacyMetricConsumers | Metrics)? &
+    LogForwarding?
   }
 
 AdminV4Slobroks =
@@ -81,7 +80,8 @@ LogServer = element logserver {
 
 FileDistribution = element filedistribution {
    element uploadbitrate { xsd:string {   pattern = "\d+(\.\d*)?\s*[kmgKMG]?" } }? &
-   element downloadbitrate { xsd:string { pattern = "\d+(\.\d*)?\s*[kmgKMG]?" } }?
+   element downloadbitrate { xsd:string { pattern = "\d+(\.\d*)?\s*[kmgKMG]?" } }? &
+   element disableFiledistributor { xsd:boolean }? # Nov. 2017: Temporary, should not be documented
 }
 
 Metrics = element metrics {
@@ -111,4 +111,12 @@ ClusterControllers = element cluster-controllers {
     element cluster-controller {
        service.attlist
     }+
+}
+
+LogForwarding = element logforwarding {
+    element splunk {
+        attribute splunk-home { xsd:string }? &
+        attribute deployment-server { xsd:string } &
+        attribute client-name { xsd:string }
+    }
 }

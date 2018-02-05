@@ -2,14 +2,11 @@
 package com.yahoo.searchlib.rankingexpression.evaluation;
 
 import com.google.common.annotations.Beta;
-import com.yahoo.tensor.Tensor;
-import com.yahoo.tensor.TensorAddress;
 import com.yahoo.searchlib.rankingexpression.rule.Function;
 import com.yahoo.searchlib.rankingexpression.rule.TruthOperator;
+import com.yahoo.tensor.Tensor;
+import com.yahoo.tensor.TensorAddress;
 import com.yahoo.tensor.TensorType;
-
-import java.util.Collections;
-import java.util.Optional;
 
 /**
  * A Value containing a tensor.
@@ -23,10 +20,13 @@ public class TensorValue extends Value {
 
     /** The tensor value of this */
     private final Tensor value;
-    
+
     public TensorValue(Tensor value) {
         this.value = value;
     }
+
+    @Override
+    public TensorType type() { return TensorType.empty; }
 
     @Override
     public double asDouble() {
@@ -81,6 +81,43 @@ public class TensorValue extends Value {
             return new TensorValue(value.map((value) -> value / argument.asDouble()));
     }
 
+    @Override
+    public Value modulo(Value argument) {
+        if (argument instanceof TensorValue)
+            return new TensorValue(value.fmod(((TensorValue) argument).value));
+        else
+            return new TensorValue(value.map((value) -> value % argument.asDouble()));
+    }
+
+    @Override
+    public Value and(Value argument) {
+        if (argument instanceof TensorValue)
+            return new TensorValue(value.join(((TensorValue)argument).value, (a, b) -> ((a!=0.0) && (b!=0.0)) ? 1.0 : 0.0 ));
+        else
+            return new TensorValue(value.map((value) -> ((value!=0.0) && argument.asBoolean()) ? 1 : 0));
+    }
+
+    @Override
+    public Value or(Value argument) {
+        if (argument instanceof TensorValue)
+            return new TensorValue(value.join(((TensorValue)argument).value, (a, b) -> ((a!=0.0) || (b!=0.0)) ? 1.0 : 0.0 ));
+        else
+            return new TensorValue(value.map((value) -> ((value!=0.0) || argument.asBoolean()) ? 1 : 0));
+    }
+
+    @Override
+    public Value not() {
+        return new TensorValue(value.map((value) -> (value==0.0) ? 1.0 : 0.0));
+    }
+
+    @Override
+    public Value power(Value argument) {
+        if (argument instanceof TensorValue)
+            return new TensorValue(value.pow(((TensorValue)argument).value));
+        else
+            return new TensorValue(value.map((value) -> Math.pow(value, argument.asDouble())));
+    }
+
     private Tensor asTensor(Value value, String operationName) {
         if ( ! (value instanceof TensorValue))
             throw new UnsupportedOperationException("Could not perform " + operationName +
@@ -94,7 +131,7 @@ public class TensorValue extends Value {
     public Value compare(TruthOperator operator, Value argument) {
         return new TensorValue(compareTensor(operator, asTensor(argument, operator.toString())));
     }
-    
+
     private Tensor compareTensor(TruthOperator operator, Tensor argument) {
         switch (operator) {
             case LARGER: return value.larger(argument);
@@ -103,6 +140,7 @@ public class TensorValue extends Value {
             case SMALLEREQUAL: return value.smallerOrEqual(argument);
             case EQUAL: return value.equal(argument);
             case NOTEQUAL: return value.notEqual(argument);
+            case APPROX_EQUAL: return value.approxEqual(argument);
             default: throw new UnsupportedOperationException("Tensors cannot be compared with " + operator);
         }
     }
@@ -114,12 +152,15 @@ public class TensorValue extends Value {
         else
             return new TensorValue(value.map((value) -> function.evaluate(value, arg.asDouble())));
     }
-        
+
     private Tensor functionOnTensor(Function function, Tensor argument) {
         switch (function) {
             case min: return value.min(argument);
             case max: return value.max(argument);
             case atan2: return value.atan2(argument);
+            case pow: return value.pow(argument);
+            case fmod: return value.fmod(argument);
+            case ldexp: return value.ldexp(argument);
             default: throw new UnsupportedOperationException("Cannot combine two tensors using " + function);
         }
     }

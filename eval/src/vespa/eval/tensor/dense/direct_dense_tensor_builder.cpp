@@ -1,10 +1,8 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
 #include "direct_dense_tensor_builder.h"
-#include <cassert>
 
-namespace vespalib {
-namespace tensor {
+namespace vespalib::tensor {
 
 using Address = DirectDenseTensorBuilder::Address;
 using eval::ValueType;
@@ -21,34 +19,14 @@ calculateCellsSize(const ValueType &type)
     return cellsSize;
 }
 
-size_t
-calculateCellAddress(const Address &address, const ValueType &type)
-{
-    assert(address.size() == type.dimensions().size());
-    size_t result = 0;
-    for (size_t i = 0; i < address.size(); ++i) {
-        result *= type.dimensions()[i].size;
-        result += address[i];
-    }
-    return result;
 }
 
-}
-
-DirectDenseTensorBuilder::~DirectDenseTensorBuilder() { }
+DirectDenseTensorBuilder::~DirectDenseTensorBuilder() = default;
 
 DirectDenseTensorBuilder::DirectDenseTensorBuilder(const ValueType &type_in)
     : _type(type_in),
       _cells(calculateCellsSize(_type))
 {
-}
-
-void
-DirectDenseTensorBuilder::insertCell(const Address &address, double cellValue)
-{
-    size_t cellAddress = calculateCellAddress(address, _type);
-    assert(cellAddress < _cells.size());
-    _cells[cellAddress] = cellValue;
 }
 
 Tensor::UP
@@ -57,5 +35,5 @@ DirectDenseTensorBuilder::build()
     return std::make_unique<DenseTensor>(std::move(_type), std::move(_cells));
 }
 
-} // namespace tensor
-} // namesapce vespalib
+}
+

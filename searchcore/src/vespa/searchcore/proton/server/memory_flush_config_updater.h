@@ -5,6 +5,7 @@
 #include "i_disk_mem_usage_listener.h"
 #include "memoryflush.h"
 #include <vespa/searchcore/config/config-proton.h>
+#include <vespa/searchcore/proton/common/hw_info.h>
 #include <mutex>
 
 namespace proton {
@@ -23,26 +24,33 @@ private:
     Mutex _mutex;
     MemoryFlush::SP _flushStrategy;
     ProtonConfig::Flush::Memory _currConfig;
+    HwInfo::Memory _memory;
     DiskMemUsageState _currState;
     bool _useConservativeDiskMode;
     bool _useConservativeMemoryMode;
+    bool _nodeRetired;
 
 
     void considerUseConservativeDiskMode(const LockGuard &guard,
                                          MemoryFlush::Config &newConfig);
     void considerUseConservativeMemoryMode(const LockGuard &guard,
                                            MemoryFlush::Config &newConfig);
+    void considerUseRelaxedDiskMode(const LockGuard &guard,
+                                    MemoryFlush::Config &newConfig);
     void updateFlushStrategy(const LockGuard &guard);
 
 public:
     using UP = std::unique_ptr<MemoryFlushConfigUpdater>;
 
     MemoryFlushConfigUpdater(const MemoryFlush::SP &flushStrategy,
-                             const ProtonConfig::Flush::Memory &config);
+                             const ProtonConfig::Flush::Memory &config,
+                             const HwInfo::Memory &memory);
     void setConfig(const ProtonConfig::Flush::Memory &newConfig);
+    void setNodeRetired(bool nodeRetired);
     virtual void notifyDiskMemUsage(DiskMemUsageState newState) override;
 
-    static MemoryFlush::Config convertConfig(const ProtonConfig::Flush::Memory &config);
+    static MemoryFlush::Config convertConfig(const ProtonConfig::Flush::Memory &config,
+                                             const HwInfo::Memory &memory);
 };
 
 } // namespace proton

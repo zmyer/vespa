@@ -40,7 +40,8 @@ git push -u origin --follow-tags $RPM_BRANCH
 # Trig the build on Copr
 curl -X POST \
      -H "Content-type: application/json" \
-     -d '{ "ref_type": "tag", "repository": { "clone_url": "https://github.com/vespa-engine/vespa.git" } }' \
+     -H "X-GitHub-Event: create" \
+     -d '{ "ref": "rpmbuild", "ref_type": "branch", "repository": { "clone_url": "https://github.com/vespa-engine/vespa.git" } }' \
      https://copr.fedorainfracloud.org/webhooks/github/8037/d1dd5867-b493-4647-a888-0c887e6087b3/
 
 git reset --hard HEAD

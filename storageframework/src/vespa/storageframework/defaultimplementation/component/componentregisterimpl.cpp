@@ -12,12 +12,12 @@ ComponentRegisterImpl::ComponentRegisterImpl()
       _components(),
       _topMetricSet("vds", "", ""),
       _hooks(),
-      _metricManager(0),
-      _memoryManager(0),
-      _clock(0),
-      _threadPool(0),
+      _metricManager(nullptr),
+      _memoryManager(nullptr),
+      _clock(nullptr),
+      _threadPool(nullptr),
       _upgradeFlag(NO_UPGRADE_SPECIAL_HANDLING_ACTIVE),
-      _shutdownListener(0)
+      _shutdownListener(nullptr)
 { }
 
 ComponentRegisterImpl::~ComponentRegisterImpl() { }
@@ -59,16 +59,6 @@ ComponentRegisterImpl::setMetricManager(metrics::MetricManager& mm)
     }
     for (uint32_t i=0; i<components.size(); ++i) {
         components[i]->setMetricRegistrator(*this);
-    }
-}
-
-void
-ComponentRegisterImpl::setMemoryManager(MemoryManagerInterface& mm)
-{
-    vespalib::LockGuard lock(_componentLock);
-    _memoryManager = &mm;
-    for (uint32_t i=0; i<_components.size(); ++i) {
-        _components[i]->setMemoryManager(mm);
     }
 }
 

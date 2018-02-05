@@ -1,6 +1,8 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.vespa.config.server.http.v2;
 
+import com.google.inject.Inject;
+
 import com.yahoo.config.application.api.ApplicationFile;
 import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.config.provision.ApplicationName;
@@ -9,7 +11,6 @@ import com.yahoo.config.provision.TenantName;
 import com.yahoo.config.provision.Zone;
 import com.yahoo.container.jdisc.HttpRequest;
 import com.yahoo.container.jdisc.HttpResponse;
-import com.yahoo.container.logging.AccessLog;
 import com.yahoo.jdisc.Response;
 import com.yahoo.jdisc.application.BindingMatch;
 import com.yahoo.vespa.config.server.ApplicationRepository;
@@ -25,7 +26,7 @@ import com.yahoo.vespa.config.server.tenant.Tenant;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.concurrent.Executor;
+import java.time.Duration;
 
 /**
  * Operations on applications (delete, wait for config convergence, restart, application content etc.)
@@ -37,11 +38,11 @@ public class ApplicationHandler extends HttpHandler {
     private final Zone zone;
     private final ApplicationRepository applicationRepository;
 
-    public ApplicationHandler(Executor executor,
-                              AccessLog accessLog,
+    @Inject
+    public ApplicationHandler(HttpHandler.Context ctx,
                               Zone zone,
                               ApplicationRepository applicationRepository) {
-        super(executor, accessLog);
+        super(ctx);
         this.zone = zone;
         this.applicationRepository = applicationRepository;
     }
@@ -90,6 +91,11 @@ public class ApplicationHandler extends HttpHandler {
 
         if (isServiceConvergeListRequest(request)) {
             return applicationRepository.serviceListToCheckForConfigConvergence(tenant, applicationId, request.getUri());
+        }
+
+        if (isFiledistributionStatusRequest(request)) {
+            Duration timeout = HttpHandler.getRequestTimeout(request, Duration.ofSeconds(5));
+            return applicationRepository.filedistributionStatus(tenant, applicationId, timeout);
         }
 
         return new GetApplicationResponse(Response.Status.OK, applicationRepository.getApplicationGeneration(tenant, applicationId));
@@ -152,6 +158,7 @@ public class ApplicationHandler extends HttpHandler {
                 // WARNING: UPDATE src/main/resources/configserver-app/services.xml IF YOU MAKE ANY CHANGES TO THESE BINDINGS!
                 "http://*/application/v2/tenant/*/application/*/environment/*/region/*/instance/*/content/*",
                 "http://*/application/v2/tenant/*/application/*/environment/*/region/*/instance/*/log",
+                "http://*/application/v2/tenant/*/application/*/environment/*/region/*/instance/*/filedistributionstatus",
                 "http://*/application/v2/tenant/*/application/*/environment/*/region/*/instance/*/restart",
                 "http://*/application/v2/tenant/*/application/*/environment/*/region/*/instance/*/serviceconverge",
                 "http://*/application/v2/tenant/*/application/*/environment/*/region/*/instance/*/serviceconverge/*",
@@ -178,6 +185,11 @@ public class ApplicationHandler extends HttpHandler {
     private static boolean isContentRequest(HttpRequest request) {
         return getBindingMatch(request).groupCount() > 7 &&
                 request.getUri().getPath().contains("/content/");
+    }
+
+    private static boolean isFiledistributionStatusRequest(HttpRequest request) {
+        return getBindingMatch(request).groupCount() == 7 &&
+                request.getUri().getPath().contains("/filedistributionstatus");
     }
 
     private static String getHostNameFromRequest(HttpRequest req) {

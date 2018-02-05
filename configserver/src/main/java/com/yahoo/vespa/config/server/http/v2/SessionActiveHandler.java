@@ -2,7 +2,6 @@
 package com.yahoo.vespa.config.server.http.v2;
 
 import java.time.Duration;
-import java.util.concurrent.Executor;
 
 import com.google.inject.Inject;
 import com.yahoo.config.application.api.ApplicationMetaData;
@@ -11,7 +10,9 @@ import com.yahoo.config.provision.TenantName;
 import com.yahoo.config.provision.Zone;
 import com.yahoo.container.jdisc.HttpRequest;
 import com.yahoo.container.jdisc.HttpResponse;
-import com.yahoo.container.logging.AccessLog;
+import com.yahoo.jdisc.Request;
+import com.yahoo.jdisc.handler.ResponseHandler;
+import com.yahoo.log.LogLevel;
 import com.yahoo.vespa.config.server.ApplicationRepository;
 import com.yahoo.vespa.config.server.tenant.Tenant;
 import com.yahoo.vespa.config.server.tenant.Tenants;
@@ -33,12 +34,11 @@ public class SessionActiveHandler extends SessionHandler {
     private final Zone zone;
 
     @Inject
-    public SessionActiveHandler(Executor executor,
-                                AccessLog accessLog,
+    public SessionActiveHandler(SessionHandler.Context ctx,
+                                ApplicationRepository applicationRepository,
                                 Tenants tenants,
-                                Zone zone,
-                                ApplicationRepository applicationRepository) {
-        super(executor, accessLog, applicationRepository);
+                                Zone zone) {
+        super(ctx, applicationRepository);
         this.tenants = tenants;
         this.zone = zone;
     }
@@ -57,17 +57,11 @@ public class SessionActiveHandler extends SessionHandler {
         return new SessionActiveResponse(metaData.getSlime(), request, applicationId, sessionId, zone);
     }
 
-    private boolean shouldIgnoreLockFailure(HttpRequest request) {
-        return request.getBooleanProperty("force");
-    }
-
-    /**
-     * True if this request should ignore activation failure because the session was made from an active session that is not active now
-     * @param request a {@link com.yahoo.container.jdisc.HttpRequest}
-     * @return true if ignore failure
-     */
-    private boolean shouldIgnoreSessionStaleFailure(HttpRequest request) {
-        return request.getBooleanProperty("force");
+    // Overridden to make sure we are logging when this low-level handling of timeout happens
+    @Override
+    public void handleTimeout(Request request, ResponseHandler responseHandler) {
+        log.log(LogLevel.ERROR, "activate timed out for " + request.getUri(), new RuntimeException("activate timed out"));
+        super.handleTimeout(request, responseHandler);
     }
 
 }

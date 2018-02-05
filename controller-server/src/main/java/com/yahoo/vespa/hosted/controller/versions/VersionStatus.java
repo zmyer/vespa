@@ -5,12 +5,12 @@ import com.google.common.collect.ImmutableList;
 import com.yahoo.collections.ListMap;
 import com.yahoo.component.Version;
 import com.yahoo.component.Vtag;
-import com.yahoo.vespa.hosted.controller.api.integration.github.GitSha;
 import com.yahoo.vespa.hosted.controller.Application;
 import com.yahoo.vespa.hosted.controller.Controller;
+import com.yahoo.vespa.hosted.controller.api.integration.github.GitSha;
+import com.yahoo.vespa.hosted.controller.application.ApplicationList;
 import com.yahoo.vespa.hosted.controller.application.Deployment;
-import com.yahoo.vespa.hosted.controller.application.DeploymentJobs;
-import com.yahoo.vespa.hosted.controller.application.JobStatus;
+import com.yahoo.vespa.hosted.controller.application.JobList;
 
 import java.net.URI;
 import java.time.Instant;
@@ -26,6 +26,8 @@ import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+
+import static com.yahoo.vespa.hosted.controller.application.DeploymentJobs.JobError.outOfCapacity;
 
 /**
  * Information about the current platform versions in use.
@@ -45,7 +47,7 @@ public class VersionStatus {
 
     private final ImmutableList<VespaVersion> versions;
     
-    /** Create a version status. DO NOT USE: Public for testing only */
+    /** Create a version status. DO NOT USE: Public for testing and serialization only */
     public VersionStatus(List<VespaVersion> versions) {
         this.versions = ImmutableList.copyOf(versions);
     }
@@ -114,16 +116,18 @@ public class VersionStatus {
     }
 
     private static ListMap<Version, String> findConfigServerVersions(Controller controller) {
-        List<URI> configServers = controller.zoneRegistry().zones().stream()
-                                                                       .flatMap(zone -> controller.getConfigServerUris(zone.environment(), zone.region()).stream())
-                                                                       .collect(Collectors.toList());
+        List<URI> configServers = controller.zoneRegistry().zones()
+                .controllerManaged()
+                .ids().stream()
+                .flatMap(zoneId -> controller.getSecureConfigServerUris(zoneId).stream())
+                .collect(Collectors.toList());
 
         ListMap<Version, String> versions = new ListMap<>();
         for (URI configServer : configServers)
             versions.put(controller.applications().configserverClient().version(configServer), configServer.getHost());
         return versions;
     }
-    
+
     private static Collection<DeploymentStatistics> computeDeploymentStatistics(Set<Version> infrastructureVersions,
                                                                                 List<Application> applications) {
         Map<Version, DeploymentStatistics> versionMap = new HashMap<>();
@@ -132,53 +136,71 @@ public class VersionStatus {
             versionMap.put(infrastructureVersion, DeploymentStatistics.empty(infrastructureVersion));
         }
 
-        for (Application application : applications) {
-            DeploymentJobs jobs = application.deploymentJobs();
-
-            // Note that each version deployed on this application exists
-            for (Deployment deployment : application.deployments().values()) {
+        ApplicationList applicationList = ApplicationList.from(applications)
+                                                         .notPullRequest()
+                                                         .hasProductionDeployment();
+        for (Application application : applicationList.asList()) {
+            // Note that each version deployed on this application in production exists
+            // (ignore non-production versions)
+            for (Deployment deployment : application.productionDeployments().values()) {
                 versionMap.computeIfAbsent(deployment.version(), DeploymentStatistics::empty);
             }
 
-            // List versions which have failing jobs, and versions which are in production
+            // List versions which have failing jobs, versions which are in production, and versions for which there are running deployment jobs
 
             // Failing versions
-            Map<Version, List<JobStatus>> failingJobsByVersion = jobs.jobStatus().values().stream()
-                    .filter(jobStatus -> jobStatus.lastCompleted().isPresent())
-                    .filter(jobStatus -> jobStatus.lastCompleted().get().upgrade())
-                    .filter(jobStatus -> jobStatus.jobError().isPresent())
-                    .filter(jobStatus -> jobStatus.jobError().get() != DeploymentJobs.JobError.outOfCapacity)
-                    .collect(Collectors.groupingBy(jobStatus -> jobStatus.lastCompleted().get().version()));
-            for (Version v : failingJobsByVersion.keySet()) {
-                versionMap.compute(v, (version, statistics) -> emptyIfMissing(version, statistics).withFailing(application.id()));
-            }
+            JobList.from(application)
+                    .failing()
+                    .not().failingApplicationChange()
+                    .not().failingBecause(outOfCapacity)
+                    .mapToList(job -> job.lastCompleted().get().version())
+                    .forEach(version -> versionMap.put(version, versionMap.getOrDefault(version, DeploymentStatistics.empty(version)).withFailing(application.id())));
 
             // Succeeding versions
-            Map<Version, List<JobStatus>> succeedingJobsByVersions = jobs.jobStatus().values().stream()
-                    .filter(jobStatus -> jobStatus.lastSuccess().isPresent())
-                    .filter(jobStatus -> jobStatus.type().isProduction())
-                    .collect(Collectors.groupingBy(jobStatus -> jobStatus.lastSuccess().get().version()));
-            for (Version v : succeedingJobsByVersions.keySet()) {
-                versionMap.compute(v, (version, statistics) -> emptyIfMissing(version, statistics).withProduction(application.id()));
-            }
+            JobList.from(application)
+                    .lastSuccess().present()
+                    .production()
+                    .mapToList(job -> job.lastSuccess().get().version())
+                    .forEach(version -> versionMap.put(version, versionMap.getOrDefault(version, DeploymentStatistics.empty(version)).withProduction(application.id())));
+
+            // Deploying versions
+            JobList.from(application)
+                    .upgrading()
+                    .mapToList(job -> job.lastTriggered().get().version())
+                    .forEach(version -> versionMap.put(version, versionMap.getOrDefault(version, DeploymentStatistics.empty(version)).withDeploying(application.id())));
         }
         return versionMap.values();
     }
     
-    private static DeploymentStatistics emptyIfMissing(Version version, DeploymentStatistics statistics) {
-        return statistics == null ? DeploymentStatistics.empty(version) : statistics;
-    }
-
-    private static VespaVersion createVersion(DeploymentStatistics statistics, 
+    private static VespaVersion createVersion(DeploymentStatistics statistics,
                                               boolean isSystemVersion, 
                                               Collection<String> configServerHostnames,
                                               Controller controller) {
         GitSha gitSha = controller.gitHub().getCommit(VESPA_REPO_OWNER, VESPA_REPO, statistics.version().toFullString());
+        Instant releasedAt = Instant.ofEpochMilli(gitSha.commit.author.date.getTime()); // commitedAt ...
+        VespaVersion.Confidence confidence;
+        // Always compute confidence for system version
+        if (isSystemVersion) {
+            confidence = VespaVersion.confidenceFrom(statistics, controller);
+        } else {
+            // Keep existing confidence for non-system versions if already computed
+            confidence = confidenceFor(statistics.version(), controller)
+                    .orElse(VespaVersion.confidenceFrom(statistics, controller));
+        }
         return new VespaVersion(statistics,
-                                gitSha.sha, Instant.ofEpochMilli(gitSha.commit.author.date.getTime()),
+                                gitSha.sha, releasedAt,
                                 isSystemVersion,
                                 configServerHostnames,
-                                controller);
+                                confidence
+        );
+    }
+
+    /** Returns the current confidence for the given version */
+    private static Optional<VespaVersion.Confidence> confidenceFor(Version version, Controller controller) {
+        return controller.versionStatus().versions().stream()
+                .filter(v -> version.equals(v.versionNumber()))
+                .map(VespaVersion::confidence)
+                .findFirst();
     }
 
 }

@@ -12,6 +12,7 @@ import com.yahoo.vespa.hosted.node.admin.noderepository.bindings.NodeMessageResp
 import com.yahoo.vespa.hosted.node.admin.noderepository.bindings.UpdateNodeAttributesRequestBody;
 import com.yahoo.vespa.hosted.node.admin.noderepository.bindings.UpdateNodeAttributesResponse;
 import com.yahoo.vespa.hosted.node.admin.util.ConfigServerHttpRequestExecutor;
+import com.yahoo.vespa.hosted.node.admin.util.HttpException;
 import com.yahoo.vespa.hosted.node.admin.util.PrefixLogger;
 import com.yahoo.vespa.hosted.provision.Node;
 
@@ -30,11 +31,9 @@ public class NodeRepositoryImpl implements NodeRepository {
     private static final PrefixLogger NODE_ADMIN_LOGGER = PrefixLogger.getNodeAdminLogger(NodeRepositoryImpl.class);
 
     private final ConfigServerHttpRequestExecutor requestExecutor;
-    private final int port;
 
-    public NodeRepositoryImpl(ConfigServerHttpRequestExecutor requestExecutor, int port) {
+    public NodeRepositoryImpl(ConfigServerHttpRequestExecutor requestExecutor) {
         this.requestExecutor = requestExecutor;
-        this.port = port;
     }
 
     @Override
@@ -42,7 +41,6 @@ public class NodeRepositoryImpl implements NodeRepository {
         try {
             final GetNodesResponse nodesForHost = requestExecutor.get(
                     "/nodes/v2/node/?parentHost=" + baseHostName + "&recursive=true",
-                    port,
                     GetNodesResponse.class);
 
             if (nodesForHost.nodes == null) {
@@ -70,13 +68,12 @@ public class NodeRepositoryImpl implements NodeRepository {
     public Optional<ContainerNodeSpec> getContainerNodeSpec(String hostName) {
         try {
             GetNodesResponse.Node nodeResponse = requestExecutor.get("/nodes/v2/node/" + hostName,
-                                                                     port,
                                                                      GetNodesResponse.Node.class);
             if (nodeResponse == null) {
                 return Optional.empty();
             }
             return Optional.of(createContainerNodeSpec(nodeResponse));
-        } catch (ConfigServerHttpRequestExecutor.NotFoundException e) {
+        } catch (HttpException.NotFoundException e) {
             return Optional.empty();
         }
     }
@@ -85,17 +82,17 @@ public class NodeRepositoryImpl implements NodeRepository {
     public List<ContainerAclSpec> getContainerAclSpecs(String hostName) {
         try {
             final String path = String.format("/nodes/v2/acl/%s?children=true", hostName);
-            final GetAclResponse response = requestExecutor.get(path, port, GetAclResponse.class);
+            final GetAclResponse response = requestExecutor.get(path, GetAclResponse.class);
             return response.trustedNodes.stream()
                     .map(node -> new ContainerAclSpec(
                             node.hostname, node.ipAddress, ContainerName.fromHostname(node.trustedBy)))
                     .collect(Collectors.toList());
-        } catch (ConfigServerHttpRequestExecutor.NotFoundException e) {
+        } catch (HttpException.NotFoundException e) {
             return Collections.emptyList();
         }
     }
 
-    public static ContainerNodeSpec createContainerNodeSpec(GetNodesResponse.Node node)
+    private static ContainerNodeSpec createContainerNodeSpec(GetNodesResponse.Node node)
             throws IllegalArgumentException, NullPointerException {
         Objects.requireNonNull(node.nodeState, "Unknown node state");
         Node.State nodeState = Node.State.valueOf(node.nodeState);
@@ -137,14 +134,16 @@ public class NodeRepositoryImpl implements NodeRepository {
                 Optional.ofNullable(node.currentRestartGeneration),
                 node.minCpuCores,
                 node.minMainMemoryAvailableGb,
-                node.minDiskAvailableGb);
+                node.minDiskAvailableGb,
+                node.fastDisk,
+                node.ipAddresses,
+                Optional.ofNullable(node.hardwareDivergence));
     }
 
     @Override
     public void updateNodeAttributes(final String hostName, final NodeAttributes nodeAttributes) {
         UpdateNodeAttributesResponse response = requestExecutor.patch(
                 "/nodes/v2/node/" + hostName,
-                port,
                 new UpdateNodeAttributesRequestBody(nodeAttributes),
                 UpdateNodeAttributesResponse.class);
 
@@ -169,7 +168,6 @@ public class NodeRepositoryImpl implements NodeRepository {
     private void markNodeToState(String hostName, String state) {
         NodeMessageResponse response = requestExecutor.put(
                 "/nodes/v2/state/" + state + "/" + hostName,
-                port,
                 Optional.empty(), /* body */
                 NodeMessageResponse.class);
         NODE_ADMIN_LOGGER.info(response.message);

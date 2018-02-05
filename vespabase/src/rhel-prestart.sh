@@ -84,16 +84,16 @@ fixdir   root        wheel 1777  var/run
 fixdir ${VESPA_USER} wheel 1777  var/crash
 fixdir ${VESPA_USER} wheel 1777  logs/vespa
 fixdir ${VESPA_USER} wheel 1777  tmp/vespa
+fixdir ${VESPA_USER} wheel  755  var
 fixdir ${VESPA_USER} wheel  755  libexec/vespa/plugins/qrs
 fixdir ${VESPA_USER} wheel  755  logs/vespa/configserver
 fixdir ${VESPA_USER} wheel  755  logs/vespa/qrs
 fixdir ${VESPA_USER} wheel  755  logs/vespa/search
-fixdir ${VESPA_USER} wheel  755  var/cache/vespa/config
 fixdir ${VESPA_USER} wheel  755  var/db/vespa
 fixdir ${VESPA_USER} wheel  755  var/db/vespa/tmp
 fixdir ${VESPA_USER} wheel  755  var/db/vespa/config_server
 fixdir ${VESPA_USER} wheel  755  var/db/vespa/config_server/serverdb
-fixdir ${VESPA_USER} wheel  755  var/db/vespa/config_server/serverdb/applications
+fixdir ${VESPA_USER} wheel  755  var/db/vespa/config_server/serverdb/tenants
 fixdir ${VESPA_USER} wheel  755  var/db/vespa/index
 fixdir ${VESPA_USER} wheel  755  var/db/vespa/logcontrol
 fixdir ${VESPA_USER} wheel  755  var/db/vespa/search
@@ -101,7 +101,6 @@ fixdir ${VESPA_USER} wheel  755  var/jdisc_core
 fixdir ${VESPA_USER} wheel  755  var/vespa/bundlecache
 fixdir ${VESPA_USER} wheel  755  var/vespa/bundlecache/configserver
 fixdir ${VESPA_USER} wheel  755  var/vespa/cache/config/
-fixdir ${VESPA_USER} wheel  775  libexec/vespa/modelplugins
 
 chown -hR ${VESPA_USER} logs/vespa
 chown -hR ${VESPA_USER} var/db/vespa

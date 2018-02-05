@@ -5,23 +5,27 @@ import com.yahoo.collections.Pair;
 import com.yahoo.system.ProcessExecuter;
 import com.yahoo.vespa.hosted.dockerapi.Container;
 import com.yahoo.vespa.hosted.dockerapi.ContainerName;
+import com.yahoo.vespa.hosted.dockerapi.ContainerResources;
 import com.yahoo.vespa.hosted.dockerapi.Docker;
 import com.yahoo.vespa.hosted.dockerapi.DockerImage;
 import com.yahoo.vespa.hosted.dockerapi.DockerImpl;
 import com.yahoo.vespa.hosted.dockerapi.DockerNetworkCreator;
 import com.yahoo.vespa.hosted.dockerapi.ProcessResult;
 import com.yahoo.vespa.hosted.node.admin.ContainerNodeSpec;
+import com.yahoo.vespa.hosted.node.admin.maintenance.acl.iptables.NATCommand;
 import com.yahoo.vespa.hosted.node.admin.util.Environment;
 import com.yahoo.vespa.hosted.node.admin.util.PrefixLogger;
 
 import java.io.IOException;
 import java.net.Inet6Address;
 import java.net.InetAddress;
+import java.net.URI;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.yahoo.vespa.defaults.Defaults.getDefaults;
@@ -98,14 +102,16 @@ public class DockerOperationsImpl implements DockerOperations {
             InetAddress nodeInetAddress = environment.getInetAddressForHost(nodeSpec.hostname);
             final boolean isIPv6 = nodeInetAddress instanceof Inet6Address;
 
-            String configServers = String.join(",", environment.getConfigServerHosts());
+            String configServers = environment.getConfigServerUris().stream()
+                    .map(URI::getHost)
+                    .collect(Collectors.joining(","));
+
             Docker.CreateContainerCommand command = docker.createContainerCommand(
                     nodeSpec.wantedDockerImage.get(),
+                    ContainerResources.from(nodeSpec.minCpuCores, nodeSpec.minMainMemoryAvailableGb),
                     containerName,
                     nodeSpec.hostname)
                     .withManagedBy(MANAGER_NAME)
-                    .withNetworkMode(DockerImpl.DOCKER_CUSTOM_MACVLAN_NETWORK_NAME)
-                    .withIpAddress(nodeInetAddress)
                     .withEnvironment("CONFIG_SERVER_ADDRESS", configServers)
                     .withUlimit("nofile", 262_144, 262_144)
                     .withUlimit("nproc", 32_768, 409_600)
@@ -113,7 +119,13 @@ public class DockerOperationsImpl implements DockerOperations {
                     .withAddCapability("SYS_PTRACE") // Needed for gcore, pstack etc.
                     .withAddCapability("SYS_ADMIN"); // Needed for perf
 
-            command.withVolume("/etc/hosts", "/etc/hosts");
+            if (!docker.networkNATed()) {
+                logger.info("Network not nated - setting up with specific ip address on a macvlan");
+                command.withIpAddress(nodeInetAddress);
+                command.withNetworkMode(DockerImpl.DOCKER_CUSTOM_MACVLAN_NETWORK_NAME);
+                command.withVolume("/etc/hosts", "/etc/hosts"); // TODO This is probably not nessesary - review later
+            }
+
             for (String pathInNode : DIRECTORIES_TO_MOUNT.keySet()) {
                 String pathInHost = environment.pathInHostFromPathInNode(containerName, pathInNode).toString();
                 command.withVolume(pathInHost, pathInNode);
@@ -122,23 +134,26 @@ public class DockerOperationsImpl implements DockerOperations {
             // TODO: Enforce disk constraints
             long minMainMemoryAvailableMb = (long) (nodeSpec.minMainMemoryAvailableGb * 1024);
             if (minMainMemoryAvailableMb > 0) {
-                command.withMemoryInMb(minMainMemoryAvailableMb);
                 // VESPA_TOTAL_MEMORY_MB is used to make any jdisc container think the machine
                 // only has this much physical memory (overrides total memory reported by `free -m`).
                 command.withEnvironment("VESPA_TOTAL_MEMORY_MB", Long.toString(minMainMemoryAvailableMb));
             }
 
-            command.withCpuShares((int) Math.round(10 * nodeSpec.minCpuCores));
-
             logger.info("Starting new container with args: " + command);
             command.create();
 
             if (isIPv6) {
-                docker.connectContainerToNetwork(containerName, "bridge");
+                if (!docker.networkNATed()) {
+                    docker.connectContainerToNetwork(containerName, "bridge");
+                }
+
                 docker.startContainer(containerName);
-                setupContainerNetworkingWithScript(containerName);
+                setupContainerNetworkConnectivity(containerName, nodeInetAddress);
             } else {
                 docker.startContainer(containerName);
+                if (docker.networkNATed()) {
+                    setupContainerNetworkConnectivity(containerName, nodeInetAddress);
+                }
             }
 
             DIRECTORIES_TO_MOUNT.entrySet().stream().filter(Map.Entry::getValue).forEach(entry ->
@@ -149,7 +164,7 @@ public class DockerOperationsImpl implements DockerOperations {
     }
 
     @Override
-    public void removeContainer(final Container existingContainer) {
+    public void removeContainer(final Container existingContainer, ContainerNodeSpec nodeSpec) {
         final ContainerName containerName = existingContainer.name;
         PrefixLogger logger = PrefixLogger.getNodeAgentLogger(DockerOperationsImpl.class, containerName);
         if (existingContainer.state.isRunning()) {
@@ -159,6 +174,23 @@ public class DockerOperationsImpl implements DockerOperations {
 
         logger.info("Deleting container " + containerName.asString());
         docker.deleteContainer(containerName);
+
+        if (docker.networkNATed()) {
+            logger.info("Delete iptables NAT rules for " + containerName.asString());
+            try {
+                InetAddress nodeInetAddress = environment.getInetAddressForHost(nodeSpec.hostname);
+                String ipv6Str = docker.getGlobalIPv6Address(containerName);
+                String drop = NATCommand.drop(nodeInetAddress, InetAddress.getByName(ipv6Str));
+                Pair<Integer, String> result = processExecuter.exec(drop);
+                if (result.getFirst() != 0) {
+                    // Might be because the one or two (out of three) rules where not present - debug log and ignore
+                    // Trailing rules will always be overridden by a new one due the fact that we insert
+                    logger.debug("Unable to drop NAT rule - error message: " + result.getSecond());
+                }
+            } catch (IOException e) {
+                logger.warning("Unable to drop NAT rule for container " + containerName, e);
+            }
+        }
     }
 
     @Override
@@ -188,13 +220,21 @@ public class DockerOperationsImpl implements DockerOperations {
     }
 
     /**
+     * For macvlan:
      * Due to a bug in docker (https://github.com/docker/libnetwork/issues/1443), we need to manually set
      * IPv6 gateway in containers connected to more than one docker network
+     *
+     * For nat:
+     * Setup iptables NAT rules to map the hosts public ips to the containers
      */
-    private void setupContainerNetworkingWithScript(ContainerName containerName) throws IOException {
-        InetAddress hostDefaultGateway = DockerNetworkCreator.getDefaultGatewayLinux(true);
-        executeCommandInNetworkNamespace(containerName,
-                "route", "-A", "inet6", "add", "default", "gw", hostDefaultGateway.getHostAddress(), "dev", "eth1");
+    private void setupContainerNetworkConnectivity(ContainerName containerName, InetAddress externalAddress) throws IOException {
+        if (docker.networkNATed()) {
+            insertNAT(containerName, externalAddress);
+        } else {
+            InetAddress hostDefaultGateway = DockerNetworkCreator.getDefaultGatewayLinux(true);
+            executeCommandInNetworkNamespace(containerName,
+                    "route", "-A", "inet6", "add", "default", "gw", hostDefaultGateway.getHostAddress(), "dev", "eth1");
+        }
     }
 
     @Override
@@ -285,5 +325,26 @@ public class DockerOperationsImpl implements DockerOperations {
     @Override
     public void deleteUnusedDockerImages() {
         docker.deleteUnusedDockerImages();
+    }
+
+    /**
+     * Only insert NAT rules if they don't exist (or else they compounded)
+     */
+    private void insertNAT(ContainerName containerName, InetAddress externalAddress) throws IOException {
+        PrefixLogger logger = PrefixLogger.getNodeAgentLogger(DockerOperationsImpl.class, containerName);
+        String ipv6Str = docker.getGlobalIPv6Address(containerName);
+
+        // Check if exist
+        String checkCommand = NATCommand.check(externalAddress, InetAddress.getByName(ipv6Str));
+        Pair<Integer, String> result = processExecuter.exec(checkCommand);
+        if (result.getFirst() == 0 ) return;
+
+        // Setup NAT
+        String natCommand = NATCommand.insert(externalAddress, InetAddress.getByName(ipv6Str));
+        logger.info("Setting up NAT rules: " + natCommand);
+        result = processExecuter.exec(checkCommand);
+        if (result.getFirst() != 0 ) {
+            throw new IOException("Unable to setup NAT rule - error message: " + result.getSecond());
+        }
     }
 }

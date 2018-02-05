@@ -8,13 +8,13 @@ import com.yahoo.vespa.objects.Ids;
 
 /**
  * A DataType containing a tensor type
- * 
+ *
  * @author bratseth
  */
 public class TensorDataType extends DataType {
 
     private final TensorType tensorType;
-    
+
     // The global class identifier shared with C++.
     public static int classId = registerClass(Ids.document + 59, TensorDataType.class);
 
@@ -42,10 +42,10 @@ public class TensorDataType extends DataType {
         if (value == null) return false;
         if ( ! TensorFieldValue.class.isAssignableFrom(value.getClass())) return false;
         TensorFieldValue tensorValue = (TensorFieldValue)value;
-        return tensorType.isAssignableTo(tensorValue.getDataType().getTensorType());
+        return tensorType.isConvertibleTo(tensorValue.getDataType().getTensorType());
     }
 
     /** Returns the type of the tensor this field can hold */
     public TensorType getTensorType() { return tensorType; }
-    
+
 }

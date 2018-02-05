@@ -3,11 +3,11 @@ package com.yahoo.vespa.config.server.http.v2;
 
 import com.yahoo.cloud.config.ConfigserverConfig;
 import com.yahoo.config.model.application.provider.FilesApplicationPackage;
+import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.config.provision.TenantName;
 import com.yahoo.container.jdisc.HttpRequest;
 import com.yahoo.container.jdisc.HttpResponse;
 import com.yahoo.container.logging.AccessLog;
-import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.vespa.config.server.ApplicationRepository;
 import com.yahoo.vespa.config.server.application.MemoryTenantApplications;
 import com.yahoo.vespa.config.server.application.TenantApplications;
@@ -15,28 +15,36 @@ import com.yahoo.vespa.config.server.http.CompressedApplicationInputStreamTest;
 import com.yahoo.vespa.config.server.http.HandlerTest;
 import com.yahoo.vespa.config.server.http.HttpErrorResponse;
 import com.yahoo.vespa.config.server.http.SessionHandlerTest;
-import com.yahoo.vespa.config.server.session.*;
+import com.yahoo.vespa.config.server.session.LocalSessionRepo;
+import com.yahoo.vespa.config.server.session.SessionFactory;
 import com.yahoo.vespa.config.server.tenant.Tenants;
-import com.yahoo.vespa.curator.mock.MockCurator;
 import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
 
-import java.io.*;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.time.Clock;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.yahoo.jdisc.Response.Status.*;
+import static com.yahoo.jdisc.Response.Status.BAD_REQUEST;
+import static com.yahoo.jdisc.Response.Status.INTERNAL_SERVER_ERROR;
+import static com.yahoo.jdisc.Response.Status.METHOD_NOT_ALLOWED;
+import static com.yahoo.jdisc.Response.Status.OK;
+import static com.yahoo.jdisc.http.HttpRequest.Method.GET;
+import static com.yahoo.jdisc.http.HttpRequest.Method.POST;
 import static org.hamcrest.core.Is.is;
-import static org.junit.Assert.*;
-
-import static com.yahoo.jdisc.http.HttpRequest.Method.*;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * @author hmusum
- * @since 5.1
  */
 public class SessionCreateHandlerTest extends SessionHandlerTest {
 
@@ -59,7 +67,7 @@ public class SessionCreateHandlerTest extends SessionHandlerTest {
     @Before
     public void setupRepo() throws Exception {
         applicationRepo = new MemoryTenantApplications();
-        localSessionRepo = new LocalSessionRepo(applicationRepo, Clock.systemUTC());
+        localSessionRepo = new LocalSessionRepo(Clock.systemUTC());
         pathPrefix = "/application/v2/tenant/" + tenant + "/session/";
         createdMessage = " for tenant '" + tenant + "' created.\"";
         tenantMessage = ",\"tenant\":\"test\"";
@@ -97,7 +105,7 @@ public class SessionCreateHandlerTest extends SessionHandlerTest {
         assertThat(factory.applicationName, is("ulfio"));
     }
 
-    protected void assertFromParameter(String expected, String from) throws IOException {
+    private void assertFromParameter(String expected, String from) throws IOException {
         HttpRequest request = post(Collections.singletonMap("from", from));
         MockSessionFactory factory = new MockSessionFactory();
         factory.applicationPackage = testApp;
@@ -111,7 +119,7 @@ public class SessionCreateHandlerTest extends SessionHandlerTest {
                               expected + "/content/\",\"message\":\"Session " + expected + createdMessage + "}"));
     }
 
-    protected void assertIllegalFromParameter(String fromValue) throws IOException {
+    private void assertIllegalFromParameter(String fromValue) throws IOException {
         File outFile = CompressedApplicationInputStreamTest.createTarFile();
         HttpRequest request = post(outFile, postHeaders, Collections.singletonMap("from", fromValue));
         HandlerTest.assertHttpStatusCodeErrorCodeAndMessage(createHandler().handle(request), BAD_REQUEST, HttpErrorResponse.errorCodes.BAD_REQUEST, "Parameter 'from' has illegal value '" + fromValue + "'");
@@ -168,7 +176,7 @@ public class SessionCreateHandlerTest extends SessionHandlerTest {
         assertTrue(applicationPackage.exists());
         final File[] files = applicationPackage.listFiles();
         assertNotNull(files);
-        assertThat(files.length, is(2));
+        assertThat(files.length, is(3));
     }
 
     @Test
@@ -209,7 +217,7 @@ public class SessionCreateHandlerTest extends SessionHandlerTest {
         assertIllegalFromParameter("http://host:4013/application/v2/tenant/" + tenant + "/application/foo/environment/prod/region/baz/instance");
     }
 
-    public SessionCreateHandler createHandler() {
+    private SessionCreateHandler createHandler() {
         try {
             return createHandler(new MockSessionFactory());
         } catch (Exception e) {
@@ -219,7 +227,7 @@ public class SessionCreateHandlerTest extends SessionHandlerTest {
         return null;
     }
 
-    public SessionCreateHandler createHandler(SessionFactory sessionFactory) {
+    private SessionCreateHandler createHandler(SessionFactory sessionFactory) {
         try {
             TestTenantBuilder testBuilder = new TestTenantBuilder();
             testBuilder.createTenant(tenant).withSessionFactory(sessionFactory)
@@ -235,22 +243,24 @@ public class SessionCreateHandlerTest extends SessionHandlerTest {
     private SessionCreateHandler createHandler(Tenants tenants) throws Exception {
         TestTenantBuilder testTenantBuilder = new TestTenantBuilder();
         final ConfigserverConfig configserverConfig = new ConfigserverConfig(new ConfigserverConfig.Builder());
-        return new SessionCreateHandler(Runnable::run, AccessLog.voidAccessLog(), tenants, configserverConfig,
-                                        new ApplicationRepository(testTenantBuilder.createTenants(),
-                                                                  new SessionHandlerTest.MockProvisioner(),
-                                                                  new MockCurator(),
-                                                                  Clock.systemUTC()));
+        return new SessionCreateHandler(
+                SessionCreateHandler.testOnlyContext(),
+                new ApplicationRepository(testTenantBuilder.createTenants(),
+                                          new SessionHandlerTest.MockProvisioner(),
+                                          Clock.systemUTC()),
+                tenants, configserverConfig);
+
     }
 
-    public HttpRequest post() throws FileNotFoundException {
+    private HttpRequest post() throws FileNotFoundException {
         return post(null, postHeaders, new HashMap<>());
     }
 
-    public HttpRequest post(File file) throws FileNotFoundException {
+    private HttpRequest post(File file) throws FileNotFoundException {
         return post(file, postHeaders, new HashMap<>());
     }
 
-    public HttpRequest post(File file, Map<String, String> headers, Map<String, String> parameters) throws FileNotFoundException {
+    private HttpRequest post(File file, Map<String, String> headers, Map<String, String> parameters) throws FileNotFoundException {
         HttpRequest request = HttpRequest.createTestRequest("http://" + hostname + ":" + port + "/application/v2/tenant/" + tenant + "/session",
                 POST,
                 file == null ? null : new FileInputStream(file),
@@ -261,7 +271,7 @@ public class SessionCreateHandlerTest extends SessionHandlerTest {
         return request;
     }
 
-    public HttpRequest post(Map<String, String> parameters) throws FileNotFoundException {
+    private HttpRequest post(Map<String, String> parameters) throws FileNotFoundException {
         return post(null, new HashMap<>(), parameters);
     }
 }

@@ -46,7 +46,6 @@ public class Dispatch extends AbstractService implements SearchInterface,
         setProp("clustertype", "search")
                 .setProp("clustername", dispatchGroup.getClusterName())
                 .setProp("index", nodeSpec.groupIndex());
-        monitorService();
     }
 
     public static Dispatch createTld(DispatchGroup dispatchGroup, AbstractConfigProducer parent, int rowId) {
@@ -97,7 +96,7 @@ public class Dispatch extends AbstractService implements SearchInterface,
     public int getMaxThreads() { return 500*2; }
 
     public String getHostname() {
-        return getHost().getHostName();
+        return getHost().getHostname();
     }
 
     @Override
@@ -106,7 +105,7 @@ public class Dispatch extends AbstractService implements SearchInterface,
     }
 
     public String getDispatcherConnectSpec() {
-        return "tcp/" + getHost().getHostName() + ":" + getDispatchPort();
+        return "tcp/" + getHost().getHostname() + ":" + getDispatchPort();
     }
 
     public DispatchGroup getDispatchGroup() {

@@ -16,12 +16,14 @@ URL:            http://vespa.ai
 Source0:        vespa-%{version}.tar.gz
 
 %if 0%{?centos}
-BuildRequires: epel-release 
+BuildRequires: epel-release
 BuildRequires: centos-release-scl
-BuildRequires: devtoolset-6-gcc-c++
-BuildRequires: devtoolset-6-libatomic-devel
-BuildRequires: devtoolset-6-binutils
-%define _devtoolset_enable /opt/rh/devtoolset-6/enable
+BuildRequires: devtoolset-7-gcc-c++
+BuildRequires: devtoolset-7-libatomic-devel
+BuildRequires: devtoolset-7-binutils
+BuildRequires: rh-maven33
+%define _devtoolset_enable /opt/rh/devtoolset-7/enable
+%define _rhmaven33_enable /opt/rh/rh-maven33/enable
 %endif
 %if 0%{?fedora}
 BuildRequires: gcc-c++
@@ -36,6 +38,7 @@ BuildRequires: vespa-zookeeper-c-client-devel >= 3.4.9-6
 %endif
 %if 0%{?fedora}
 BuildRequires: cmake >= 3.9.1
+BuildRequires: maven
 %if 0%{?fc25}
 BuildRequires: llvm-devel >= 3.9.1
 BuildRequires: boost-devel >= 1.60
@@ -44,12 +47,19 @@ BuildRequires: boost-devel >= 1.60
 BuildRequires: llvm-devel >= 4.0
 BuildRequires: boost-devel >= 1.63
 %endif
+%if 0%{?fc27}
+BuildRequires: llvm4.0-devel >= 4.0
+BuildRequires: boost-devel >= 1.64
+%endif
+%if 0%{?fc28}
+BuildRequires: llvm4.0-devel >= 4.0
+BuildRequires: boost-devel >= 1.64
+%endif
 BuildRequires: zookeeper-devel >= 3.4.9
 %endif
 BuildRequires: lz4-devel
 BuildRequires: libzstd-devel
 BuildRequires: zlib-devel
-BuildRequires: maven
 BuildRequires: libicu-devel
 BuildRequires: java-1.8.0-openjdk-devel
 BuildRequires: openssl-devel
@@ -58,19 +68,40 @@ BuildRequires: make
 BuildRequires: vespa-cppunit-devel >= 1.12.1-6
 BuildRequires: vespa-libtorrent-devel >= 1.0.11-6
 BuildRequires: systemd
+BuildRequires: flex >= 2.5.0
+BuildRequires: bison >= 3.0.0
 %if 0%{?centos}
 Requires: epel-release
 %endif
 Requires: which
 Requires: initscripts
+Requires: perl
+Requires: perl-Carp
+Requires: perl-Data-Dumper
+Requires: perl-Digest-MD5
+Requires: perl-Env
+Requires: perl-Exporter
+Requires: perl-File-Path
+Requires: perl-File-Temp
+Requires: perl-Getopt-Long
+Requires: perl-IO-Socket-IP
+Requires: perl-JSON
+Requires: perl-libwww-perl
+Requires: perl-Net-INET6Glue
+Requires: perl-Pod-Usage
+Requires: perl-URI
 Requires: valgrind
 Requires: Judy
 Requires: lz4
 Requires: libzstd
 Requires: zlib
 Requires: libicu
+Requires: perf
+Requires: gdb
+Requires: net-tools
 %if 0%{?centos}
 Requires: llvm3.9
+Requires: devtoolset-7-gdb
 Requires: vespa-boost >= 1.59.0-6
 Requires: vespa-zookeeper-c-client >= 3.4.9-6
 %define _extra_link_directory /usr/lib64/llvm3.9/lib;/opt/vespa-boost/lib;/opt/vespa-libtorrent/lib;/opt/vespa-zookeeper-c-client/lib;/opt/vespa-cppunit/lib
@@ -78,17 +109,31 @@ Requires: vespa-zookeeper-c-client >= 3.4.9-6
 %endif
 %if 0%{?fedora}
 %if 0%{?fc25}
-Requires: llvm >= 3.9.1
+Requires: llvm-libs >= 3.9.1
 Requires: boost >= 1.60
 %endif
 %if 0%{?fc26}
-Requires: llvm >= 4.0
+Requires: llvm-libs >= 4.0
 Requires: boost >= 1.63
 %define _vespa_llvm_version 4.0
 %endif
+%if 0%{?fc27}
+Requires: llvm4.0-libs >= 4.0
+Requires: boost >= 1.64
+%define _vespa_llvm_version 4.0
+%define _vespa_llvm_link_directory /usr/lib64/llvm4.0/lib
+%define _vespa_llvm_include_directory /usr/include/llvm4.0
+%endif
+%if 0%{?fc28}
+Requires: llvm4.0-libs >= 4.0
+Requires: boost >= 1.64
+%define _vespa_llvm_version 4.0
+%define _vespa_llvm_link_directory /usr/lib64/llvm4.0/lib
+%define _vespa_llvm_include_directory /usr/include/llvm4.0
+%endif
 Requires: zookeeper >= 3.4.9
-%define _extra_link_directory /opt/vespa-libtorrent/lib;/opt/vespa-cppunit/lib
-%define _extra_include_directory /opt/vespa-libtorrent/include;/opt/vespa-cppunit/include
+%define _extra_link_directory /opt/vespa-libtorrent/lib;/opt/vespa-cppunit/lib%{?_vespa_llvm_link_directory:;%{_vespa_llvm_link_directory}}
+%define _extra_include_directory /opt/vespa-libtorrent/include;/opt/vespa-cppunit/include%{?_vespa_llvm_include_directory:;%{_vespa_llvm_include_directory}}
 %define _vespa_boost_lib_suffix %{nil}
 %endif
 Requires: java-1.8.0-openjdk
@@ -112,8 +157,11 @@ Vespa - The open big data serving engine
 %if 0%{?_devtoolset_enable:1}
 source %{_devtoolset_enable} || true
 %endif
+%if 0%{?_rhmaven33_enable:1}
+source %{_rhmaven33_enable} || true
+%endif
 sh bootstrap.sh java
-mvn -nsu -T 2C install -DskipTests -Dmaven.javadoc.skip=true
+mvn -nsu -T 2C install -Dmaven.test.skip=true -Dmaven.javadoc.skip=true
 cmake3 -DCMAKE_INSTALL_PREFIX=%{_prefix} \
        -DJAVA_HOME=/usr/lib/jvm/java-openjdk \
        -DEXTRA_LINK_DIRECTORY="%{_extra_link_directory}" \
@@ -147,23 +195,29 @@ chmod +x /etc/profile.d/vespa.sh
 exit 0
 
 %post
-%systemd_post vespa-configserver.service 
-%systemd_post vespa.service 
+%systemd_post vespa-configserver.service
+%systemd_post vespa.service
 
 %preun
 %systemd_preun vespa.service
 %systemd_preun vespa-configserver.service
 
 %postun
-%systemd_postun_with_restart vespa.service 
-%systemd_postun_with_restart vespa-configserver.service 
-rm -f /etc/profile.d/vespa.sh
-userdel vespa 
+%systemd_postun_with_restart vespa.service
+%systemd_postun_with_restart vespa-configserver.service
+if [ $1 -eq 0 ]; then # this is an uninstallation
+    rm -f /etc/profile.d/vespa.sh
+    ! getent passwd vespa >/dev/null || userdel vespa
+    ! getent group vespa >/dev/null || groupdel vespa
+fi
 
 %files
 %defattr(-,vespa,vespa,-)
 %doc
 %{_prefix}/*
+%config(noreplace) %{_prefix}/conf/logd/logd.cfg
+%config(noreplace) %{_prefix}/conf/vespa/default-env.txt
+%config(noreplace) %{_prefix}/etc/vespamalloc.conf
 %attr(644,root,root) /usr/lib/systemd/system/vespa.service
 %attr(644,root,root) /usr/lib/systemd/system/vespa-configserver.service
 

@@ -13,8 +13,7 @@
 
 using vespalib::eval::TensorSpec;
 
-namespace vespalib {
-namespace tensor {
+namespace vespalib::tensor {
 
 namespace {
 
@@ -49,7 +48,7 @@ calcCellsSize(const eval::ValueType &type)
 void
 checkCellsSize(const DenseTensorView &arg)
 {
-    auto cellsSize = calcCellsSize(arg.type());
+    auto cellsSize = calcCellsSize(arg.fast_type());
     if (arg.cellsRef().size() != cellsSize) {
         throw IllegalStateException(make_string("wrong cell size, "
                                                 "expected=%zu, "
@@ -63,14 +62,14 @@ void
 checkDimensions(const DenseTensorView &lhs, const DenseTensorView &rhs,
                 vespalib::stringref operation)
 {
-    if (lhs.type() != rhs.type()) {
+    if (lhs.fast_type() != rhs.fast_type()) {
         throw IllegalStateException(make_string("mismatching dimensions for "
                                                 "dense tensor %s, "
                                                 "lhs dimensions = '%s', "
                                                 "rhs dimensions = '%s'",
                                                 operation.c_str(),
-                                                dimensionsAsString(lhs.type()).c_str(),
-                                                dimensionsAsString(rhs.type()).c_str()));
+                                                dimensionsAsString(lhs.fast_type()).c_str(),
+                                                dimensionsAsString(rhs.fast_type()).c_str()));
     }
     checkCellsSize(lhs);
     checkCellsSize(rhs);
@@ -96,7 +95,7 @@ joinDenseTensors(const DenseTensorView &lhs, const DenseTensorView &rhs,
         ++rhsCellItr;
     }
     assert(rhsCellItr == rhs.cellsRef().cend());
-    return std::make_unique<DenseTensor>(lhs.type(),
+    return std::make_unique<DenseTensor>(lhs.fast_type(),
                                          std::move(cells));
 }
 
@@ -132,7 +131,7 @@ bool sameCells(DenseTensorView::CellsRef lhs, DenseTensorView::CellsRef rhs)
 
 
 DenseTensorView::DenseTensorView(const DenseTensor &rhs)
-    : _typeRef(rhs.type()),
+    : _typeRef(rhs.fast_type()),
       _cellsRef(rhs.cellsRef())
 {
 }
@@ -145,67 +144,19 @@ DenseTensorView::operator==(const DenseTensorView &rhs) const
 }
 
 const eval::ValueType &
-DenseTensorView::getType() const
+DenseTensorView::type() const
 {
     return _typeRef;
 }
 
 double
-DenseTensorView::sum() const
+DenseTensorView::as_double() const
 {
     double result = 0.0;
     for (const auto &cell : _cellsRef) {
         result += cell;
     }
     return result;
-}
-
-Tensor::UP
-DenseTensorView::add(const Tensor &arg) const
-{
-    return dense::apply(*this, arg,
-                        [](double lhsValue, double rhsValue)
-                        { return lhsValue + rhsValue; });
-}
-
-Tensor::UP
-DenseTensorView::subtract(const Tensor &arg) const
-{
-    return dense::apply(*this, arg,
-                        [](double lhsValue, double rhsValue)
-                        { return lhsValue - rhsValue; });
-}
-
-Tensor::UP
-DenseTensorView::multiply(const Tensor &arg) const
-{
-    return dense::apply(*this, arg,
-                        [](double lhsValue, double rhsValue)
-                        { return lhsValue * rhsValue; });
-}
-
-Tensor::UP
-DenseTensorView::min(const Tensor &arg) const
-{
-    return dense::apply(*this, arg,
-                        [](double lhsValue, double rhsValue)
-                        { return std::min(lhsValue, rhsValue); });
-}
-
-Tensor::UP
-DenseTensorView::max(const Tensor &arg) const
-{
-    return dense::apply(*this, arg,
-                        [](double lhsValue, double rhsValue)
-                        { return std::max(lhsValue, rhsValue); });
-}
-
-Tensor::UP
-DenseTensorView::match(const Tensor &arg) const
-{
-    return joinDenseTensors(*this, arg, "match",
-                            [](double lhsValue, double rhsValue)
-                            { return (lhsValue * rhsValue); });
 }
 
 Tensor::UP
@@ -221,14 +172,6 @@ DenseTensorView::apply(const CellFunction &func) const
     return std::make_unique<DenseTensor>(_typeRef, std::move(newCells));
 }
 
-Tensor::UP
-DenseTensorView::sum(const vespalib::string &dimension) const
-{
-    return dense::reduce(*this, { dimension },
-                          [](double lhsValue, double rhsValue)
-                          { return lhsValue + rhsValue; });
-}
-
 bool
 DenseTensorView::equals(const Tensor &arg) const
 {
@@ -237,14 +180,6 @@ DenseTensorView::equals(const Tensor &arg) const
         return *this == *view;
     }
     return false;
-}
-
-vespalib::string
-DenseTensorView::toString() const
-{
-    std::ostringstream stream;
-    stream << *this;
-    return stream.str();
 }
 
 Tensor::UP
@@ -260,7 +195,7 @@ void
 buildAddress(const DenseTensorCellsIterator &itr, TensorSpec::Address &address)
 {
     auto addressItr = itr.address().begin();
-    for (const auto &dim : itr.type().dimensions()) {
+    for (const auto &dim : itr.fast_type().dimensions()) {
         address.emplace(std::make_pair(dim.name, TensorSpec::Label(*addressItr++)));
     }
     assert(addressItr == itr.address().end());
@@ -271,7 +206,7 @@ buildAddress(const DenseTensorCellsIterator &itr, TensorSpec::Address &address)
 TensorSpec
 DenseTensorView::toSpec() const
 {
-    TensorSpec result(getType().to_spec());
+    TensorSpec result(type().to_spec());
     TensorSpec::Address address;
     for (CellsIterator itr(_typeRef, _cellsRef); itr.valid(); itr.next()) {
         buildAddress(itr, address);
@@ -279,31 +214,6 @@ DenseTensorView::toSpec() const
         address.clear();
     }
     return result;
-}
-
-void
-DenseTensorView::print(std::ostream &out) const
-{
-    // TODO (geirst): print on common format.
-    out << "[ ";
-    bool first = true;
-    for (const auto &dim : _typeRef.dimensions()) {
-        if (!first) {
-            out << ", ";
-        }
-        out << dim.name << ":" << dim.size;
-        first = false;
-    }
-    out << " ] { ";
-    first = true;
-    for (const auto &cell : cellsRef()) {
-        if (!first) {
-            out << ", ";
-        }
-        out << cell;
-        first = false;
-    }
-    out << " }";
 }
 
 void
@@ -317,7 +227,7 @@ DenseTensorView::accept(TensorVisitor &visitor) const
         addressBuilder.clear();
         auto rawIndex = iterator.address().begin();
         for (const auto &dimension : _typeRef.dimensions()) {
-            label = vespalib::make_string("%zu", *rawIndex);
+            label = vespalib::make_string("%u", *rawIndex);
             addressBuilder.add(dimension.name, label);
             ++rawIndex;
         }
@@ -328,22 +238,46 @@ DenseTensorView::accept(TensorVisitor &visitor) const
 }
 
 Tensor::UP
-DenseTensorView::apply(const eval::BinaryOperation &op, const Tensor &arg) const
+DenseTensorView::join(join_fun_t function, const Tensor &arg) const
 {
-    return dense::apply(*this, arg,
-                        [&op](double lhsValue, double rhsValue)
-                        { return op.eval(lhsValue, rhsValue); });
+    if (fast_type() == arg.type()) {
+        if (function == eval::operation::Mul::f) {
+            return joinDenseTensors(*this, arg, "mul",
+                                    [](double a, double b) { return (a * b); });
+        }
+        if (function == eval::operation::Add::f) {
+            return joinDenseTensors(*this, arg, "add",
+                                    [](double a, double b) { return (a + b); });
+        }
+        return joinDenseTensors(*this, arg, "join", function);
+    }
+    if (function == eval::operation::Mul::f) {
+        return dense::apply(*this, arg, [](double a, double b) { return (a * b); });
+    }
+    if (function == eval::operation::Add::f) {
+        return dense::apply(*this, arg, [](double a, double b) { return (a + b); });
+    }
+    return dense::apply(*this, arg, function);
 }
 
 Tensor::UP
-DenseTensorView::reduce(const eval::BinaryOperation &op,
-                        const std::vector<vespalib::string> &dimensions) const
+DenseTensorView::reduce_all(join_fun_t op, const std::vector<vespalib::string> &dims) const
 {
-    return dense::reduce(*this,
-                         (dimensions.empty() ? _typeRef.dimension_names() : dimensions),
-                         [&op](double lhsValue, double rhsValue)
-                         { return op.eval(lhsValue, rhsValue); });
+    if (op == eval::operation::Mul::f) {
+        return dense::reduce(*this, dims, [](double a, double b) { return (a * b);});
+    }
+    if (op == eval::operation::Add::f) {
+        return dense::reduce(*this, dims, [](double a, double b) { return (a + b);});
+    }
+    return dense::reduce(*this, dims, op);
 }
 
-} // namespace vespalib::tensor
-} // namespace vespalib
+Tensor::UP
+DenseTensorView::reduce(join_fun_t op, const std::vector<vespalib::string> &dimensions) const
+{
+    return dimensions.empty()
+            ? reduce_all(op, _typeRef.dimension_names())
+            : reduce_all(op, dimensions);
+}
+
+}

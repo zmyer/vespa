@@ -6,25 +6,25 @@
  */
 #pragma once
 
-#include <vespa/document/bucket/bucketid.h>
+#include <vespa/document/bucket/bucket.h>
 #include <vespa/vdslib/state/node.h>
 #include <vespa/vespalib/util/printable.h>
 
-namespace storage {
-namespace distributor {
+namespace storage::distributor {
 
 class OperationTarget : public vespalib::AsciiPrintable
 {
-    document::BucketId _bucket;
+    document::Bucket _bucket;
     lib::Node _node;
     bool _newCopy;
 
 public:
     OperationTarget() : _newCopy(true) {} 
-    OperationTarget(const document::BucketId& id, const lib::Node& node, bool newCopy)
-        : _bucket(id), _node(node), _newCopy(newCopy) {}
+    OperationTarget(const document::Bucket& bucket, const lib::Node& node, bool newCopy)
+        : _bucket(bucket), _node(node), _newCopy(newCopy) {}
 
-    const document::BucketId& getBucketId() const { return _bucket; }
+    document::BucketId getBucketId() const { return _bucket.getBucketId(); }
+    document::Bucket getBucket() const { return _bucket; }
     const lib::Node& getNode() const { return _node; }
     bool isNewCopy() const { return _newCopy; }
 
@@ -67,5 +67,4 @@ public:
                                            const document::BucketId& id) = 0;
 };
 
-} // distributor
-} // storage
+}

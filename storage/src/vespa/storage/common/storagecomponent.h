@@ -35,12 +35,11 @@
 #include <vespa/storageframework/generic/component/componentregister.h>
 #include <vespa/document/bucket/bucketidfactory.h>
 #include <vespa/vdslib/state/node.h>
-#include <vespa/vespalib/util/sync.h>
+#include <mutex>
 
-namespace vespa { namespace config { namespace content { namespace core {
-namespace internal {
+namespace vespa::config::content::core::internal {
     class InternalStorPrioritymappingType;
-} } } } }
+}
 namespace document {
     class DocumentTypeRepo;
 }
@@ -59,11 +58,11 @@ class StorageComponentRegister;
 
 class StorageComponent : public framework::Component {
 public:
-    typedef std::unique_ptr<StorageComponent> UP;
-    typedef vespa::config::content::core::internal::InternalStorPrioritymappingType PriorityConfig;
-    typedef std::shared_ptr<document::DocumentTypeRepo> DocumentTypeRepoSP;
-    typedef std::shared_ptr<documentapi::LoadTypeSet> LoadTypeSetSP;
-    typedef std::shared_ptr<lib::Distribution> DistributionSP;
+    using UP = std::unique_ptr<StorageComponent>;
+    using PriorityConfig = vespa::config::content::core::internal::InternalStorPrioritymappingType;
+    using DocumentTypeRepoSP = std::shared_ptr<document::DocumentTypeRepo>;
+    using LoadTypeSetSP = std::shared_ptr<documentapi::LoadTypeSet>;
+    using DistributionSP = std::shared_ptr<lib::Distribution>;
 
     /**
      * Node type is supposed to be set immediately, and never be updated.
@@ -84,6 +83,7 @@ public:
     void setPriorityConfig(const PriorityConfig&);
     void setBucketIdFactory(const document::BucketIdFactory&);
     void setDistribution(DistributionSP);
+    void enableMultipleBucketSpaces(bool value);
 
     StorageComponent(StorageComponentRegister&, vespalib::stringref name);
     virtual ~StorageComponent();
@@ -102,6 +102,7 @@ public:
     uint8_t getPriority(const documentapi::LoadType&) const;
     DistributionSP getDistribution() const;
     NodeStateUpdater& getStateUpdater() const;
+    bool enableMultipleBucketSpaces() const;
 
 private:
     vespalib::string _clusterName;
@@ -113,7 +114,8 @@ private:
     document::BucketIdFactory _bucketIdFactory;
     DistributionSP _distribution;
     NodeStateUpdater* _nodeStateUpdater;
-    vespalib::Lock _lock;
+    mutable std::mutex _lock;
+    bool _enableMultipleBucketSpaces;
 };
 
 struct StorageComponentRegister : public virtual framework::ComponentRegister

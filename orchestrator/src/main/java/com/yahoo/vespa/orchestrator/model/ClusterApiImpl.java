@@ -5,10 +5,10 @@ import com.yahoo.vespa.applicationmodel.ClusterId;
 import com.yahoo.vespa.applicationmodel.HostName;
 import com.yahoo.vespa.applicationmodel.ServiceCluster;
 import com.yahoo.vespa.applicationmodel.ServiceInstance;
+import com.yahoo.vespa.applicationmodel.ServiceStatus;
 import com.yahoo.vespa.applicationmodel.ServiceType;
 import com.yahoo.vespa.orchestrator.controller.ClusterControllerClientFactory;
 import com.yahoo.vespa.orchestrator.status.HostStatus;
-import com.yahoo.vespa.service.monitor.ServiceMonitorStatus;
 
 import java.util.Collections;
 import java.util.HashSet;
@@ -19,25 +19,28 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 class ClusterApiImpl implements ClusterApi {
-    private final ServiceCluster<ServiceMonitorStatus> serviceCluster;
+    private final ApplicationApi applicationApi;
+    private final ServiceCluster serviceCluster;
     private final NodeGroup nodeGroup;
     private final Map<HostName, HostStatus> hostStatusMap;
     private final ClusterControllerClientFactory clusterControllerClientFactory;
-    private final Set<ServiceInstance<ServiceMonitorStatus>> servicesInGroup;
-    private final Set<ServiceInstance<ServiceMonitorStatus>> servicesDownInGroup;
-    private final Set<ServiceInstance<ServiceMonitorStatus>> servicesNotInGroup;
-    private final Set<ServiceInstance<ServiceMonitorStatus>> servicesDownAndNotInGroup;
+    private final Set<ServiceInstance> servicesInGroup;
+    private final Set<ServiceInstance> servicesDownInGroup;
+    private final Set<ServiceInstance> servicesNotInGroup;
+    private final Set<ServiceInstance> servicesDownAndNotInGroup;
 
-    public ClusterApiImpl(ServiceCluster<ServiceMonitorStatus> serviceCluster,
+    public ClusterApiImpl(ApplicationApi applicationApi,
+                          ServiceCluster serviceCluster,
                           NodeGroup nodeGroup,
                           Map<HostName, HostStatus> hostStatusMap,
                           ClusterControllerClientFactory clusterControllerClientFactory) {
+        this.applicationApi = applicationApi;
         this.serviceCluster = serviceCluster;
         this.nodeGroup = nodeGroup;
         this.hostStatusMap = hostStatusMap;
         this.clusterControllerClientFactory = clusterControllerClientFactory;
 
-        Map<Boolean, Set<ServiceInstance<ServiceMonitorStatus>>> serviceInstancesByLocality =
+        Map<Boolean, Set<ServiceInstance>> serviceInstancesByLocality =
                 serviceCluster.serviceInstances().stream()
                         .collect(
                                 Collectors.groupingBy(
@@ -68,6 +71,11 @@ class ClusterApiImpl implements ClusterApi {
     @Override
     public boolean isStorageCluster() {
         return VespaModelUtil.isStorage(serviceCluster);
+    }
+
+    @Override
+    public ApplicationApi getApplication() {
+        return applicationApi;
     }
 
     @Override
@@ -114,14 +122,14 @@ class ClusterApiImpl implements ClusterApi {
     }
 
     private Optional<StorageNode> storageNodeInGroup(
-            Predicate<ServiceInstance<ServiceMonitorStatus>> storageServicePredicate) {
+            Predicate<ServiceInstance> storageServicePredicate) {
         if (!VespaModelUtil.isStorage(serviceCluster)) {
             return Optional.empty();
         }
 
         Set<StorageNode> storageNodes = new HashSet<>();
 
-        for (ServiceInstance<ServiceMonitorStatus> serviceInstance : servicesInGroup) {
+        for (ServiceInstance serviceInstance : servicesInGroup) {
             if (!storageServicePredicate.test(serviceInstance)) {
                 continue;
             }
@@ -172,12 +180,12 @@ class ClusterApiImpl implements ClusterApi {
         return hostStatusMap.getOrDefault(hostName, HostStatus.NO_REMARKS);
     }
 
-    private boolean serviceEffectivelyDown(ServiceInstance<ServiceMonitorStatus> service) {
+    private boolean serviceEffectivelyDown(ServiceInstance service) {
         if (hostStatus(service.hostName()) == HostStatus.ALLOWED_TO_BE_DOWN) {
             return true;
         }
 
-        if (service.serviceStatus() == ServiceMonitorStatus.DOWN) {
+        if (service.serviceStatus() == ServiceStatus.DOWN) {
             return true;
         }
 

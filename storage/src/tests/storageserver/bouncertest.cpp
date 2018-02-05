@@ -5,12 +5,15 @@
 #include <vespa/storageapi/message/state.h>
 #include <vespa/storageapi/message/stat.h>
 #include <vespa/storage/storageserver/bouncer.h>
+#include <vespa/storage/storageserver/bouncer_metrics.h>
 #include <tests/common/teststorageapp.h>
 #include <tests/common/testhelper.h>
 #include <tests/common/dummystoragelink.h>
+#include <vespa/document/test/make_document_bucket.h>
 #include <vespa/storageapi/message/persistence.h>
 #include <vespa/config/common/exceptions.h>
 
+using document::test::makeDocumentBucket;
 
 namespace storage {
 
@@ -110,7 +113,7 @@ BouncerTest::createDummyFeedMessage(api::Timestamp timestamp,
                                     api::StorageMessage::Priority priority)
 {
     auto cmd = std::make_shared<api::RemoveCommand>(
-            document::BucketId(0),
+            makeDocumentBucket(document::BucketId(0)),
             document::DocumentId("doc:foo:bar"),
             timestamp);
     cmd->setPriority(priority);
@@ -120,6 +123,7 @@ BouncerTest::createDummyFeedMessage(api::Timestamp timestamp,
 void
 BouncerTest::testFutureTimestamp()
 {
+    CPPUNIT_ASSERT_EQUAL(uint64_t(0), _manager->metrics().clock_skew_aborts.getValue());
 
     // Fail when future timestamps (more than 5 seconds) are received.
     {
@@ -127,11 +131,12 @@ BouncerTest::testFutureTimestamp()
 
         CPPUNIT_ASSERT_EQUAL(1, (int)_upper->getNumReplies());
         CPPUNIT_ASSERT_EQUAL(0, (int)_upper->getNumCommands());
-        CPPUNIT_ASSERT_EQUAL(api::ReturnCode::ABORTED,
+        CPPUNIT_ASSERT_EQUAL(api::ReturnCode::REJECTED,
                              static_cast<api::RemoveReply&>(*_upper->getReply(0)).
                              getResult().getResult());
         _upper->reset();
     }
+    CPPUNIT_ASSERT_EQUAL(uint64_t(1), _manager->metrics().clock_skew_aborts.getValue());
 
     // Verify that 1 second clock skew is OK
     {
@@ -149,7 +154,7 @@ BouncerTest::testFutureTimestamp()
         CPPUNIT_ASSERT_EQUAL(1, (int)_lower->getNumCommands());
     }
 
-
+    CPPUNIT_ASSERT_EQUAL(uint64_t(1), _manager->metrics().clock_skew_aborts.getValue());
 }
 
 void
@@ -165,7 +170,7 @@ BouncerTest::testAllowNotifyBucketChangeEvenWhenDistributorDown()
     
     document::BucketId bucket(16, 1234);
     api::BucketInfo info(0x1, 0x2, 0x3);
-    auto cmd = std::make_shared<api::NotifyBucketChangeCommand>(bucket, info);
+    auto cmd = std::make_shared<api::NotifyBucketChangeCommand>(makeDocumentBucket(bucket), info);
     _upper->sendDown(cmd);
 
     CPPUNIT_ASSERT_EQUAL(size_t(0), _upper->getNumReplies());
@@ -246,7 +251,7 @@ BouncerTest::readOnlyOperationsAreNotRejected()
     // StatBucket is an external operation, but it's not a mutating operation
     // and should therefore not be blocked.
     auto cmd = std::make_shared<api::StatBucketCommand>(
-            document::BucketId(16, 5), "");
+            makeDocumentBucket(document::BucketId(16, 5)), "");
     cmd->setPriority(Priority(2));
     _upper->sendDown(cmd);
     assertMessageNotBounced();
@@ -258,7 +263,7 @@ BouncerTest::internalOperationsAreNotRejected()
     configureRejectionThreshold(Priority(1));
     document::BucketId bucket(16, 1234);
     api::BucketInfo info(0x1, 0x2, 0x3);
-    auto cmd = std::make_shared<api::NotifyBucketChangeCommand>(bucket, info);
+    auto cmd = std::make_shared<api::NotifyBucketChangeCommand>(makeDocumentBucket(bucket), info);
     cmd->setPriority(Priority(2));
     _upper->sendDown(cmd);
     assertMessageNotBounced();

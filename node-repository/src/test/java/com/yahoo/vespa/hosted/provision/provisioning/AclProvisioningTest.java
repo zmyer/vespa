@@ -18,7 +18,6 @@ import org.junit.Test;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -178,8 +177,8 @@ public class AclProvisioningTest {
         // Populate repo
         List<Node> dockerHostNodes = tester.makeReadyNodes(2, "default", NodeType.host);
         Node dockerHostNodeUnderTest = dockerHostNodes.get(0);
-        List<Node> dockerNodes = tester.makeReadyDockerNodes(5, "docker1",
-                dockerHostNodeUnderTest.hostname());
+        List<Node> dockerNodes = tester.makeReadyDockerNodes(5, "dockerSmall",
+                                                             dockerHostNodeUnderTest.hostname());
 
         List<NodeAcl> acls = tester.nodeRepository().getNodeAcls(dockerHostNodeUnderTest, true);
 
@@ -230,7 +229,7 @@ public class AclProvisioningTest {
     }
 
     private List<Node> setConfigServers(String connectionSpec) {
-        curator.setConnectionSpec(connectionSpec);
+        curator.setZooKeeperEnsembleConnectionSpec(connectionSpec);
         return tester.nodeRepository().getConfigNodes();
     }
 

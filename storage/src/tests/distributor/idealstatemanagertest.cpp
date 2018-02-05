@@ -9,7 +9,11 @@
 #include <vespa/storageapi/message/visitor.h>
 #include <vespa/storageapi/message/bucketsplitting.h>
 #include <tests/distributor/distributortestutil.h>
+#include <vespa/document/test/make_document_bucket.h>
+#include <vespa/document/test/make_bucket_space.h>
 
+using document::test::makeDocumentBucket;
+using document::test::makeBucketSpace;
 
 namespace storage {
 namespace distributor {
@@ -87,7 +91,8 @@ IdealStateManagerTest::testStatusPage() {
     std::ostringstream ost;
     getIdealStateManager().getBucketStatus(ost);
 
-    CPPUNIT_ASSERT_EQUAL(std::string("BucketId(0x4000000000000002) : [node(idx=0,crc=0xff,docs=10/10,bytes=10/10,trusted=true,active=true,ready=false)]<br>\n"
+    CPPUNIT_ASSERT_EQUAL(std::string("<h2>default - BucketSpace(0x0000000000000001)</h2>\n"
+                                     "BucketId(0x4000000000000002) : [node(idx=0,crc=0xff,docs=10/10,bytes=10/10,trusted=true,active=true,ready=false)]<br>\n"
                                      "<b>BucketId(0x4000000000000005):</b> <i> : split: [Splitting bucket because its maximum size (200 b, 100 docs, 100 meta, 200 b total) is "
                                      "higher than the configured limit of (100, 1000000)]</i> [node(idx=0,crc=0xff,docs=100/100,bytes=200/200,trusted=true,"
                                      "active=true,ready=false)]<br>\n"),
@@ -109,6 +114,7 @@ IdealStateManagerTest::testDisabledStateChecker() {
     getIdealStateManager().getBucketStatus(ost);
 
     CPPUNIT_ASSERT_EQUAL(std::string(
+        "<h2>default - BucketSpace(0x0000000000000001)</h2>\n"
         "BucketId(0x4000000000000002) : [node(idx=0,crc=0xff,docs=10/10,bytes=10/10,trusted=true,active=true,ready=false)]<br>\n"
          "<b>BucketId(0x4000000000000005):</b> <i> : split: [Splitting bucket because its maximum size (200 b, 100 docs, 100 meta, 200 b total) is "
          "higher than the configured limit of (100, 1000000)]</i> [node(idx=0,crc=0xff,docs=100/100,bytes=200/200,trusted=true,"
@@ -139,9 +145,9 @@ IdealStateManagerTest::testClearActiveOnNodeDown()
     }
 
     CPPUNIT_ASSERT_EQUAL(
-            std::string("setbucketstate to [0] BucketId(0x4000000000000001) (pri 100)\n"
-                        "setbucketstate to [0] BucketId(0x4000000000000002) (pri 100)\n"
-                        "setbucketstate to [0] BucketId(0x4000000000000003) (pri 100)\n"),
+            std::string("setbucketstate to [0] Bucket(BucketSpace(0x0000000000000001), BucketId(0x4000000000000001)) (pri 100)\n"
+                        "setbucketstate to [0] Bucket(BucketSpace(0x0000000000000001), BucketId(0x4000000000000002)) (pri 100)\n"
+                        "setbucketstate to [0] Bucket(BucketSpace(0x0000000000000001), BucketId(0x4000000000000003)) (pri 100)\n"),
                          _distributor->getActiveIdealStateOperations());
 
     setSystemState(lib::ClusterState("distributor:1 storage:3 .0.s:d"));
@@ -165,19 +171,19 @@ IdealStateManagerTest::testRecheckWhenActive()
     tick();
 
     CPPUNIT_ASSERT_EQUAL(
-            std::string("setbucketstate to [0] BucketId(0x4000000000000001) (pri 100)\n"),
+            std::string("setbucketstate to [0] Bucket(BucketSpace(0x0000000000000001), BucketId(0x4000000000000001)) (pri 100)\n"),
             _distributor->getActiveIdealStateOperations());
 
     tick();
 
     CPPUNIT_ASSERT_EQUAL(
-            std::string("setbucketstate to [0] BucketId(0x4000000000000001) (pri 100)\n"),
+            std::string("setbucketstate to [0] Bucket(BucketSpace(0x0000000000000001), BucketId(0x4000000000000001)) (pri 100)\n"),
             _distributor->getActiveIdealStateOperations());
 
     tick();
 
     CPPUNIT_ASSERT_EQUAL(
-            std::string("setbucketstate to [0] BucketId(0x4000000000000001) (pri 100)\n"),
+            std::string("setbucketstate to [0] Bucket(BucketSpace(0x0000000000000001), BucketId(0x4000000000000001)) (pri 100)\n"),
             _distributor->getActiveIdealStateOperations());
 }
 
@@ -196,7 +202,7 @@ IdealStateManagerTest::testBlockIdealStateOpsOnFullRequestBucketInfo()
     // sent to the entire node. It will then use a null bucketid.
     {
         std::shared_ptr<api::RequestBucketInfoCommand> msg(
-                new api::RequestBucketInfoCommand(buckets));
+                new api::RequestBucketInfoCommand(makeBucketSpace(), buckets));
         msg->setAddress(
                 api::StorageMessageAddress("storage", lib::NodeType::STORAGE, 4));
         tracker.insert(msg);
@@ -204,21 +210,21 @@ IdealStateManagerTest::testBlockIdealStateOpsOnFullRequestBucketInfo()
 
     {
         RemoveBucketOperation op("storage",
-                                 BucketAndNodes(bid, toVector<uint16_t>(3, 4)));
+                                 BucketAndNodes(makeDocumentBucket(bid), toVector<uint16_t>(3, 4)));
         CPPUNIT_ASSERT(op.isBlocked(tracker));
     }
 
     {
         // Don't trigger on requests to other nodes.
         RemoveBucketOperation op("storage",
-                                 BucketAndNodes(bid, toVector<uint16_t>(3, 5)));
+                                 BucketAndNodes(makeDocumentBucket(bid), toVector<uint16_t>(3, 5)));
         CPPUNIT_ASSERT(!op.isBlocked(tracker));
     }
 
     // Don't block on null-bucket messages that aren't RequestBucketInfo.
     {
         std::shared_ptr<api::CreateVisitorCommand> msg(
-                new api::CreateVisitorCommand("foo", "bar", "baz"));
+                new api::CreateVisitorCommand(makeBucketSpace(), "foo", "bar", "baz"));
         msg->setAddress(
                 api::StorageMessageAddress("storage", lib::NodeType::STORAGE, 7));
         tracker.insert(msg);
@@ -226,7 +232,7 @@ IdealStateManagerTest::testBlockIdealStateOpsOnFullRequestBucketInfo()
 
     {
         RemoveBucketOperation op("storage",
-                                 BucketAndNodes(bid, toVector<uint16_t>(7)));
+                                 BucketAndNodes(makeDocumentBucket(bid), toVector<uint16_t>(7)));
         CPPUNIT_ASSERT(!op.isBlocked(tracker));
     }
 }
@@ -240,18 +246,18 @@ IdealStateManagerTest::testBlockCheckForAllOperationsToSpecificBucket()
     document::BucketId bid(16, 1234);
 
     {
-        auto msg = std::make_shared<api::JoinBucketsCommand>(bid);
+        auto msg = std::make_shared<api::JoinBucketsCommand>(makeDocumentBucket(bid));
         msg->setAddress(
                 api::StorageMessageAddress("storage", lib::NodeType::STORAGE, 4));
         tracker.insert(msg);
     }
     {
         RemoveBucketOperation op("storage",
-                                 BucketAndNodes(bid, toVector<uint16_t>(7)));
+                                 BucketAndNodes(makeDocumentBucket(bid), toVector<uint16_t>(7)));
         // Not blocked for exact node match.
-        CPPUNIT_ASSERT(!op.checkBlock(bid, tracker));
+        CPPUNIT_ASSERT(!op.checkBlock(makeDocumentBucket(bid), tracker));
         // But blocked for bucket match!
-        CPPUNIT_ASSERT(op.checkBlockForAllNodes(bid, tracker));
+        CPPUNIT_ASSERT(op.checkBlockForAllNodes(makeDocumentBucket(bid), tracker));
     }
 }
 

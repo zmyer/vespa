@@ -4,10 +4,6 @@ sudo: required
 services:
    - docker
 
-env:
-  - PLATFORM_LANGUAGE=cpp
-  - PLATFORM_LANGUAGE=java
-
 cache:
   timeout: 900
   directories:
@@ -19,7 +15,7 @@ branches:
   - master
 
 before_cache:
-  - sudo rm -rf $HOME/.m2/repository/com/yahoo
+  - sudo rm -rf $HOME/.m2/repository/com/yahoo/vespa
   - sudo rm -rf $HOME/.m2/repository/repository.xml
   - du --summarize --human-readable $HOME/.m2/repository
   - du --summarize --human-readable $HOME/.ccache
@@ -28,5 +24,4 @@ install: true
 
 language: minimal
 
-script: ./travis/travis.sh $PLATFORM_LANGUAGE
-
+script: ./travis/travis.sh

@@ -7,22 +7,23 @@ import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.config.provision.Environment;
 import com.yahoo.config.provision.RegionName;
 import com.yahoo.config.provision.SystemName;
-import com.yahoo.config.provision.Zone;
 import com.yahoo.vespa.hosted.controller.Controller;
+import com.yahoo.vespa.hosted.controller.api.integration.organization.IssueId;
+import com.yahoo.vespa.hosted.controller.api.integration.zone.ZoneId;
 
 import java.time.Instant;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 /**
  * Information about which deployment jobs an application should run and their current status.
  * This is immutable.
- * 
+ *
  * @author bratseth
  * @author mpolden
  */
@@ -30,28 +31,22 @@ public class DeploymentJobs {
 
     private final Optional<Long> projectId;
     private final ImmutableMap<JobType, JobStatus> status;
-    private final Optional<String> jiraIssueId;
-    private final boolean selfTriggering; // TODO: Remove this when no projects are self-triggering.
+    private final Optional<IssueId> issueId;
 
-    /** Creates an empty set of deployment jobs */
-    public DeploymentJobs(long projectId) {
-        this(Optional.of(projectId), ImmutableMap.of(), Optional.empty(),true);
+    public DeploymentJobs(Optional<Long> projectId, Collection<JobStatus> jobStatusEntries,
+                          Optional<IssueId> issueId) {
+        this(projectId, asMap(jobStatusEntries), issueId);
     }
-    
-    public DeploymentJobs(Optional<Long> projectId, Collection<JobStatus> jobStatusEntries, Optional<String> jiraIssueId, boolean selfTriggering) {
-        this(projectId, asMap(jobStatusEntries), jiraIssueId, selfTriggering);
-    }
-    
-    private DeploymentJobs(Optional<Long> projectId, Map<JobType, JobStatus> status, Optional<String> jiraIssueId, boolean selfTriggering) {
-        Objects.requireNonNull(projectId, "projectId cannot be null");
+
+    private DeploymentJobs(Optional<Long> projectId, Map<JobType, JobStatus> status, Optional<IssueId> issueId) {
+        requireId(projectId, "projectId must be a positive integer");
         Objects.requireNonNull(status, "status cannot be null");
-        Objects.requireNonNull(jiraIssueId, "jiraIssueId cannot be null");
+        Objects.requireNonNull(issueId, "issueId cannot be null");
         this.projectId = projectId;
         this.status = ImmutableMap.copyOf(status);
-        this.jiraIssueId = jiraIssueId;
-        this.selfTriggering = selfTriggering;
+        this.issueId = issueId;
     }
-    
+
     private static Map<JobType, JobStatus> asMap(Collection<JobStatus> jobStatusEntries) {
         ImmutableMap.Builder<JobType, JobStatus> b = new ImmutableMap.Builder<>();
         for (JobStatus jobStatusEntry : jobStatusEntries)
@@ -60,157 +55,158 @@ public class DeploymentJobs {
     }
 
     /** Return a new instance with the given completion */
-    public DeploymentJobs withCompletion(JobReport report, Instant notificationTime, Controller controller) {
+    public DeploymentJobs withCompletion(JobReport report, ApplicationVersion applicationVersion,
+                                         Instant notificationTime, Controller controller) {
         Map<JobType, JobStatus> status = new LinkedHashMap<>(this.status);
         status.compute(report.jobType(), (type, job) -> {
             if (job == null) job = JobStatus.initial(report.jobType());
-            return job.withCompletion(report.jobError(), notificationTime, controller);
+            return job.withCompletion(report.buildNumber(), applicationVersion, report.jobError(), notificationTime,
+                                      controller);
         });
-        return new DeploymentJobs(Optional.of(report.projectId()), status, jiraIssueId, report.selfTriggering());
+        return new DeploymentJobs(Optional.of(report.projectId()), status, issueId);
     }
 
     public DeploymentJobs withTriggering(JobType jobType,
-                                         Optional<Change> change,
+                                         Change change,
                                          Version version,
-                                         Optional<ApplicationRevision> revision,
+                                         ApplicationVersion applicationVersion,
+                                         String reason,
                                          Instant triggerTime) {
         Map<JobType, JobStatus> status = new LinkedHashMap<>(this.status);
         status.compute(jobType, (type, job) -> {
             if (job == null) job = JobStatus.initial(jobType);
-            return job.withTriggering(version, revision,
-                                      change.isPresent() && change.get() instanceof Change.VersionChange,
+            return job.withTriggering(version,
+                                      applicationVersion,
+                                      change.platform().isPresent(),
+                                      reason,
                                       triggerTime);
         });
-        return new DeploymentJobs(projectId, status, jiraIssueId, selfTriggering);
+        return new DeploymentJobs(projectId, status, issueId);
     }
 
     public DeploymentJobs withProjectId(long projectId) {
-        return new DeploymentJobs(Optional.of(projectId), status, jiraIssueId, selfTriggering);
+        return new DeploymentJobs(Optional.of(projectId), status, issueId);
     }
 
-    public DeploymentJobs withJiraIssueId(Optional<String> jiraIssueId) {
-        return new DeploymentJobs(projectId, status, jiraIssueId, selfTriggering);
+    public DeploymentJobs with(IssueId issueId) {
+        return new DeploymentJobs(projectId, status, Optional.ofNullable(issueId));
     }
 
     public DeploymentJobs without(JobType job) {
         Map<JobType, JobStatus> status = new HashMap<>(this.status);
         status.remove(job);
-        return new DeploymentJobs(projectId, status, jiraIssueId, selfTriggering);
-    }
-    
-    public DeploymentJobs asSelfTriggering(boolean selfTriggering) {
-        return new DeploymentJobs(projectId, status, jiraIssueId, selfTriggering);
+        return new DeploymentJobs(projectId, status, issueId);
     }
 
     /** Returns an immutable map of the status entries in this */
     public Map<JobType, JobStatus> jobStatus() { return status; }
 
-    /** Returns whether this application's deployment jobs trigger each other, and should be left alone, or not. */
-    public boolean isSelfTriggering() { return selfTriggering; }
-
     /** Returns whether this has some job status which is not a success */
     public boolean hasFailures() {
-        return status.values().stream().anyMatch(jobStatus -> ! jobStatus.isSuccess());
+        return ! JobList.from(status.values()).failing().isEmpty();
     }
 
     /** Returns whether any job is currently in progress */
-    public boolean inProgress() {
-        return status.values().stream().anyMatch(JobStatus::inProgress);
+    public boolean isRunning(Instant timeoutLimit) {
+        return ! JobList.from(status.values()).running(timeoutLimit).isEmpty();
+    }
+
+    /** Returns whether the given job type is currently running and was started after timeoutLimit */
+    public boolean isRunning(JobType jobType, Instant timeoutLimit) {
+        JobStatus jobStatus = status.get(jobType);
+        if ( jobStatus == null) return false;
+        return jobStatus.isRunning(timeoutLimit);
     }
 
     /** Returns whether change can be deployed to the given environment */
-    public boolean isDeployableTo(Environment environment, Optional<Change> change) {
-        if (environment == null || !change.isPresent()) {
+    public boolean isDeployableTo(Environment environment, Change change) {
+        if (environment == null || ! change.isPresent()) {
             return true;
         }
         if (environment == Environment.staging) {
-            return isSuccessful(change.get(), JobType.systemTest);
+            return isSuccessful(change, JobType.systemTest);
         } else if (environment == Environment.prod) {
-            return isSuccessful(change.get(), JobType.stagingTest);
+            return isSuccessful(change, JobType.stagingTest);
         }
         return true; // other environments do not have any preconditions
     }
 
-    /** Returns whether change has been deployed completely */
-    public boolean isDeployed(Optional<Change> change) {
-        if (!change.isPresent()) {
-            return true;
-        }
-        return status.values().stream()
-                .filter(status -> status.type().isProduction())
-                .allMatch(status -> isSuccessful(change.get(), status.type()));
-    }
-
-    /** Returns whether job has completed successfully */
-    public boolean isSuccessful(Change change, JobType jobType) {
+    /** Returns the last successful application version for the given job */
+    public Optional<ApplicationVersion> lastSuccessfulApplicationVersionFor(JobType jobType) {
         return Optional.ofNullable(jobStatus().get(jobType))
-                .filter(JobStatus::isSuccess)
-                .filter(status -> status.lastCompletedFor(change))
-                .isPresent();
-    }
-    
-    /** Returns the oldest failingSince time of the jobs of this, or null if none are failing */
-    public Instant failingSince() {
-        Instant failingSince = null;
-        for (JobStatus jobStatus : jobStatus().values()) {
-            if (jobStatus.isSuccess()) continue;
-            if (failingSince == null || failingSince.isAfter(jobStatus.firstFailing().get().at()))
-                failingSince = jobStatus.firstFailing().get().at();
-        }
-        return failingSince;
+                       .flatMap(JobStatus::lastSuccess)
+                       .map(JobStatus.JobRun::applicationVersion);
     }
 
     /**
-     * Returns the id of the Screwdriver project running these deployment jobs 
+     * Returns the id of the Screwdriver project running these deployment jobs
      * - or empty when this is not known or does not exist.
      * It is not known until the jobs have run once and reported back to the controller.
      */
     public Optional<Long> projectId() { return projectId; }
 
-    public Optional<String> jiraIssueId() { return jiraIssueId; }
+    public Optional<IssueId> issueId() { return issueId; }
+
+    /** Returns whether the job of the given type has completed successfully for the given change */
+    private boolean isSuccessful(Change change, JobType jobType) {
+        return Optional.ofNullable(jobStatus().get(jobType))
+                       .flatMap(JobStatus::lastSuccess)
+                       .filter(status -> status.lastCompletedWas(change))
+                       .isPresent();
+    }
+
+    private static Optional<Long> requireId(Optional<Long> id, String message) {
+        Objects.requireNonNull(id, message);
+        if ( ! id.isPresent()) {
+            return id;
+        }
+        if (id.get() <= 0) {
+            throw new IllegalArgumentException(message);
+        }
+        return id;
+    }
 
     /** Job types that exist in the build system */
     public enum JobType {
+//     | enum name ------------| job name ------------------| Zone in main system ---------------------------------------| Zone in CD system -------------------------------------------
+        component              ("component"                 , null                                                       , null                                                        ),
+        systemTest             ("system-test"               , ZoneId.from("test"   , "us-east-1")      , ZoneId.from("test"   , "cd-us-central-1")),
+        stagingTest            ("staging-test"              , ZoneId.from("staging", "us-east-3")      , ZoneId.from("staging", "cd-us-central-1")),
+        productionCorpUsEast1  ("production-corp-us-east-1" , ZoneId.from("prod"   , "corp-us-east-1") , null                                                        ),
+        productionUsEast3      ("production-us-east-3"      , ZoneId.from("prod"   , "us-east-3")      , null                                                        ),
+        productionUsWest1      ("production-us-west-1"      , ZoneId.from("prod"   , "us-west-1")      , null                                                        ),
+        productionUsCentral1   ("production-us-central-1"   , ZoneId.from("prod"   , "us-central-1")   , null                                                        ),
+        productionApNortheast1 ("production-ap-northeast-1" , ZoneId.from("prod"   , "ap-northeast-1") , null                                                        ),
+        productionApNortheast2 ("production-ap-northeast-2" , ZoneId.from("prod"   , "ap-northeast-2") , null                                                        ),
+        productionApSoutheast1 ("production-ap-southeast-1" , ZoneId.from("prod"   , "ap-southeast-1") , null                                                        ),
+        productionEuWest1      ("production-eu-west-1"      , ZoneId.from("prod"   , "eu-west-1")      , null                                                        ),
+        productionCdUsCentral1 ("production-cd-us-central-1", null                                                       , ZoneId.from("prod"    , "cd-us-central-1")),
+        productionCdUsCentral2 ("production-cd-us-central-2", null                                                       , ZoneId.from("prod"    , "cd-us-central-2"));
 
-        component("component"),
-        systemTest("system-test", zone(SystemName.cd, "test", "cd-us-central-1"), zone("test", "us-east-1")),
-        stagingTest("staging-test", zone(SystemName.cd, "staging", "cd-us-central-1"), zone("staging", "us-east-3")),
-        productionCorpUsEast1("production-corp-us-east-1", zone("prod", "corp-us-east-1")),
-        productionUsEast3("production-us-east-3", zone("prod", "us-east-3")),
-        productionUsWest1("production-us-west-1", zone("prod", "us-west-1")),
-        productionUsCentral1("production-us-central-1", zone("prod", "us-central-1")),
-        productionApNortheast1("production-ap-northeast-1", zone("prod", "ap-northeast-1")),
-        productionApNortheast2("production-ap-northeast-2", zone("prod", "ap-northeast-2")),
-        productionApSoutheast1("production-ap-southeast-1", zone("prod", "ap-southeast-1")),
-        productionEuWest1("production-eu-west-1", zone("prod", "eu-west-1")),
-        productionCdUsCentral1("production-cd-us-central-1", zone(SystemName.cd, "prod", "cd-us-central-1")),
-        productionCdUsCentral2("production-cd-us-central-2", zone(SystemName.cd, "prod", "cd-us-central-2"));
+        private final String jobName;
+        private final ImmutableMap<SystemName, ZoneId> zones;
 
-        private final String id;
-        private final Map<SystemName, Zone> zones;
-
-        JobType(String id, Zone... zone) {
-            this.id = id;
-            Map<SystemName, Zone> zones = new HashMap<>();
-            for (Zone z : zone) {
-                if (zones.containsKey(z.system())) {
-                    throw new IllegalArgumentException("A job can only map to a single zone per system");
-                }
-                zones.put(z.system(), z);
-            }
-            this.zones = Collections.unmodifiableMap(zones);
+        JobType(String jobName, ZoneId mainZone, ZoneId cdZone) {
+            this.jobName = jobName;
+            ImmutableMap.Builder<SystemName, ZoneId> builder = ImmutableMap.builder();
+            if (mainZone != null) builder.put(SystemName.main, mainZone);
+            if (cdZone != null) builder.put(SystemName.cd, cdZone);
+            this.zones = builder.build();
         }
 
-        public String id() { return id; }
+        public String jobName() { return jobName; }
 
         /** Returns the zone for this job in the given system, or empty if this job does not have a zone */
-        public Optional<Zone> zone(SystemName system) {
+        public Optional<ZoneId> zone(SystemName system) {
             return Optional.ofNullable(zones.get(system));
         }
 
         /** Returns whether this is a production job */
         public boolean isProduction() { return environment() == Environment.prod; }
-        
+
+        /** Returns whether this is an automated test job */
+        public boolean isTest() { return environment() != null && environment().isTest(); }
+
         /** Returns the environment of this job type, or null if it does not have an environment */
         public Environment environment() {
             switch (this) {
@@ -223,54 +219,31 @@ public class DeploymentJobs {
 
         /** Returns the region of this job type, or null if it does not have a region */
         public Optional<RegionName> region(SystemName system) {
-            return zone(system).map(Zone::region);
+            return zone(system).map(ZoneId::region);
         }
 
-        public static JobType fromId(String id) {
-            switch (id) {
-                case "component" : return component;
-                case "system-test" : return systemTest;
-                case "staging-test" : return stagingTest;
-                case "production-corp-us-east-1" : return productionCorpUsEast1;
-                case "production-us-east-3" : return productionUsEast3;
-                case "production-us-west-1" : return productionUsWest1;
-                case "production-us-central-1" : return productionUsCentral1;
-                case "production-ap-northeast-1" : return productionApNortheast1;
-                case "production-ap-northeast-2" : return productionApNortheast2;
-                case "production-ap-southeast-1" : return productionApSoutheast1;
-                case "production-eu-west-1" : return productionEuWest1;
-                case "production-cd-us-central-1" : return productionCdUsCentral1;
-                case "production-cd-us-central-2" : return productionCdUsCentral2;
-                default : throw new IllegalArgumentException("Unknown job id '" + id + "'");
-            }
+        public static JobType fromJobName(String jobName) {
+            return Stream.of(values())
+                    .filter(jobType -> jobType.jobName.equals(jobName))
+                    .findAny().orElseThrow(() -> new IllegalArgumentException("Unknown job name '" + jobName + "'"));
         }
-        
-        /** Returns the job type for the given zone, or null if none */
-        public static JobType from(SystemName system, com.yahoo.config.provision.Zone zone) {
-           for (JobType job : values()) {
-               Optional<com.yahoo.config.provision.Zone> jobZone = job.zone(system);
-               if (jobZone.isPresent() && jobZone.get().equals(zone))
-                   return job;
-           }
-           return null;
+
+        /** Returns the job type for the given zone */
+        public static Optional<JobType> from(SystemName system, ZoneId zone) {
+            return Stream.of(values())
+                    .filter(job -> job.zone(system).filter(zone::equals).isPresent())
+                    .findAny();
         }
 
         /** Returns the job job type for the given environment and region or null if none */
-        public static JobType from(SystemName system, Environment environment, RegionName region) {
+        public static Optional<JobType> from(SystemName system, Environment environment, RegionName region) {
             switch (environment) {
-                case test: return systemTest;
-                case staging: return stagingTest;
+                case test: return Optional.of(systemTest);
+                case staging: return Optional.of(stagingTest);
             }
-            return from(system, new com.yahoo.config.provision.Zone(environment, region));
+            return from(system, ZoneId.from(environment, region));
         }
 
-        private static Zone zone(SystemName system, String environment, String region) {
-            return new Zone(system, Environment.from(environment), RegionName.from(region));
-        }
-
-        private static Zone zone(String environment, String region) {
-            return new Zone(Environment.from(environment), RegionName.from(region));
-        }
     }
 
     /** A job report. This class is immutable. */
@@ -280,41 +253,42 @@ public class DeploymentJobs {
         private final JobType jobType;
         private final long projectId;
         private final long buildNumber;
+        private final Optional<SourceRevision> sourceRevision;
         private final Optional<JobError> jobError;
-        private final boolean selfTriggering;
 
         public JobReport(ApplicationId applicationId, JobType jobType, long projectId, long buildNumber,
-                         Optional<JobError> jobError, boolean selfTriggering) {
+                         Optional<SourceRevision> sourceRevision, Optional<JobError> jobError) {
             Objects.requireNonNull(applicationId, "applicationId cannot be null");
             Objects.requireNonNull(jobType, "jobType cannot be null");
+            Objects.requireNonNull(sourceRevision, "sourceRevision cannot be null");
             Objects.requireNonNull(jobError, "jobError cannot be null");
+
+            if (jobType == JobType.component && !sourceRevision.isPresent()) {
+                // TODO: Throw after 2018-03-01
+                //throw new IllegalArgumentException("sourceRevision is required for job " + jobType);
+            }
+
             this.applicationId = applicationId;
             this.projectId = projectId;
             this.buildNumber = buildNumber;
             this.jobType = jobType;
+            this.sourceRevision = sourceRevision;
             this.jobError = jobError;
-            this.selfTriggering = selfTriggering;
         }
 
         public ApplicationId applicationId() { return applicationId; }
         public JobType jobType() { return jobType; }
         public long projectId() { return projectId; }
         public long buildNumber() { return buildNumber; }
-        public boolean success() { return !jobError.isPresent(); }
+        public boolean success() { return ! jobError.isPresent(); }
+        public Optional<SourceRevision> sourceRevision() { return sourceRevision; }
         public Optional<JobError> jobError() { return jobError; }
-        public boolean selfTriggering() { return selfTriggering; }
 
     }
 
     public enum JobError {
         unknown,
-        outOfCapacity;
-
-        public static Optional<JobError> from(boolean success) {
-            return Optional.of(success)
-                    .filter(b -> !b)
-                    .map(ignored -> unknown);
-        }
+        outOfCapacity
     }
 
 }

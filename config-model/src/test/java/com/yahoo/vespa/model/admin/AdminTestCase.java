@@ -22,6 +22,7 @@ import com.yahoo.vespa.model.container.ContainerCluster;
 import com.yahoo.vespa.model.container.component.Component;
 import com.yahoo.vespa.model.container.component.StatisticsComponent;
 import com.yahoo.vespa.model.test.utils.VespaModelCreatorWithFilePkg;
+import com.yahoo.vespa.model.test.utils.VespaModelCreatorWithMockPkg;
 import org.junit.Test;
 
 import java.util.Set;
@@ -246,7 +247,81 @@ public class AdminTestCase {
         assertEquals(sc.values(0).operations(0).name(), StatisticsConfig.Values.Operations.Name.REGULAR);
         assertEquals(sc.values(0).operations(0).arguments(0).key(), "limits");
         assertEquals(sc.values(0).operations(0).arguments(0).value(), "25,50,100,500");
+    }
 
+    @Test
+    public void testLogForwarding() throws Exception {
+        String hosts = "<hosts>"
+                + "  <host name=\"myhost0\">"
+                + "    <alias>node0</alias>"
+                + "  </host>"
+                + "</hosts>";
+
+        String services = "<services>" +
+                "  <admin version='2.0'>" +
+                "    <adminserver hostalias='node0' />" +
+                "    <logforwarding>" +
+                "      <splunk deployment-server='foo:123' client-name='foocli'/>" +
+                "    </logforwarding>" +
+                "  </admin>" +
+                "</services>";
+
+        VespaModel vespaModel = new VespaModelCreatorWithMockPkg(hosts, services).create();
+
+        Set<String> configIds = vespaModel.getConfigIds();
+        // 1 logforwarder on each host
+        assertTrue(configIds.toString(), configIds.contains("hosts/myhost0/logforwarder"));
+    }
+
+    @Test
+    public void disableFiledistributorService() throws Exception {
+        String hosts = "<hosts>"
+                + "  <host name=\"localhost\">"
+                + "    <alias>node0</alias>"
+                + "  </host>"
+                + "</hosts>";
+
+        String services = "<services>" +
+                "  <admin version='2.0'>" +
+                "    <adminserver hostalias='node0' />" +
+                "    <filedistribution>" +
+                "      <disableFiledistributor>true</disableFiledistributor>" +
+                "    </filedistribution>" +
+                "  </admin>" +
+                "</services>";
+
+        VespaModel vespaModel = new VespaModelCreatorWithMockPkg(hosts, services).create();
+        String localhost = HostName.getLocalhost();
+        String localhostConfigId = "hosts/" + localhost;
+
+        // Verify services in the sentinel config
+        SentinelConfig.Builder b = new SentinelConfig.Builder();
+        vespaModel.getConfig(b, localhostConfigId);
+        SentinelConfig sentinelConfig = new SentinelConfig(b);
+        assertThat(sentinelConfig.service().size(), is(3));
+        assertThat(sentinelConfig.service(0).name(), is("logserver"));
+        assertThat(sentinelConfig.service(1).name(), is("slobrok"));
+        assertThat(sentinelConfig.service(2).name(), is("logd"));
+        // No filedistributor service
+    }
+
+    @Test
+    public void testDisableFileDistributorForAllApps() {
+        DeployState state = new DeployState.Builder()
+                .disableFiledistributor(true)
+                .properties(
+                        new DeployProperties.Builder().
+                                zone(new Zone(Environment.dev, RegionName.from("baz"))).
+                                applicationId(new ApplicationId.Builder().
+                                        tenant("quux").
+                                        applicationName("foo").instanceName("bim").build()).build()).build();
+        TestRoot root = new TestDriver().buildModel(state);
+        String localhost = HostName.getLocalhost();
+        SentinelConfig sentinelConfig = root.getConfig(SentinelConfig.class, "hosts/" + localhost);
+        assertThat(sentinelConfig.service().size(), is(3));
+        assertThat(sentinelConfig.service(0).name(), is("logserver"));
+        assertThat(sentinelConfig.service(1).name(), is("slobrok"));
+        assertThat(sentinelConfig.service(2).name(), is("logd"));
     }
 
 }

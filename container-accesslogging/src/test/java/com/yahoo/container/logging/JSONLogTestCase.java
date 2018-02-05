@@ -15,7 +15,8 @@ public class JSONLogTestCase extends junit.framework.TestCase {
 
     private AccessLogEntry newAccessLogEntry(final String query) {
         final AccessLogEntry entry = new AccessLogEntry();
-        entry.setURI(newQueryUri(query));
+        entry.setRawQuery("query="+query);
+        entry.setRawPath("");
         entry.setIpV4Address(ipAddress);
         entry.setHttpMethod("GET");
         entry.setHttpVersion("HTTP/1.1");
@@ -48,6 +49,8 @@ public class JSONLogTestCase extends junit.framework.TestCase {
             "\"version\":\"HTTP/1.1\"," +
             "\"agent\":\"Mozilla/4.05 [en] (Win95; I)\"," +
             "\"host\":\"localhost\"," +
+            "\"scheme\":null," +
+            "\"localport\":0," +
             "\"search\":{" +
             "\"totalhits\":1234," +
             "\"hits\":0" +
@@ -74,6 +77,8 @@ public class JSONLogTestCase extends junit.framework.TestCase {
             "\"version\":\"HTTP/1.1\"," +
             "\"agent\":\"Mozilla/4.05 [en] (Win95; I)\"," +
             "\"host\":\"localhost\"," +
+            "\"scheme\":null," +
+            "\"localport\":0," +
             "\"search\":{" +
             "\"totalhits\":1234," +
             "\"hits\":0" +
@@ -104,6 +109,8 @@ public class JSONLogTestCase extends junit.framework.TestCase {
             "\"version\":\"HTTP/1.1\"," +
             "\"agent\":\"Mozilla/4.05 [en] (Win95; I)\"," +
             "\"host\":\"localhost\"," +
+            "\"scheme\":null," +
+            "\"localport\":0," +
             "\"remoteaddr\":\"FE80:0000:0000:0000:0202:B3FF:FE1E:8329\"," +
             "\"search\":{" +
             "\"totalhits\":1234," +
@@ -127,6 +134,8 @@ public class JSONLogTestCase extends junit.framework.TestCase {
             "\"version\":\"HTTP/1.1\"," +
             "\"agent\":\"Mozilla/4.05 [en] (Win95; I)\"," +
             "\"host\":\"localhost\"," +
+            "\"scheme\":null," +
+            "\"localport\":0," +
             "\"remoteaddr\":\"FE80:0000:0000:0000:0202:B3FF:FE1E:8329\"," +
             "\"remoteport\":1234," +
             "\"search\":{" +
@@ -148,7 +157,8 @@ public class JSONLogTestCase extends junit.framework.TestCase {
 
     public void test_useragent_with_quotes() throws Exception {
         final AccessLogEntry entry = new AccessLogEntry();
-        entry.setURI(newQueryUri("test"));
+        entry.setRawQuery("query=test");
+        entry.setRawPath("");
         entry.setIpV4Address(ipAddress);
         entry.setHttpMethod("GET");
         entry.setHttpVersion("HTTP/1.1");
@@ -171,6 +181,8 @@ public class JSONLogTestCase extends junit.framework.TestCase {
             "\"version\":\"HTTP/1.1\"," +
             "\"agent\":\"Mozilla/4.05 [en] (Win95; I; \\\"Best Browser Ever\\\")\"," +
             "\"host\":\"localhost\"," +
+            "\"scheme\":null," +
+            "\"localport\":0," +
             "\"search\":{" +
             "\"totalhits\":1234," +
             "\"hits\":0" +

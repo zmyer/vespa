@@ -52,7 +52,7 @@ public class RetiredExpirerTest {
     private Curator curator = new MockCurator();
 
     @Test
-    public void ensure_retired_nodes_time_out() throws InterruptedException {
+    public void ensure_retired_nodes_time_out() {
         ManualClock clock = new ManualClock();
         Zone zone = new Zone(Environment.prod, RegionName.from("us-east"));
         NodeFlavors nodeFlavors = FlavorConfigBuilder.createDummies("default");
@@ -92,7 +92,7 @@ public class RetiredExpirerTest {
     }
 
     @Test
-    public void ensure_retired_groups_time_out() throws InterruptedException {
+    public void ensure_retired_groups_time_out() {
         ManualClock clock = new ManualClock();
         Zone zone = new Zone(Environment.prod, RegionName.from("us-east"));
         NodeFlavors nodeFlavors = FlavorConfigBuilder.createDummies("default");
@@ -108,7 +108,7 @@ public class RetiredExpirerTest {
 
         ClusterSpec cluster = ClusterSpec.request(ClusterSpec.Type.content, ClusterSpec.Id.from("test"), Version.fromString("6.42"));
         activate(applicationId, cluster, 8, 8, provisioner);
-        activate(applicationId, cluster, 1, 1, provisioner);
+        activate(applicationId, cluster, 2, 2, provisioner);
         assertEquals(8, nodeRepository.getNodes(applicationId, Node.State.active).size());
         assertEquals(0, nodeRepository.getNodes(applicationId, Node.State.inactive).size());
 
@@ -116,10 +116,10 @@ public class RetiredExpirerTest {
         clock.advance(Duration.ofHours(30)); // Retire period spent
         MockDeployer deployer =
             new MockDeployer(provisioner,
-                             Collections.singletonMap(applicationId, new MockDeployer.ApplicationContext(applicationId, cluster, Capacity.fromNodeCount(1, Optional.of("default")), 1)));
+                             Collections.singletonMap(applicationId, new MockDeployer.ApplicationContext(applicationId, cluster, Capacity.fromNodeCount(2, Optional.of("default")), 1)));
         new RetiredExpirer(nodeRepository, deployer, clock, Duration.ofHours(12), new JobControl(nodeRepository.database())).run();
-        assertEquals(1, nodeRepository.getNodes(applicationId, Node.State.active).size());
-        assertEquals(7, nodeRepository.getNodes(applicationId, Node.State.inactive).size());
+        assertEquals(2, nodeRepository.getNodes(applicationId, Node.State.active).size());
+        assertEquals(6, nodeRepository.getNodes(applicationId, Node.State.inactive).size());
         assertEquals(1, deployer.redeployments);
 
         // inactivated nodes are not retired
@@ -170,7 +170,6 @@ public class RetiredExpirerTest {
 
         new RetiredEarlyExpirer(
                 nodeRepository,
-                zone,
                 Duration.ofDays(30),
                 new JobControl(nodeRepository.database()),
                 deployer,

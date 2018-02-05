@@ -32,8 +32,7 @@ getName(const IFlushHandler & handler, const IFlushTarget & target)
 static constexpr uint64_t gibi = UINT64_C(1024) * UINT64_C(1024) * UINT64_C(1024);
 
 uint64_t
-estimateNeededTlsSizeForFlushTarget(const TlsStats &tlsStats,
-                                    SerialNum flushedSerialNum)
+estimateNeededTlsSizeForFlushTarget(const TlsStats &tlsStats, SerialNum flushedSerialNum)
 {
     if (flushedSerialNum < tlsStats.getFirstSerial()) {
         return tlsStats.getNumBytes();
@@ -45,8 +44,7 @@ estimateNeededTlsSizeForFlushTarget(const TlsStats &tlsStats,
     if (flushedSerialNum >= tlsStats.getLastSerial()) {
         return 0u;
     }
-    double bytesPerEntry = static_cast<double>(tlsStats.getNumBytes()) /
-                           numEntries;
+    double bytesPerEntry = static_cast<double>(tlsStats.getNumBytes()) / numEntries;
     return bytesPerEntry * (tlsStats.getLastSerial() - flushedSerialNum);
 }
 
@@ -89,15 +87,17 @@ MemoryFlush::MemoryFlush()
 
 MemoryFlush::~MemoryFlush() { }
 
-MemoryFlush::Config MemoryFlush::getConfig() const
+MemoryFlush::Config
+MemoryFlush::getConfig() const
 {
-    vespalib::LockGuard guard(_lock);
+    std::lock_guard<std::mutex> guard(_lock);
     return _config;
 }
 
-void MemoryFlush::setConfig(const Config &config)
+void
+MemoryFlush::setConfig(const Config &config)
 {
-    vespalib::LockGuard guard(_lock);
+    std::lock_guard<std::mutex> guard(_lock);
     _config = config;
 }
 
@@ -116,23 +116,16 @@ getOrderName(MemoryFlush::OrderType &orderType)
     return "DEFAULT";
 }
 
-size_t computeGain(const IFlushTarget::DiskGain & gain) {
+size_t
+computeGain(const IFlushTarget::DiskGain & gain) {
     return std::max(100000000l, std::max(gain.getBefore(), gain.getAfter()));
-}
-bool isDiskBloatToHigh(const IFlushTarget::DiskGain & totalDisk,
-                       const MemoryFlush::Config & config,
-                       const IFlushTarget::DiskGain & dgain)
-{
-    return (totalDisk.gain() > config.globalDiskBloatFactor * computeGain(totalDisk))
-           || (dgain.gain() > config.diskBloatFactor * computeGain(dgain));
 }
 
 }
 
 FlushContext::List
 MemoryFlush::getFlushTargets(const FlushContext::List &targetList,
-                             const flushengine::TlsStatsMap &
-                             tlsStatsMap) const
+                             const flushengine::TlsStatsMap & tlsStatsMap) const
 {
     OrderType order(DEFAULT);
     uint64_t totalMemory(0);
@@ -167,9 +160,9 @@ MemoryFlush::getFlushTargets(const FlushContext::List &targetList,
                 order = TLSSIZE;
             }
         }
-        if (((totalMemory >= config.maxGlobalMemory) || (mgain >= config.maxMemoryGain)) && (order < MEMORY)) {
+        if ((mgain >= config.maxMemoryGain) && (order < MEMORY)) {
             order = MEMORY;
-        } else if (isDiskBloatToHigh(totalDisk, config, dgain) && (order < DISKBLOAT)) {
+        } else if ((dgain.gain() > config.diskBloatFactor * computeGain(dgain)) && (order < DISKBLOAT)) {
             order = DISKBLOAT;
         } else if ((timeDiff >= config.maxTimeGain) && (order < MAXAGE)) {
             order = MAXAGE;
@@ -195,6 +188,14 @@ MemoryFlush::getFlushTargets(const FlushContext::List &targetList,
             timeDiff.sec(),
             getOrderName(order).c_str());
     }
+    if (!targetList.empty()) {
+        if ((totalMemory >= config.maxGlobalMemory) && (order < MEMORY)) {
+            order = MEMORY;
+        }
+        if ((totalDisk.gain() > config.globalDiskBloatFactor * computeGain(totalDisk)) && (order < DISKBLOAT)) {
+            order = DISKBLOAT;
+        }
+    }
     FlushContext::List fv(targetList);
     std::sort(fv.begin(), fv.end(), CompareTarget(order, tlsStatsMap));
     // No desired order and no urgent needs; no flush required at this moment.
@@ -219,8 +220,7 @@ MemoryFlush::getFlushTargets(const FlushContext::List &targetList,
 
 
 bool
-MemoryFlush::CompareTarget::operator()(const FlushContext::SP &lfc,
-                                       const FlushContext::SP &rfc) const
+MemoryFlush::CompareTarget::operator()(const FlushContext::SP &lfc, const FlushContext::SP &rfc) const
 {
     const IFlushTarget &lhs = *lfc->getTarget();
     const IFlushTarget &rhs = *rfc->getTarget();

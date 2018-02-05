@@ -15,15 +15,15 @@ import java.util.List;
 import java.util.logging.Logger;
 
 /**
- * @author lulf
- * @author vegardh
- * @since 5.1
+ * @author Ulf Lilleengen
+ * @author Vegard Havdal
  */
 public class FilesApplicationFile extends ApplicationFile {
 
     private static final Logger log = Logger.getLogger("FilesApplicationFile");
     private final File file;
     private final ObjectMapper mapper = new ObjectMapper();
+
     public FilesApplicationFile(Path path, File file) {
         super(path);
         this.file = file;
@@ -198,4 +198,5 @@ public class FilesApplicationFile extends ApplicationFile {
         if (other == this) return 0;
         return this.getPath().getName().compareTo((other).getPath().getName());
     }
+
 }

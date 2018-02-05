@@ -2,6 +2,8 @@
 
 #include "setbucketstateoperation.h"
 #include <vespa/storage/distributor/idealstatemanager.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
+#include <vespa/storageapi/message/bucket.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".distributor.operation.idealstate.setactive");
@@ -22,7 +24,7 @@ void
 SetBucketStateOperation::enqueueSetBucketStateCommand(uint16_t node, bool active) {
     std::shared_ptr<api::SetBucketStateCommand> msg(
             new api::SetBucketStateCommand(
-                    getBucketId(),
+                    getBucket(),
                     active
                     ? api::SetBucketStateCommand::ACTIVE
                     : api::SetBucketStateCommand::INACTIVE));
@@ -83,7 +85,7 @@ SetBucketStateOperation::onReceive(DistributorMessageSender& sender,
     bool deactivate = false;
     if (reply->getResult().success()) {
         BucketDatabase::Entry entry =
-            _manager->getDistributorComponent().getBucketDatabase().get(rep.getBucketId());
+            _bucketSpace->getBucketDatabase().get(rep.getBucketId());
 
         if (entry.valid()) {
             const BucketCopy* copy = entry->getNode(node);
@@ -103,7 +105,7 @@ SetBucketStateOperation::onReceive(DistributorMessageSender& sender,
                                    node,
                                    bInfo).setTrusted(copy->trusted()));
 
-                _manager->getDistributorComponent().getBucketDatabase().update(entry);
+                _bucketSpace->getBucketDatabase().update(entry);
             }
         } else {
             LOG(debug, "%s did not exist when receiving %s",

@@ -7,28 +7,31 @@ import com.yahoo.config.application.api.DeploymentSpec;
 import com.yahoo.config.application.api.ValidationOverrides;
 import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.config.provision.Environment;
-import com.yahoo.config.provision.Zone;
-import com.yahoo.vespa.hosted.controller.application.ApplicationRevision;
+import com.yahoo.vespa.hosted.controller.api.integration.MetricsService.ApplicationMetrics;
+import com.yahoo.vespa.hosted.controller.api.integration.organization.IssueId;
+import com.yahoo.vespa.hosted.controller.api.integration.zone.ZoneId;
+import com.yahoo.vespa.hosted.controller.application.ApplicationRotation;
+import com.yahoo.vespa.hosted.controller.application.ApplicationVersion;
 import com.yahoo.vespa.hosted.controller.application.Change;
 import com.yahoo.vespa.hosted.controller.application.Deployment;
 import com.yahoo.vespa.hosted.controller.application.DeploymentJobs;
-import com.yahoo.vespa.hosted.controller.application.DeploymentJobs.JobReport;
-import com.yahoo.vespa.hosted.controller.application.DeploymentJobs.JobType;
+import com.yahoo.vespa.hosted.controller.rotation.RotationId;
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
  * An instance of an application.
- * 
+ *
  * This is immutable.
- * 
+ *
  * @author bratseth
  */
 public class Application {
@@ -36,214 +39,154 @@ public class Application {
     private final ApplicationId id;
     private final DeploymentSpec deploymentSpec;
     private final ValidationOverrides validationOverrides;
-    private final Map<Zone, Deployment> deployments;
+    private final Map<ZoneId, Deployment> deployments;
     private final DeploymentJobs deploymentJobs;
-    private final Optional<Change> deploying;
-    private final boolean outstandingChange;
+    private final Change change;
+    private final Change outstandingChange;
+    private final Optional<IssueId> ownershipIssueId;
+    private final ApplicationMetrics metrics;
+    private final Optional<RotationId> rotation;
 
     /** Creates an empty application */
     public Application(ApplicationId id) {
-        this(id, DeploymentSpec.empty, ValidationOverrides.empty, ImmutableMap.of(), new DeploymentJobs(0L),
-             Optional.empty(), false); // TODO: Get rid of the 0
+        this(id, DeploymentSpec.empty, ValidationOverrides.empty, Collections.emptyMap(),
+             new DeploymentJobs(Optional.empty(), Collections.emptyList(), Optional.empty()),
+             Change.empty(), Change.empty(), Optional.empty(), new ApplicationMetrics(0, 0),
+             Optional.empty());
     }
 
     /** Used from persistence layer: Do not use */
-    public Application(ApplicationId id, DeploymentSpec deploymentSpec, ValidationOverrides validationOverrides, 
-                       List<Deployment> deployments, 
-                       DeploymentJobs deploymentJobs, Optional<Change> deploying, boolean outstandingChange) {
-        this(id, deploymentSpec, validationOverrides, 
-             deployments.stream().collect(Collectors.toMap(d -> d.zone(), d -> d)), 
-             deploymentJobs, deploying, outstandingChange);
+    public Application(ApplicationId id, DeploymentSpec deploymentSpec, ValidationOverrides validationOverrides,
+                       List<Deployment> deployments, DeploymentJobs deploymentJobs, Change change,
+                       Change outstandingChange, Optional<IssueId> ownershipIssueId, ApplicationMetrics metrics,
+                       Optional<RotationId> rotation) {
+        this(id, deploymentSpec, validationOverrides,
+             deployments.stream().collect(Collectors.toMap(Deployment::zone, d -> d)),
+             deploymentJobs, change, outstandingChange, ownershipIssueId, metrics, rotation);
     }
 
-    private Application(ApplicationId id, DeploymentSpec deploymentSpec, ValidationOverrides validationOverrides,
-                        Map<Zone, Deployment> deployments, 
-                        DeploymentJobs deploymentJobs, Optional<Change> deploying, boolean outstandingChange) {
+    Application(ApplicationId id, DeploymentSpec deploymentSpec, ValidationOverrides validationOverrides,
+                Map<ZoneId, Deployment> deployments, DeploymentJobs deploymentJobs, Change change,
+                Change outstandingChange, Optional<IssueId> ownershipIssueId, ApplicationMetrics metrics,
+                Optional<RotationId> rotation) {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(deploymentSpec, "deploymentSpec cannot be null");
         Objects.requireNonNull(validationOverrides, "validationOverrides cannot be null");
         Objects.requireNonNull(deployments, "deployments cannot be null");
         Objects.requireNonNull(deploymentJobs, "deploymentJobs cannot be null");
-        Objects.requireNonNull(deploying, "deploying cannot be null");
+        Objects.requireNonNull(change, "change cannot be null");
+        Objects.requireNonNull(metrics, "metrics cannot be null");
+        Objects.requireNonNull(rotation, "rotation cannot be null");
         this.id = id;
         this.deploymentSpec = deploymentSpec;
         this.validationOverrides = validationOverrides;
         this.deployments = ImmutableMap.copyOf(deployments);
         this.deploymentJobs = deploymentJobs;
-        this.deploying = deploying;
+        this.change = change;
         this.outstandingChange = outstandingChange;
+        this.ownershipIssueId = ownershipIssueId;
+        this.metrics = metrics;
+        this.rotation = rotation;
     }
 
     public ApplicationId id() { return id; }
-    
-    /** 
-     * Returns the last deployed deployment spec of this application, 
-     * or the empty deployment spec if it has never been deployed 
+
+    /**
+     * Returns the last deployed deployment spec of this application,
+     * or the empty deployment spec if it has never been deployed
      */
     public DeploymentSpec deploymentSpec() { return deploymentSpec; }
 
     /**
-     * Returns the last deployed validation overrides of this application, 
+     * Returns the last deployed validation overrides of this application,
      * or the empty validation overrides if it has never been deployed
      * (or was deployed with an empty/missing validation overrides)
      */
     public ValidationOverrides validationOverrides() { return validationOverrides; }
-    
+
     /** Returns an immutable map of the current deployments of this */
-    public Map<Zone, Deployment> deployments() { return deployments; }
-    
+    public Map<ZoneId, Deployment> deployments() { return deployments; }
+
+    /**
+     * Returns an immutable map of the current *production* deployments of this
+     * (deployments also includes manually deployed environments)
+     */
+    public Map<ZoneId, Deployment> productionDeployments() {
+        return ImmutableMap.copyOf(deployments.values().stream()
+                                           .filter(deployment -> deployment.zone().environment() == Environment.prod)
+                                           .collect(Collectors.toMap(Deployment::zone, Function.identity())));
+    }
+
     public DeploymentJobs deploymentJobs() { return deploymentJobs; }
 
     /**
-     * Returns the change that is currently in the process of being deployed on this application, 
-     * or empty if no change is currently being deployed.
+     * Returns the change that should currently be deployed for this application,
+     * which is empty when no change is in progress.
      */
-    public Optional<Change> deploying() { return deploying; }
+    public Change change() { return change; }
 
     /**
      * Returns whether this has an outstanding change (in the source repository), which
      * has currently not started deploying (because a deployment is (or was) already in progress
      */
-    public boolean hasOutstandingChange() { return outstandingChange; }
+    public Change outstandingChange() { return outstandingChange; }
 
-    /** 
+    public Optional<IssueId> ownershipIssueId() {
+        return ownershipIssueId;
+    }
+
+    public ApplicationMetrics metrics() {
+        return metrics;
+    }
+
+    /**
      * Returns the oldest version this has deployed in a permanent zone (not test or staging),
      * or empty version if it is not deployed anywhere
      */
-    public Optional<Version> deployedVersion() {
-        return deployments().values().stream()
-                                     .filter(deployment -> isPermanent(deployment.zone().environment()))
-                                     .sorted(Comparator.comparing(Deployment::version))
-                                     .findFirst()
-                                     .map(Deployment::version);
+    public Optional<Version> oldestDeployedVersion() {
+        return productionDeployments().values().stream()
+                .map(Deployment::version)
+                .min(Comparator.naturalOrder());
     }
 
-    /** The version that should be used to compile this application */
-    public Version compileVersion(Controller controller) {
-        return deployedVersion().orElse(controller.systemVersion());
-    }
-
-    public Application withProjectId(long projectId) {
-        return new Application(id, deploymentSpec, validationOverrides, deployments, deploymentJobs.withProjectId(projectId), deploying, outstandingChange);
-    }
-
-    public Application withJiraIssueId(Optional<String> jiraIssueId) {
-        return new Application(id, deploymentSpec, validationOverrides, deployments, deploymentJobs.withJiraIssueId(jiraIssueId), deploying, outstandingChange);
-    }
-
-    public Application withJobCompletion(JobReport report, Instant notificationTime, Controller controller) {
-        return new Application(id, 
-                               deploymentSpec,
-                               validationOverrides,
-                               deployments, 
-                               deploymentJobs.withCompletion(report, notificationTime, controller), 
-                               deploying, 
-                               outstandingChange);
-    }
-    
-    public Application withJobTriggering(JobType type, Optional<Change> change, Instant triggerTime, Controller controller) {
-        return new Application(id, 
-                               deploymentSpec,
-                               validationOverrides,
-                               deployments, 
-                               deploymentJobs.withTriggering(type,
-                                                             change,
-                                                             determineTriggerVersion(type, controller),
-                                                             determineTriggerRevision(type, controller),
-                                                             triggerTime),
-                               deploying, 
-                               outstandingChange);
-    }
-    
-    public Application with(Deployment deployment) {
-        Map<Zone, Deployment> deployments = new LinkedHashMap<>(this.deployments);
-        deployments.put(deployment.zone(), deployment);
-        return new Application(id, deploymentSpec, validationOverrides, deployments, deploymentJobs, deploying, outstandingChange);
-    }
-
-    public Application with(DeploymentJobs deploymentJobs) {
-        return new Application(id, deploymentSpec, validationOverrides, deployments, deploymentJobs, deploying, outstandingChange);
-    }
-
-    public Application withoutDeploymentIn(Zone zone) {
-        Map<Zone, Deployment> deployments = new LinkedHashMap<>(this.deployments);
-        deployments.remove(zone);
-        return new Application(id, deploymentSpec, validationOverrides, deployments, deploymentJobs, deploying, outstandingChange);
-    }
-
-    public Application withoutDeploymentJob(JobType jobType) {
-        DeploymentJobs deploymentJobs = this.deploymentJobs.without(jobType);
-        return new Application(id, deploymentSpec, validationOverrides, deployments, deploymentJobs, deploying, outstandingChange);
-    }
-
-    public Application with(DeploymentSpec deploymentSpec) {
-        return new Application(id, deploymentSpec, validationOverrides, deployments, deploymentJobs, deploying, outstandingChange);
-    }
-
-    public Application with(ValidationOverrides validationOverrides) {
-        return new Application(id, deploymentSpec, validationOverrides, deployments, deploymentJobs, deploying, outstandingChange);
-    }
-
-    public Application withDeploying(Optional<Change> deploying) {
-        return new Application(id, deploymentSpec, validationOverrides, deployments, deploymentJobs, deploying, outstandingChange);
-    }
-
-    public Application withOutstandingChange(boolean outstandingChange) {
-        return new Application(id, deploymentSpec, validationOverrides, deployments, deploymentJobs, deploying, outstandingChange);
-    }
-
-    private Version determineTriggerVersion(JobType jobType, Controller controller) {
-        Optional<Zone> zone = jobType.zone(controller.system());
-        if ( ! zone.isPresent()) // a sloppy test TODO: Fix
-            return controller.systemVersion();
-        return currentDeployVersion(controller, zone.get());
-    }
-
-    /** Returns the version a deployment to this zone should use for this application */
-    Version currentDeployVersion(Controller controller, Zone zone) {
-        if ( ! deploying().isPresent())
-            return currentVersion(controller, zone);
-        else if ( deploying().get() instanceof Change.ApplicationChange)
-            return currentVersion(controller, zone);
-        else
-            return ((Change.VersionChange) deploying().get()).version();
+    /** Returns the version a new deployment to this zone should use for this application */
+    public Version deployVersionIn(ZoneId zone, Controller controller) {
+        return change.platform().orElse(versionIn(zone, controller));
     }
 
     /** Returns the current version this application has, or if none; should use, in the given zone */
-    Version currentVersion(Controller controller, Zone zone) {
-        Deployment currentDeployment = deployments().get(zone);
-        if (currentDeployment != null) // Already deployed in this zone: Use that version
-            return currentDeployment.version();
-
-        return deployedVersion().orElse(controller.systemVersion());
+    public Version versionIn(ZoneId zone, Controller controller) {
+        return Optional.ofNullable(deployments().get(zone)).map(Deployment::version) // Already deployed in this zone: Use that version
+                       .orElse(oldestDeployedVersion().orElse(controller.systemVersion()));
     }
 
-    private Optional<ApplicationRevision> determineTriggerRevision(JobType jobType, Controller controller) {
-        Optional<Zone> zone = jobType.zone(controller.system());
-        if ( ! zone.isPresent()) // a sloppy test TODO: Fix
-            return Optional.empty();
-        return currentDeployRevision(jobType.zone(controller.system()).get());
+    /** Returns the Vespa version to use for the given job */
+    public Version deployVersionFor(DeploymentJobs.JobType jobType, Controller controller) {
+        return jobType == DeploymentJobs.JobType.component
+                ? controller.systemVersion()
+                : deployVersionIn(jobType.zone(controller.system()).get(), controller);
     }
 
-    /** Returns the version a deployment to this zone should use for this application, or empty if we don't know */
-    Optional<ApplicationRevision> currentDeployRevision(Zone zone) {
-        if ( ! deploying().isPresent())
-            return currentRevision(zone);
-        else if ( deploying().get() instanceof Change.VersionChange)
-            return currentRevision(zone);
-        else
-            return ((Change.ApplicationChange)deploying().get()).revision();
+    /** Returns the application version to use for the given job */
+    public Optional<ApplicationVersion> deployApplicationVersionFor(DeploymentJobs.JobType jobType,
+                                                                    Controller controller,
+                                                                    boolean currentVersion) {
+        // Use last successful version if currentVersion is requested (staging deployment) or when we're not deploying
+        // a new application version
+        if (currentVersion || !change().application().isPresent()) {
+            Optional<ApplicationVersion> version = deploymentJobs().lastSuccessfulApplicationVersionFor(jobType);
+            if (version.isPresent()) {
+                return version;
+            }
+        }
+        return jobType == DeploymentJobs.JobType.component
+                ? Optional.empty()
+                : deployApplicationVersionIn(jobType.zone(controller.system()).get());
     }
 
-    /** 
-     * Returns the current revision this application has, or if none; should use assuming no change, 
-     * in the given zone. Empty if not known
-     */
-    Optional<ApplicationRevision> currentRevision(Zone zone) {
-        Deployment currentDeployment = deployments().get(zone);
-        if (currentDeployment != null) // Already deployed in this zone: Use that revision
-            return Optional.of(currentDeployment.revision());
-        return Optional.empty();
+    /** Returns the global rotation of this, if present */
+    public Optional<ApplicationRotation> rotation() {
+        return rotation.map(rotation -> new ApplicationRotation(id, rotation));
     }
 
     @Override
@@ -266,12 +209,22 @@ public class Application {
         return "application '" + id + "'";
     }
 
-    private boolean isPermanent(Environment environment) {
-        if (environment == Environment.dev) return false;
-        if (environment == Environment.perf) return false;
-        if (environment == Environment.test) return false;
-        if (environment == Environment.staging) return false;
-        return true;
+    /** Returns whether changes to this are blocked in the given instant */
+    public boolean isBlocked(Instant instant) {
+         return ! deploymentSpec().canUpgradeAt(instant) || ! deploymentSpec().canChangeRevisionAt(instant);
     }
-    
+
+    /** Returns the application version a deployment to this zone should use, or empty if we don't know */
+    private Optional<ApplicationVersion> deployApplicationVersionIn(ZoneId zone) {
+        if (change().application().isPresent()) {
+            return Optional.of(change().application().get());
+        }
+        return applicationVersionIn(zone);
+    }
+
+    /** Returns the application version that is or should be deployed with in the given zone, or empty if unknown. */
+    private Optional<ApplicationVersion> applicationVersionIn(ZoneId zone) {
+        return Optional.ofNullable(deployments().get(zone)).map(Deployment::applicationVersion);
+    }
+
 }

@@ -1,11 +1,13 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
 #include "routablefactories51.h"
+#include <vespa/document/bucket/fixed_bucket_spaces.h>
+#include <vespa/document/document.h>
 #include <vespa/documentapi/documentapi.h>
 #include <vespa/documentapi/loadtypes/loadtypeset.h>
-#include <vespa/document/document.h>
 #include <vespa/vespalib/objects/nbostream.h>
 
+using document::FixedBucketSpaces;
 using vespalib::nbostream;
 
 namespace documentapi {
@@ -86,6 +88,7 @@ RoutableFactories51::CreateVisitorMessageFactory::doDecode(document::ByteBuffer 
     msg.setVisitorDispatcherVersion(50);
     msg.setVisitorOrdering((document::OrderingSpecification::Order)decodeInt(buf));
     msg.setMaxBucketsPerVisitor(decodeInt(buf));
+    msg.setBucketSpace(decodeBucketSpace(buf));
 
     return ret;
 }
@@ -124,8 +127,18 @@ RoutableFactories51::CreateVisitorMessageFactory::doEncode(const DocumentMessage
 
     buf.putInt(msg.getVisitorOrdering());
     buf.putInt(msg.getMaxBucketsPerVisitor());
+    return encodeBucketSpace(msg.getBucketSpace(), buf);
+}
 
-    return true;
+bool RoutableFactories51::CreateVisitorMessageFactory::encodeBucketSpace(
+        vespalib::stringref bucketSpace,
+        vespalib::GrowableByteBuffer& buf) const {
+    (void) buf;
+    return (bucketSpace == FixedBucketSpaces::default_space_name());
+}
+
+string RoutableFactories51::CreateVisitorMessageFactory::decodeBucketSpace(document::ByteBuffer&) const {
+    return FixedBucketSpaces::default_space_name();
 }
 
 DocumentMessage::UP

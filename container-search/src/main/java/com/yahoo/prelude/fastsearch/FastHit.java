@@ -109,7 +109,7 @@ public class FastHit extends Hit {
 
     /**
      * Returns the explicitly set uri if available, returns "index:[source]/[partid]/[id]" otherwise
-     * 
+     *
      * @return uri of hit
      */
     public URI getUri() {
@@ -128,9 +128,9 @@ public class FastHit extends Hit {
     }
 
     /**
-     * The uri of the index location of this hit ("index:[source]/[partid]/[id]"). 
+     * The uri of the index location of this hit ("index:[source]/[partid]/[id]").
      * This is the uri if no other uri is assigned
-     * 
+     *
      * @return uri to the index.
      */
     public URI getIndexUri() {
@@ -215,7 +215,7 @@ public class FastHit extends Hit {
      *     The empty string ("") if no value is assigned in the document.
      *
      *     <li><b>Dynamic summary string fields</b>: A Java String before JuniperSearcher and a HitField after.</li>
-     *     
+     *
      *     <li><b>Numerics</b>: The corresponding numeric Java type.<br>
      *     If the field has <i>no value</i> assigned in the document,
      *     the special numeric {@link com.yahoo.search.result.NanNumber#NaN} is returned.
@@ -267,26 +267,13 @@ public class FastHit extends Hit {
         this.distributionKey = distributionKey;
     }
 
-    public void addSummary(Docsum docsum) {
-        LazyDocsumValue lazyDocsumValue = new LazyDocsumValue(docsum);
-        reserve(docsum.getDefinition().getFieldCount());
-        for (DocsumField field : docsum.getDefinition().getFields()) {
-            setDocsumFieldIfNotPresent(field.getName(), lazyDocsumValue);
-        }
-    }
-
     void addSummary(DocsumDefinition docsumDef, Inspector value) {
         reserve(docsumDef.getFieldCount());
         for (DocsumField field : docsumDef.getFields()) {
             String fieldName = field.getName();
-            if (value.type() == Type.STRING &&
-                (field instanceof LongstringField || field instanceof StringField || field instanceof XMLField)) {
-                setDocsumFieldIfNotPresent(fieldName, new LazyString(field, value));
-            } else {
-                Inspector f = value.field(fieldName);
-                if (field.getEmulConfig().forceFillEmptyFields() || f.valid()) {
-                    setDocsumFieldIfNotPresent(fieldName, field.convert(f));
-                }
+            Inspector f = value.field(fieldName);
+            if (field.getEmulConfig().forceFillEmptyFields() || f.valid()) {
+                setDocsumFieldIfNotPresent(fieldName, field.convert(f));
             }
         }
     }
@@ -389,33 +376,6 @@ public class FastHit extends Hit {
     private static abstract class LazyValue {
         abstract Object getValue(String fieldName);
         abstract RawField getFieldAsUtf8(String fieldName);
-    }
-
-    /**
-     * Represents a value that resides in the docsum.
-     */
-    private static class LazyDocsumValue extends LazyValue {
-
-        private final Docsum docsum;
-
-        LazyDocsumValue(Docsum docsum) {
-            this.docsum = docsum;
-        }
-
-        Object getValue(String fieldName) {
-            return docsum.decode(getFieldIndex(fieldName));
-        }
-
-        private int getFieldIndex(String fieldName) {
-            Integer index = docsum.getFieldIndex(fieldName);
-            if (index == null) throw new AssertionError("Invalid fieldName " + fieldName);
-            return index;
-        }
-
-        RawField getFieldAsUtf8(String fieldName) {
-            return docsum.fetchFieldAsUtf8(getFieldIndex(fieldName));
-        }
-
     }
 
     private static class LazyString extends LazyValue {

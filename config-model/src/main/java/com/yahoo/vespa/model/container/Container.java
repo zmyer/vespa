@@ -165,7 +165,6 @@ public class Container extends AbstractService implements
         }
 
         tagServers();
-        monitorService();
     }
 
     private void tagServers() {
@@ -201,7 +200,7 @@ public class Container extends AbstractService implements
     }
 
     private void initDefaultJettyConnector() {
-        defaultHttpServer.addConnector(new ConnectorFactory("SearchServer", getSearchPort(), null));
+        defaultHttpServer.addConnector(new ConnectorFactory("SearchServer", getSearchPort()));
     }
 
     private boolean hasDocproc() {
@@ -331,7 +330,7 @@ public class Container extends AbstractService implements
 
         FileDistributionConfigProducer fileDistribution = getRoot().getFileDistributionConfigProducer();
         if (fileDistribution != null) {
-            builder.configid(fileDistribution.getFileDistributorService(getHost()).getConfigId());
+            builder.configid(fileDistribution.getConfigProducer(getHost()).getConfigId());
         }
         return builder;
     }
@@ -393,6 +392,7 @@ public class Container extends AbstractService implements
     public void setHttpServerEnabled(boolean httpServerEnabled) {
         this.httpServerEnabled = httpServerEnabled;
     }
+
 
     public static final class PortOverride {
         public final ComponentSpecification serverId;

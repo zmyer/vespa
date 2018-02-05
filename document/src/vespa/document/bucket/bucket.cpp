@@ -5,6 +5,12 @@
 
 namespace document {
 
+Bucket::Bucket() noexcept
+    : _bucketSpace(BucketSpace::invalid()),
+      _bucketId()
+{
+}
+
 vespalib::string Bucket::toString() const
 {
     vespalib::asciistream os;
@@ -15,6 +21,11 @@ vespalib::string Bucket::toString() const
 vespalib::asciistream& operator<<(vespalib::asciistream& os, const Bucket& id)
 {
     return os << "Bucket(" << id.getBucketSpace() << ", " << id.getBucketId() << ")";
+}
+
+std::ostream& operator<<(std::ostream& os, const Bucket& id)
+{
+    return os << id.toString();
 }
 
 }

@@ -10,6 +10,7 @@
 #include <vespa/storageapi/message/state.h>
 #include <tests/distributor/distributortestutil.h>
 #include <tests/common/dummystoragelink.h>
+#include <vespa/document/test/make_document_bucket.h>
 #include <vespa/vdstestlib/cppunit/macros.h>
 #include <vespa/vespalib/text/stringtokenizer.h>
 #include <vespa/vespalib/testkit/test_kit.h>
@@ -26,6 +27,7 @@ using namespace storage;
 using namespace storage::api;
 using namespace storage::lib;
 using namespace std::literals::string_literals;
+using document::test::makeDocumentBucket;
 
 namespace storage {
 
@@ -129,6 +131,7 @@ public:
 
     void sendPut(std::shared_ptr<api::PutCommand> msg) {
         op.reset(new PutOperation(getExternalOperationHandler(),
+                                  getDistributorBucketSpace(),
                                   msg,
                                   getDistributor().getMetrics().
                                   puts[msg->getLoadType()]));
@@ -148,7 +151,7 @@ public:
             const Document::SP doc) const
     {
         return std::shared_ptr<api::PutCommand>(
-                new api::PutCommand(document::BucketId(0), doc, 100));
+                new api::PutCommand(makeDocumentBucket(document::BucketId(0)), doc, 100));
     }
 };
 
@@ -164,7 +167,7 @@ PutOperationTest::createAndSendSampleDocument(uint32_t timeout) {
     addIdealNodes(id);
 
     std::shared_ptr<api::PutCommand> msg(
-            new api::PutCommand(document::BucketId(0),
+            new api::PutCommand(makeDocumentBucket(document::BucketId(0)),
                                 doc,
                                 0));
     msg->setTimestamp(100);
@@ -271,7 +274,7 @@ PutOperationTest::testNodeRemovedOnReply()
                         "doc:test:test, timestamp 100, size 33) => 0"),
             _sender.getCommands(true, true));
 
-    getExternalOperationHandler().removeNodeFromDB(document::BucketId(16, 0x8b13), 0);
+    getExternalOperationHandler().removeNodeFromDB(makeDocumentBucket(document::BucketId(16, 0x8b13)), 0);
 
     sendReply(0);
     sendReply(1);
@@ -279,7 +282,7 @@ PutOperationTest::testNodeRemovedOnReply()
     CPPUNIT_ASSERT_EQUAL(std::string(
                                  "PutReply(doc:test:test, BucketId(0x0000000000000000), "
                                  "timestamp 100) ReturnCode(BUCKET_DELETED, "
-                                 "BucketId(0x4000000000008b13) was deleted from nodes [0] "
+                                 "Bucket(BucketSpace(0x0000000000000001), BucketId(0x4000000000008b13)) was deleted from nodes [0] "
                                  "after message was sent but before it was done. "
                                  "Sent to [1,0])"),
                          _sender.getLastReply());
@@ -594,7 +597,7 @@ PutOperationTest::getNodes(const std::string& infoString) {
 
     std::vector<uint16_t> targetNodes;
     std::vector<uint16_t> createNodes;
-    PutOperation::getTargetNodes(getExternalOperationHandler().getIdealNodes(bid),
+    PutOperation::getTargetNodes(getExternalOperationHandler().getIdealNodes(makeDocumentBucket(bid)),
                                  targetNodes, createNodes, entry, 2);
 
     ost << "target( ";

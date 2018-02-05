@@ -6,7 +6,6 @@
 #include "bucketdbupdater.h"
 #include "pendingmessagetracker.h"
 #include "externaloperationhandler.h"
-#include "maintenancebucket.h"
 #include "min_replica_provider.h"
 #include "distributorinterface.h"
 
@@ -23,6 +22,7 @@
 #include <vespa/config/config.h>
 #include <vespa/vespalib/util/sync.h>
 #include <unordered_map>
+#include <queue>
 
 namespace storage {
 
@@ -31,7 +31,7 @@ class HostInfo;
 
 namespace distributor {
 
-class ManagedBucketSpaceRepo;
+class DistributorBucketSpaceRepo;
 class SimpleMaintenanceScanner;
 class BlockingOperationStarter;
 class ThrottlingOperationStarter;
@@ -71,7 +71,7 @@ public:
         return _pendingMessageTracker;
     }
 
-    BucketOwnership checkOwnershipInPendingState(const document::BucketId&) const override;
+    BucketOwnership checkOwnershipInPendingState(const document::Bucket &bucket) const override;
 
     /**
      * Enables a new cluster state. Called after the bucket db updater has
@@ -89,7 +89,7 @@ public:
 
     void storageDistributionChanged() override;
 
-    void recheckBucketInfo(uint16_t nodeIdx, const document::BucketId& bid) override;
+    void recheckBucketInfo(uint16_t nodeIdx, const document::Bucket &bucket) override;
 
     bool handleReply(const std::shared_ptr<api::StorageReply>& reply) override;
 
@@ -111,9 +111,7 @@ public:
      * Checks whether a bucket needs to be split, and sends a split
      * if so.
      */
-    void checkBucketForSplit(const BucketDatabase::Entry& e, uint8_t priority) override;
-
-    const lib::Distribution& getDistribution() const override;
+    void checkBucketForSplit(document::BucketSpace bucketSpace, const BucketDatabase::Entry& e, uint8_t priority) override;
 
     const lib::ClusterState& getClusterState() const override {
         return _clusterState;
@@ -158,8 +156,8 @@ public:
         return *_bucketIdHasher;
     }
 
-    ManagedBucketSpace& getDefaultBucketSpace() noexcept;
-    const ManagedBucketSpace& getDefaultBucketSpace() const noexcept;
+    DistributorBucketSpaceRepo &getBucketSpaceRepo() noexcept { return *_bucketSpaceRepo; }
+    const DistributorBucketSpaceRepo &getBucketSpaceRepo() const noexcept { return *_bucketSpaceRepo; }
 
 private:
     friend class Distributor_Test;
@@ -186,11 +184,12 @@ private:
     };
 
     void setNodeStateUp();
-
     bool handleMessage(const std::shared_ptr<api::StorageMessage>& msg);
     bool isMaintenanceReply(const api::StorageReply& reply) const;
 
     void handleStatusRequests();
+    void send_shutdown_abort_reply(const std::shared_ptr<api::StorageMessage>&);
+    void handle_or_propagate_message(const std::shared_ptr<api::StorageMessage>& msg);
     void startExternalOperations();
 
     /**
@@ -230,13 +229,13 @@ private:
                            Operation::SP& operation);
 
     void enableNextDistribution();
-    void propagateDefaultDistribution(std::shared_ptr<lib::Distribution>);
+    void propagateDefaultDistribution(std::shared_ptr<const lib::Distribution>);
 
     lib::ClusterState _clusterState;
 
     DistributorComponentRegister& _compReg;
     storage::DistributorComponent _component;
-    std::unique_ptr<ManagedBucketSpaceRepo> _bucketSpaceRepo;
+    std::unique_ptr<DistributorBucketSpaceRepo> _bucketSpaceRepo;
     std::shared_ptr<DistributorMetricSet> _metrics;
 
     OperationOwner _operationOwner;
@@ -249,11 +248,23 @@ private:
     IdealStateManager _idealStateManager;
     ExternalOperationHandler _externalOperationHandler;
 
-    mutable std::shared_ptr<lib::Distribution> _distribution;
+    std::shared_ptr<lib::Distribution> _distribution;
     std::shared_ptr<lib::Distribution> _nextDistribution;
 
-    typedef std::vector<std::shared_ptr<api::StorageMessage> > MessageQueue;
+    using MessageQueue = std::vector<std::shared_ptr<api::StorageMessage>>;
+    struct IndirectHigherPriority {
+        template <typename Lhs, typename Rhs>
+        bool operator()(const Lhs& lhs, const Rhs& rhs) const noexcept {
+            return lhs->getPriority() > rhs->getPriority();
+        }
+    };
+    using ClientRequestPriorityQueue = std::priority_queue<
+            std::shared_ptr<api::StorageMessage>,
+            std::vector<std::shared_ptr<api::StorageMessage>>,
+            IndirectHigherPriority
+    >;
     MessageQueue _messageQueue;
+    ClientRequestPriorityQueue _client_request_priority_queue;
     MessageQueue _fetchedMessages;
     framework::TickingThreadPool& _threadPool;
     vespalib::Monitor _statusMonitor;

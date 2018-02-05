@@ -29,7 +29,7 @@ class PersistenceMessageTrackerImpl : public PersistenceMessageTracker,
                                       public MessageTracker
 {
 private:
-    typedef std::map<document::BucketId, std::vector<BucketCopy> > BucketInfoMap;
+    typedef std::map<document::Bucket, std::vector<BucketCopy> > BucketInfoMap;
     BucketInfoMap _remapBucketInfo;
     BucketInfoMap _bucketInfo;
 
@@ -52,7 +52,7 @@ public:
     void updateFromReply(MessageSender& sender, api::BucketInfoReply& reply, uint16_t node) override;
     std::shared_ptr<api::BucketInfoReply>& getReply() override { return _reply; }
 
-    typedef std::pair<document::BucketId, uint16_t> BucketNodePair;
+    typedef std::pair<document::Bucket, uint16_t> BucketNodePair;
 
     void revert(MessageSender& sender, const std::vector<BucketNodePair> revertNodes);
 
@@ -72,7 +72,7 @@ private:
     std::shared_ptr<api::BucketInfoReply> _reply;
     DistributorComponent& _manager;
     api::Timestamp _revertTimestamp;
-    std::vector<std::pair<document::BucketId, uint16_t> > _revertNodes;
+    std::vector<BucketNodePair> _revertNodes;
     mbus::TraceNode _trace;
     framework::MilliSecTimer _requestTimer;
     uint8_t _priority;

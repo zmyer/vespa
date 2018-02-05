@@ -1,6 +1,7 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.vespa.config.server.application;
 
+import com.google.common.collect.ImmutableSet;
 import com.yahoo.concurrent.ThreadFactoryFactory;
 import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.config.provision.TenantName;
@@ -17,11 +18,15 @@ import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent;
 import org.apache.curator.framework.recipes.cache.PathChildrenCacheListener;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 /**
@@ -35,10 +40,13 @@ import java.util.logging.Logger;
 public class ZKTenantApplications implements TenantApplications, PathChildrenCacheListener {
 
     private static final Logger log = Logger.getLogger(ZKTenantApplications.class.getName());
+    private static final Duration checkForRemovedApplicationsInterval = Duration.ofMinutes(1);
+
     private final Curator curator;
     private final Path applicationsPath;
     private final ExecutorService pathChildrenExecutor =
             Executors.newFixedThreadPool(1, ThreadFactoryFactory.getThreadFactory(ZKTenantApplications.class.getName()));
+    private final ScheduledExecutorService checkForRemovedApplicationsService = new ScheduledThreadPoolExecutor(1);
     private final Curator.DirectoryCache directoryCache;
     private final ReloadHandler reloadHandler;
     private final TenantName tenant;
@@ -46,32 +54,23 @@ public class ZKTenantApplications implements TenantApplications, PathChildrenCac
     private ZKTenantApplications(Curator curator, Path applicationsPath, ReloadHandler reloadHandler, TenantName tenant) {
         this.curator = curator;
         this.applicationsPath = applicationsPath;
+        curator.create(applicationsPath);
         this.reloadHandler = reloadHandler;
         this.tenant = tenant;
-        rewriteApplicationIds();
         this.directoryCache = curator.createDirectoryCache(applicationsPath.getAbsolute(), false, false, pathChildrenExecutor);
         this.directoryCache.start();
         this.directoryCache.addListener(this);
+        checkForRemovedApplicationsService.scheduleWithFixedDelay(this::removeApplications,
+                                                                  checkForRemovedApplicationsInterval.getSeconds(),
+                                                                  checkForRemovedApplicationsInterval.getSeconds(),
+                                                                  TimeUnit.SECONDS);
     }
 
-    public static TenantApplications create(Curator curator, Path applicationsPath, ReloadHandler reloadHandler, TenantName tenant) {
+    public static TenantApplications create(Curator curator, ReloadHandler reloadHandler, TenantName tenant) {
         try {
-            return new ZKTenantApplications(curator, applicationsPath, reloadHandler, tenant);
+            return new ZKTenantApplications(curator, Tenants.getApplicationsPath(tenant), reloadHandler, tenant);
         } catch (Exception e) {
             throw new RuntimeException(Tenants.logPre(tenant) + "Error creating application repo", e);
-        }
-    }
-
-    private void rewriteApplicationIds() {
-        try {
-            List<String> appNodes = curator.framework().getChildren().forPath(applicationsPath.getAbsolute());
-            for (String appNode : appNodes) {
-                Optional<ApplicationId> appId = parseApplication(appNode);
-                appId.filter(id -> shouldBeRewritten(appNode, id))
-                     .ifPresent(id -> rewriteApplicationId(id, appNode, readSessionId(id, appNode)));
-            }
-        } catch (Exception e) {
-            log.log(LogLevel.WARNING, "Error rewriting application ids on upgrade", e);
         }
     }
 
@@ -81,24 +80,6 @@ public class ZKTenantApplications implements TenantApplications, PathChildrenCac
             return Long.parseLong(Utf8.toString(curator.framework().getData().forPath(path)));
         } catch (Exception e) {
             throw new IllegalArgumentException(Tenants.logPre(appId) + "Unable to read the session id from '" + path + "'", e);
-        }
-    }
-
-    private boolean shouldBeRewritten(String appNode, ApplicationId appId) {
-        return !appNode.equals(appId.serializedForm());
-    }
-
-    private void rewriteApplicationId(ApplicationId appId, String origNode, long sessionId) {
-        String newPath = applicationsPath.append(appId.serializedForm()).getAbsolute();
-        String oldPath = applicationsPath.append(origNode).getAbsolute();
-        try (CuratorTransaction transaction = new CuratorTransaction(curator)) {
-            if (curator.framework().checkExists().forPath(newPath) == null) {
-                transaction.add(CuratorOperations.create(newPath, Utf8.toAsciiBytes(sessionId)));
-            }
-            transaction.add(CuratorOperations.delete(oldPath));
-            transaction.commit();
-        } catch (Exception e) {
-            log.log(LogLevel.WARNING, "Error rewriting application id from " + origNode + " to " + appId.serializedForm());
         }
     }
 
@@ -149,6 +130,7 @@ public class ZKTenantApplications implements TenantApplications, PathChildrenCac
     public void close() {
         directoryCache.close();
         pathChildrenExecutor.shutdown();
+        checkForRemovedApplicationsService.shutdown();
     }
 
     @Override
@@ -161,16 +143,31 @@ public class ZKTenantApplications implements TenantApplications, PathChildrenCac
             case CHILD_REMOVED:
                 applicationRemoved(ApplicationId.fromSerializedForm(Path.fromString(event.getData().getPath()).getName()));
                 break;
+            case CHILD_UPDATED:
+                // do nothing, application just got redeployed
+                break;
+            default:
+                break;
         }
+        // We might have lost events and might need to remove applications (new applications are
+        // not added by listening for events here, they are added when session is added, see RemoteSessionRepo)
+        removeApplications();
     }
 
     private void applicationRemoved(ApplicationId applicationId) {
         reloadHandler.removeApplication(applicationId);
-        log.log(LogLevel.DEBUG, Tenants.logPre(applicationId) + "Application removed: " + applicationId);
+        log.log(LogLevel.INFO, Tenants.logPre(applicationId) + "Application removed: " + applicationId);
     }
 
     private void applicationAdded(ApplicationId applicationId) {
         log.log(LogLevel.DEBUG, Tenants.logPre(applicationId) + "Application added: " + applicationId);
-    }    
+    }
+
+    private void removeApplications() {
+        ImmutableSet<ApplicationId> activeApplications = ImmutableSet.copyOf(listApplications());
+        log.log(LogLevel.DEBUG, "Removing stale applications for tenant '" + tenant +
+                "', not removing these active applications: " + activeApplications);
+        reloadHandler.removeApplicationsExcept(activeApplications);
+    }
 
 }

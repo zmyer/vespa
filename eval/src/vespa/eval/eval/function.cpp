@@ -100,39 +100,12 @@ struct ImplicitParams : Params {
 class ResolveContext
 {
 private:
-    const Params                  &_params;
-    const SymbolExtractor         *_symbol_extractor;
-    std::vector<vespalib::string>  _let_names;
+    const Params          &_params;
+    const SymbolExtractor *_symbol_extractor;
 public:
     ResolveContext(const Params &params, const SymbolExtractor *symbol_extractor)
-        : _params(params), _symbol_extractor(symbol_extractor), _let_names() {}
-
-    void push_let_name(const vespalib::string &name) {
-        _let_names.push_back(name);
-    }
-
-    void pop_let_name() {
-        assert(!_let_names.empty());
-        _let_names.pop_back();
-    }
-
-    int resolve_let_name(const vespalib::string &name) const {
-        for (int i = (int(_let_names.size()) - 1); i >= 0; --i) {
-            if (name == _let_names[i]) {
-                return -(i + 1);
-            }
-        }
-        return nodes::Symbol::UNDEF;
-    }
-
-    int resolve_param(const vespalib::string &name) const {
-        size_t param_id = _params.resolve(name);
-        if (param_id == Params::UNDEF) {
-            return nodes::Symbol::UNDEF;
-        }
-        return param_id;
-    }
-
+        : _params(params), _symbol_extractor(symbol_extractor) {}
+    size_t resolve_param(const vespalib::string &name) const { return _params.resolve(name); }
     const SymbolExtractor *symbol_extractor() const { return _symbol_extractor; }
 };
 
@@ -247,19 +220,7 @@ public:
         }
     }
 
-    void push_let_binding(const vespalib::string &name) {
-        resolver().push_let_name(name);
-    }
-
-    void pop_let_binding() {
-        resolver().pop_let_name();
-    }
-
-    int resolve_let_ref(const vespalib::string &name) const {
-        return resolver().resolve_let_name(name);
-    }
-
-    int resolve_parameter(const vespalib::string &name) const {
+    size_t resolve_parameter(const vespalib::string &name) const {
         return resolver().resolve_param(name);
     }
 
@@ -320,12 +281,15 @@ public:
     size_t operator_mark() const { return _operator_mark; }
     void operator_mark(size_t mark) { _operator_mark = mark; }
 
-    void push_operator(Operator_UP node) {
+    void apply_until(const nodes::Operator &op) {
         while ((_operator_stack.size() > _operator_mark) &&
-               (_operator_stack.back()->do_before(*node)))
+               (_operator_stack.back()->do_before(op)))
         {
             apply_operator();
         }
+    }
+    void push_operator(Operator_UP node) {
+        apply_until(*node);
         _operator_stack.push_back(std::move(node));
     }
     Operator_UP pop_operator() {
@@ -338,6 +302,7 @@ public:
 
 //-----------------------------------------------------------------------------
 
+void parse_value(ParseContext &ctx);
 void parse_expression(ParseContext &ctx);
 
 int unhex(char c) {
@@ -472,20 +437,6 @@ void parse_if(ParseContext &ctx) {
     ctx.push_expression(Node_UP(new nodes::If(std::move(cond), std::move(true_expr), std::move(false_expr), p_true)));
 }
 
-void parse_let(ParseContext &ctx) {
-    vespalib::string name = get_ident(ctx, false);
-    ctx.skip_spaces();
-    ctx.eat(',');
-    parse_expression(ctx);
-    Node_UP value = ctx.pop_expression();
-    ctx.eat(',');
-    ctx.push_let_binding(name);
-    parse_expression(ctx);
-    Node_UP expr = ctx.pop_expression();
-    ctx.pop_let_binding();
-    ctx.push_expression(Node_UP(new nodes::Let(name, std::move(value), std::move(expr))));
-}
-
 void parse_call(ParseContext &ctx, Call_UP call) {
     for (size_t i = 0; i < call->num_params(); ++i) {
         if (i > 0) {
@@ -587,13 +538,7 @@ void parse_tensor_reduce(ParseContext &ctx) {
         return;
     }
     auto dimensions = get_ident_list(ctx, false);
-    if ((*maybe_aggr == Aggr::SUM) && dimensions.empty()) {
-        ctx.push_expression(std::make_unique<nodes::TensorSum>(std::move(child)));
-    } else if ((*maybe_aggr == Aggr::SUM) && (dimensions.size() == 1)) {
-        ctx.push_expression(std::make_unique<nodes::TensorSum>(std::move(child), dimensions[0]));
-    } else {
-        ctx.push_expression(std::make_unique<nodes::TensorReduce>(std::move(child), *maybe_aggr, std::move(dimensions)));
-    }
+    ctx.push_expression(std::make_unique<nodes::TensorReduce>(std::move(child), *maybe_aggr, std::move(dimensions)));
 }
 
 void parse_tensor_rename(ParseContext &ctx) {
@@ -648,28 +593,12 @@ void parse_tensor_concat(ParseContext &ctx) {
     ctx.push_expression(std::make_unique<nodes::TensorConcat>(std::move(lhs), std::move(rhs), dimension));
 }
 
-// to be replaced with more generic 'reduce'
-void parse_tensor_sum(ParseContext &ctx) {
-    parse_expression(ctx);
-    Node_UP child = ctx.pop_expression();
-    if (ctx.get() == ',') {
-        ctx.next();
-        vespalib::string dimension = get_ident(ctx, false);
-        ctx.skip_spaces();
-        ctx.push_expression(Node_UP(new nodes::TensorSum(std::move(child), dimension)));
-    } else {
-        ctx.push_expression(Node_UP(new nodes::TensorSum(std::move(child))));
-    }
-}
-
 bool try_parse_call(ParseContext &ctx, const vespalib::string &name) {
     ctx.skip_spaces();
     if (ctx.get() == '(') {
         ctx.eat('(');
         if (name == "if") {
             parse_if(ctx);
-        } else if (name == "let") {
-            parse_let(ctx);
         } else {
             Call_UP call = nodes::CallRepo::instance().create(name);
             if (call.get() != nullptr) {
@@ -686,8 +615,6 @@ bool try_parse_call(ParseContext &ctx, const vespalib::string &name) {
                 parse_tensor_lambda(ctx);
             } else if (name == "concat") {
                 parse_tensor_concat(ctx);
-            } else if (name == "sum") {
-                parse_tensor_sum(ctx);
             } else {
                 ctx.fail(make_string("unknown function: '%s'", name.c_str()));
                 return false;
@@ -699,11 +626,7 @@ bool try_parse_call(ParseContext &ctx, const vespalib::string &name) {
     return false;
 }
 
-int parse_symbol(ParseContext &ctx, vespalib::string &name, ParseContext::InputMark before_name) {
-    int id = ctx.resolve_let_ref(name);
-    if (id != nodes::Symbol::UNDEF) {
-        return id;
-    }
+size_t parse_symbol(ParseContext &ctx, vespalib::string &name, ParseContext::InputMark before_name) {
     ctx.extract_symbol(name, before_name);
     return ctx.resolve_parameter(name);
 }
@@ -712,10 +635,10 @@ void parse_symbol_or_call(ParseContext &ctx) {
     ParseContext::InputMark before_name = ctx.get_input_mark();
     vespalib::string name = get_ident(ctx, true);
     if (!try_parse_call(ctx, name)) {
-        int id = parse_symbol(ctx, name, before_name);
+        size_t id = parse_symbol(ctx, name, before_name);
         if (name.empty()) {
             ctx.fail("missing value");
-        } else if (id == nodes::Symbol::UNDEF) {
+        } else if (id == Params::UNDEF) {
             ctx.fail(make_string("unknown symbol: '%s'", name.c_str()));
         } else {
             ctx.push_expression(Node_UP(new nodes::Symbol(id)));
@@ -723,8 +646,11 @@ void parse_symbol_or_call(ParseContext &ctx) {
     }
 }
 
-void parse_array(ParseContext &ctx) {
-    std::unique_ptr<nodes::Array> array(new nodes::Array());
+void parse_in(ParseContext &ctx)
+{
+    ctx.apply_until(nodes::Less());
+    auto in = std::make_unique<nodes::In>(ctx.pop_expression());
+    ctx.skip_spaces();
     ctx.eat('[');
     ctx.skip_spaces();
     size_t size = 0;
@@ -732,11 +658,19 @@ void parse_array(ParseContext &ctx) {
         if (++size > 1) {
             ctx.eat(',');
         }
-        parse_expression(ctx);
-        array->add(ctx.pop_expression());
+        parse_value(ctx);
+        ctx.skip_spaces();
+        auto entry = ctx.pop_expression();
+        auto num = nodes::as<nodes::Number>(*entry);
+        auto str = nodes::as<nodes::String>(*entry);
+        if (num || str) {
+            in->add_entry(std::move(entry));
+        } else {
+            ctx.fail("invalid entry for 'in' operator");
+        }
     }
     ctx.eat(']');
-    ctx.push_expression(std::move(array));
+    ctx.push_expression(std::move(in));
 }
 
 void parse_value(ParseContext &ctx) {
@@ -744,7 +678,13 @@ void parse_value(ParseContext &ctx) {
     if (ctx.get() == '-') {
         ctx.next();
         parse_value(ctx);
-        ctx.push_expression(Node_UP(new nodes::Neg(ctx.pop_expression())));
+        auto entry = ctx.pop_expression();
+        auto num = nodes::as<nodes::Number>(*entry);
+        if (num) {
+            ctx.push_expression(std::make_unique<nodes::Number>(-num->value()));
+        } else {
+            ctx.push_expression(std::make_unique<nodes::Neg>(std::move(entry)));
+        }
     } else if (ctx.get() == '!') {
         ctx.next();
         parse_value(ctx);
@@ -753,8 +693,6 @@ void parse_value(ParseContext &ctx) {
         ctx.next();
         parse_expression(ctx);
         ctx.eat(')');
-    } else if (ctx.get() == '[') {
-        parse_array(ctx);
     } else if (ctx.get() == '"') {
         parse_string(ctx);
     } else if (isdigit(ctx.get())) {
@@ -764,7 +702,8 @@ void parse_value(ParseContext &ctx) {
     }
 }
 
-void parse_operator(ParseContext &ctx) {
+bool parse_operator(ParseContext &ctx) {
+    bool expect_value = true;
     ctx.skip_spaces();
     vespalib::string &str = ctx.peek(ctx.scratch(), nodes::OperatorRepo::instance().max_size());
     Operator_UP op = nodes::OperatorRepo::instance().create(str);
@@ -772,24 +711,38 @@ void parse_operator(ParseContext &ctx) {
         ctx.push_operator(std::move(op));
         ctx.skip(str.size());
     } else {
-        ctx.fail(make_string("invalid operator: '%c'", ctx.get()));
+        vespalib::string ident = get_ident(ctx, true);
+        if (ident == "in") {
+            parse_in(ctx);
+            expect_value = false;
+        } else {
+            if (ident.empty()) {
+                ctx.fail(make_string("invalid operator: '%c'", ctx.get()));
+            } else {
+                ctx.fail(make_string("invalid operator: '%s'", ident.c_str()));
+            }
+        }
     }
+    return expect_value;
 }
 
 void parse_expression(ParseContext &ctx) {
     size_t old_mark = ctx.operator_mark();
     ctx.operator_mark(ctx.num_operators());
+    bool expect_value = true;
     for (;;) {
-        parse_value(ctx);
+        if (expect_value) {
+            parse_value(ctx);
+        }
         ctx.skip_spaces();
-        if (ctx.eos() || ctx.get() == ')' || ctx.get() == ',' || ctx.get() == ']') {
+        if (ctx.eos() || ctx.get() == ')' || ctx.get() == ',') {
             while (ctx.num_operators() > ctx.operator_mark()) {
                 ctx.apply_operator();
             }
             ctx.operator_mark(old_mark);
             return;
         }
-        parse_operator(ctx);
+        expect_value = parse_operator(ctx);
     }
 }
 

@@ -4,6 +4,7 @@
 #include "tensor_address_builder.h"
 #include "tensor_visitor.h"
 #include <vespa/eval/eval/simple_tensor_engine.h>
+#include <vespa/eval/eval/tensor_spec.h>
 #include <vespa/vespalib/util/stringfmt.h>
 
 namespace vespalib::tensor {
@@ -11,16 +12,9 @@ namespace vespalib::tensor {
 bool
 WrappedSimpleTensor::equals(const Tensor &arg) const
 {
-    if (auto other = dynamic_cast<const WrappedSimpleTensor *>(&arg)) {
-        return eval::SimpleTensor::equal(_tensor, other->_tensor);
-    }
-    return false;
-}
-
-vespalib::string
-WrappedSimpleTensor::toString() const
-{
-    return eval::SimpleTensorEngine::ref().to_string(_tensor);
+    auto lhs_spec = _tensor.engine().to_spec(_tensor);
+    auto rhs_spec = arg.engine().to_spec(arg);
+    return (lhs_spec == rhs_spec);
 }
 
 eval::TensorSpec
@@ -30,13 +24,9 @@ WrappedSimpleTensor::toSpec() const
 }
 
 double
-WrappedSimpleTensor::sum() const
+WrappedSimpleTensor::as_double() const
 {
-    double result = 0.0;
-    for (const auto &cell: _tensor.cells()) {
-        result += cell.value;
-    }
-    return result;
+    return _tensor.as_double();
 }
 
 void
@@ -57,12 +47,6 @@ WrappedSimpleTensor::accept(TensorVisitor &visitor) const
     }
 }
 
-void
-WrappedSimpleTensor::print(std::ostream &out) const
-{
-    out << toString();
-}
-
 Tensor::UP
 WrappedSimpleTensor::clone() const
 {
@@ -73,48 +57,6 @@ WrappedSimpleTensor::clone() const
 //-----------------------------------------------------------------------------
 
 Tensor::UP
-WrappedSimpleTensor::add(const Tensor &) const
-{
-    abort();
-    return Tensor::UP();
-}
-
-Tensor::UP
-WrappedSimpleTensor::subtract(const Tensor &) const
-{
-    abort();
-    return Tensor::UP();
-}
-
-Tensor::UP
-WrappedSimpleTensor::multiply(const Tensor &) const
-{
-    abort();
-    return Tensor::UP();
-}
-
-Tensor::UP
-WrappedSimpleTensor::min(const Tensor &) const
-{
-    abort();
-    return Tensor::UP();
-}
-
-Tensor::UP
-WrappedSimpleTensor::max(const Tensor &) const
-{
-    abort();
-    return Tensor::UP();
-}
-
-Tensor::UP
-WrappedSimpleTensor::match(const Tensor &) const
-{
-    abort();
-    return Tensor::UP();
-}
-
-Tensor::UP
 WrappedSimpleTensor::apply(const CellFunction &) const
 {
     abort();
@@ -122,21 +64,14 @@ WrappedSimpleTensor::apply(const CellFunction &) const
 }
 
 Tensor::UP
-WrappedSimpleTensor::sum(const vespalib::string &) const
+WrappedSimpleTensor::join(join_fun_t, const Tensor &) const
 {
     abort();
     return Tensor::UP();
 }
 
 Tensor::UP
-WrappedSimpleTensor::apply(const eval::BinaryOperation &, const Tensor &) const
-{
-    abort();
-    return Tensor::UP();
-}
-
-Tensor::UP
-WrappedSimpleTensor::reduce(const eval::BinaryOperation &, const std::vector<vespalib::string> &) const
+WrappedSimpleTensor::reduce(join_fun_t, const std::vector<vespalib::string> &) const
 {
     abort();
     return Tensor::UP();

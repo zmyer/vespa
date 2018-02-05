@@ -131,7 +131,6 @@ public class OperationProcessor {
                 exceptionMessage.contains("SEND_QUEUE_CLOSED") ||
                 exceptionMessage.contains("ILLEGAL_ROUTE") ||
                 exceptionMessage.contains("NO_SERVICES_FOR_ROUTE") ||
-                exceptionMessage.contains("SERVICE_OOS") ||
                 exceptionMessage.contains("NETWORK_ERROR") ||
                 exceptionMessage.contains("SEQUENCE_ERROR") ||
                 exceptionMessage.contains("NETWORK_SHUTDOWN") ||
@@ -178,10 +177,14 @@ public class OperationProcessor {
             docSendInfoByOperationId.remove(endpointResult.getOperationId());
 
             String documentId = documentSendInfo.getDocument().getDocumentId();
-            inflightDocumentIds.remove(documentId);
-
+            /**
+             * If we got a pending operation against this document
+             * dont't remove it from inflightDocuments and send blocked document operation
+             */
             List<Document> blockedDocuments = blockedDocumentsByDocumentId.get(documentId);
-            if (! blockedDocuments.isEmpty()) {
+            if (blockedDocuments.isEmpty()) {
+                inflightDocumentIds.remove(documentId);
+            } else {
                 sendToClusters(blockedDocuments.remove(0));
             }
             return result;

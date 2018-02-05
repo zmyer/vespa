@@ -11,6 +11,7 @@
     <groupId>com.yahoo.vespa</groupId>
     <artifactId>parent</artifactId>
     <version>6-SNAPSHOT</version>
+    <relativePath>../parent/pom.xml</relativePath>
   </parent>
   <artifactId>container</artifactId>
   <version>6-SNAPSHOT</version>
@@ -25,11 +26,40 @@
       <groupId>com.yahoo.vespa</groupId>
       <artifactId>vespaclient-container-plugin</artifactId>
       <version>${project.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>com.yahoo.vespa</groupId>
-      <artifactId>application</artifactId>
-      <version>${project.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>com.fasterxml.jackson.dataformat</groupId>
+          <artifactId>jackson-dataformat-xml</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>com.yahoo.vespa</groupId>
+          <artifactId>metrics</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>com.yahoo.vespa</groupId>
+          <artifactId>vespaclient-core</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>io.airlift</groupId>
+          <artifactId>airline</artifactId>
+        </exclusion>
+         <exclusion>
+          <groupId>org.apache.commons</groupId>
+          <artifactId>commons-lang3</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.tensorflow</groupId>
+          <artifactId>proto</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.tensorflow</groupId>
+          <artifactId>tensorflow</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>com.google.protobuf</groupId>
+          <artifactId>protobuf-java</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
   </dependencies>
 </project>

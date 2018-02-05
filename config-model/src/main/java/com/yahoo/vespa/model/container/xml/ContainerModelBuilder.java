@@ -4,18 +4,24 @@ package com.yahoo.vespa.model.container.xml;
 import com.google.common.collect.ImmutableList;
 import com.yahoo.component.Version;
 import com.yahoo.config.application.Xml;
-import com.yahoo.config.model.ConfigModelContext;
 import com.yahoo.config.application.api.ApplicationPackage;
 import com.yahoo.config.application.api.DeployLogger;
+import com.yahoo.config.application.api.DeploymentSpec;
+import com.yahoo.config.model.ConfigModelContext;
+import com.yahoo.config.model.api.ConfigServerSpec;
 import com.yahoo.config.model.application.provider.IncludeDirs;
 import com.yahoo.config.model.builder.xml.ConfigModelBuilder;
 import com.yahoo.config.model.builder.xml.ConfigModelId;
 import com.yahoo.config.model.producer.AbstractConfigProducer;
+import com.yahoo.config.provision.AthenzService;
 import com.yahoo.config.provision.Capacity;
-import com.yahoo.config.provision.ClusterSpec;
 import com.yahoo.config.provision.ClusterMembership;
+import com.yahoo.config.provision.ClusterSpec;
 import com.yahoo.config.provision.Environment;
+import com.yahoo.config.provision.HostName;
 import com.yahoo.config.provision.NodeType;
+import com.yahoo.config.provision.Rotation;
+import com.yahoo.config.provision.Zone;
 import com.yahoo.container.jdisc.config.MetricDefaultsConfig;
 import com.yahoo.search.rendering.RendererRegistry;
 import com.yahoo.text.XML;
@@ -28,8 +34,8 @@ import com.yahoo.vespa.model.builder.xml.dom.DomFilterBuilder;
 import com.yahoo.vespa.model.builder.xml.dom.DomHandlerBuilder;
 import com.yahoo.vespa.model.builder.xml.dom.ModelElement;
 import com.yahoo.vespa.model.builder.xml.dom.NodesSpecification;
-import com.yahoo.vespa.model.builder.xml.dom.VespaDomBuilder;
 import com.yahoo.vespa.model.builder.xml.dom.ServletBuilder;
+import com.yahoo.vespa.model.builder.xml.dom.VespaDomBuilder;
 import com.yahoo.vespa.model.builder.xml.dom.chains.docproc.DomDocprocChainsBuilder;
 import com.yahoo.vespa.model.builder.xml.dom.chains.processing.DomProcessingBuilder;
 import com.yahoo.vespa.model.builder.xml.dom.chains.search.DomSearchChainsBuilder;
@@ -37,6 +43,7 @@ import com.yahoo.vespa.model.clients.ContainerDocumentApi;
 import com.yahoo.vespa.model.container.Container;
 import com.yahoo.vespa.model.container.ContainerCluster;
 import com.yahoo.vespa.model.container.ContainerModel;
+import com.yahoo.vespa.model.container.IdentityProvider;
 import com.yahoo.vespa.model.container.component.Component;
 import com.yahoo.vespa.model.container.component.FileStatusHandlerComponent;
 import com.yahoo.vespa.model.container.component.chain.ProcessingHandler;
@@ -52,13 +59,18 @@ import com.yahoo.vespa.model.container.search.QueryProfiles;
 import com.yahoo.vespa.model.container.search.SemanticRules;
 import com.yahoo.vespa.model.container.search.searchchain.SearchChains;
 import com.yahoo.vespa.model.container.xml.document.DocumentFactoryBuilder;
-
 import com.yahoo.vespa.model.content.StorageGroup;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
@@ -88,6 +100,8 @@ public class ContainerModelBuilder extends ConfigModelBuilder<ContainerModel> {
     private static final String xmlRendererId = RendererRegistry.xmlRendererId.getName();
     private static final String jsonRendererId = RendererRegistry.jsonRendererId.getName();
 
+    private static final Logger logger = Logger.getLogger(ContainerModelBuilder.class.getName());
+
     public ContainerModelBuilder(boolean standaloneBuilder, Networking networking) {
         super(ContainerModel.class);
         this.standaloneBuilder = standaloneBuilder;
@@ -108,7 +122,6 @@ public class ContainerModelBuilder extends ConfigModelBuilder<ContainerModel> {
         ContainerCluster cluster = createContainerCluster(spec, modelContext);
         addClusterContent(cluster, spec, modelContext);
         addBundlesForPlatformComponents(cluster);
-
         model.setCluster(cluster);
     }
 
@@ -157,7 +170,42 @@ public class ContainerModelBuilder extends ConfigModelBuilder<ContainerModel> {
         addServerProviders(spec, cluster);
         addLegacyFilters(spec, cluster);  // TODO: Remove for Vespa 7
 
+        // Athenz copper argos
+        // NOTE: Must be done after addNodes()
+        app.getDeployment().map(DeploymentSpec::fromXml)
+                .ifPresent(deploymentSpec -> {
+                    addIdentityProvider(cluster,
+                                        context.getDeployState().getProperties().configServerSpecs(),
+                                        context.getDeployState().getProperties().loadBalancerName(),
+                                        context.getDeployState().zone(),
+                                        deploymentSpec);
+
+                    addRotationProperties(cluster, context.getDeployState().zone(), context.getDeployState().getRotations(), deploymentSpec);
+                });
+
         //TODO: overview handler, see DomQrserverClusterBuilder
+    }
+
+    private void addRotationProperties(ContainerCluster cluster, Zone zone, Set<Rotation> rotations, DeploymentSpec spec) {
+        cluster.getContainers().forEach(container -> {
+            setRotations(container, rotations, spec.globalServiceId(), cluster.getName());
+            container.setProp("activeRotation", Boolean.toString(zoneHasActiveRotation(zone, spec)));
+        });
+    }
+
+    private boolean zoneHasActiveRotation(Zone zone, DeploymentSpec spec) {
+        return spec.zones().stream()
+                .anyMatch(declaredZone -> declaredZone.deploysTo(zone.environment(), Optional.of(zone.region())) &&
+                                                     declaredZone.active());
+    }
+
+    private void setRotations(Container container, Set<Rotation> rotations, Optional<String> globalServiceId, String containerClusterName) {
+
+        if ( ! rotations.isEmpty() && globalServiceId.isPresent()) {
+            if (containerClusterName.equals(globalServiceId.get())) {
+                container.setProp("rotations", rotations.stream().map(Rotation::getId).collect(Collectors.joining(",")));
+            }
+        }
     }
 
     private void addRoutingAliases(ContainerCluster cluster, Element spec, Environment environment) {
@@ -682,6 +730,33 @@ public class ContainerModelBuilder extends ConfigModelBuilder<ContainerModel> {
             cluster.addComponent(new DomComponentBuilder().build(cluster, node));
         }
     }
+
+    private void addIdentityProvider(ContainerCluster cluster, List<ConfigServerSpec> configServerSpecs, HostName loadBalancerName, Zone zone, DeploymentSpec spec) {
+        spec.athenzDomain().ifPresent(domain -> {
+            AthenzService service = spec.athenzService(zone.environment(), zone.region())
+                    .orElseThrow(() -> new RuntimeException("Missing Athenz service configuration"));
+            IdentityProvider identityProvider = new IdentityProvider(domain, service, getLoadBalancerName(loadBalancerName, configServerSpecs));
+            cluster.addComponent(identityProvider);
+
+            cluster.getContainers().forEach(container -> {
+                container.setProp("identity.domain", domain.value());
+                container.setProp("identity.service", service.value());
+            });
+        });
+    }
+
+    private HostName getLoadBalancerName(HostName loadbalancerName, List<ConfigServerSpec> configServerSpecs) {
+        // Set lbaddress, or use first hostname if not specified.
+        // TODO: Remove this method and use the loadbalancerName directly
+        return Optional.ofNullable(loadbalancerName)
+                .orElseGet(
+                        () -> HostName.from(configServerSpecs.stream()
+                                                    .findFirst()
+                                                    .map(ConfigServerSpec::getHostName)
+                                                    .orElse("unknown") // Currently unable to test this, hence the unknown
+                        ));
+    }
+
 
     /**
      * Disallow renderers named "DefaultRenderer" or "JsonRenderer"

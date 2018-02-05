@@ -26,10 +26,12 @@ public class PolledBuildSystem implements BuildSystem {
 
     private static final Logger log = Logger.getLogger(PolledBuildSystem.class.getName());
 
-    private final Controller controller;
+    // The number of jobs to offer, on each poll, for zones that have limited capacity
+    private static final int maxCapacityConstrainedJobsToOffer = 2;
 
+    private final Controller controller;
     private final CuratorDb curator;
-    
+
     public PolledBuildSystem(Controller controller, CuratorDb curator) {
         this.controller = controller;
         this.curator = curator;
@@ -75,6 +77,7 @@ public class PolledBuildSystem implements BuildSystem {
     }
     
     private List<BuildJob> getJobs(boolean removeFromQueue) {
+        int capacityConstrainedJobsOffered = 0;
         try (Lock lock = curator.lockJobQueues()) {
             List<BuildJob> jobsToRun = new ArrayList<>();
             for (JobType jobType : JobType.values()) {
@@ -84,14 +87,17 @@ public class PolledBuildSystem implements BuildSystem {
 
                     Optional<Long> projectId = projectId(application);
                     if (projectId.isPresent()) {
-                        jobsToRun.add(new BuildJob(projectId.get(), jobType.id()));
+                        jobsToRun.add(new BuildJob(projectId.get(), jobType.jobName()));
                     } else {
-                        log.warning("Not queuing " + jobType.id() + " for " + application.toShortString() +
+                        log.warning("Not queuing " + jobType.jobName() + " for " + application.toShortString() +
                                     " because project ID is missing");
                     }
 
-                    // Return only one job at a time for capacity constrained queues
-                    if (removeFromQueue && isCapacityConstrained(jobType)) break;
+                    // Return a limited number of jobs at a time for capacity constrained zones
+                    if (removeFromQueue && isCapacityConstrained(jobType) &&
+                        ++capacityConstrainedJobsOffered >= maxCapacityConstrainedJobsToOffer) {
+                        break;
+                    }
                 }
                 if (removeFromQueue)
                     curator.writeJobQueue(jobType, queue);

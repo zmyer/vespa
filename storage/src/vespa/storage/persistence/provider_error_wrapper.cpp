@@ -49,15 +49,15 @@ ProviderErrorWrapper::getPartitionStates() const
 }
 
 spi::BucketIdListResult
-ProviderErrorWrapper::listBuckets(spi::PartitionId partitionId) const
+ProviderErrorWrapper::listBuckets(BucketSpace bucketSpace, spi::PartitionId partitionId) const
 {
-    return checkResult(_impl.listBuckets(partitionId));
+    return checkResult(_impl.listBuckets(bucketSpace, partitionId));
 }
 
 spi::Result
-ProviderErrorWrapper::setClusterState(const spi::ClusterState& state)
+ProviderErrorWrapper::setClusterState(BucketSpace bucketSpace, const spi::ClusterState& state)
 {
-    return checkResult(_impl.setClusterState(state));
+    return checkResult(_impl.setClusterState(bucketSpace, state));
 }
 
 spi::Result
@@ -164,9 +164,9 @@ ProviderErrorWrapper::deleteBucket(const spi::Bucket& bucket,
 }
 
 spi::BucketIdListResult
-ProviderErrorWrapper::getModifiedBuckets() const
+ProviderErrorWrapper::getModifiedBuckets(BucketSpace bucketSpace) const
 {
-    return checkResult(_impl.getModifiedBuckets());
+    return checkResult(_impl.getModifiedBuckets(bucketSpace));
 }
 
 spi::Result

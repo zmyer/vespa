@@ -2,19 +2,19 @@
 package com.yahoo.prelude.fastsearch;
 
 import com.yahoo.slime.BinaryFormat;
+import com.yahoo.data.access.Inspector;
 import com.yahoo.slime.Slime;
 import com.yahoo.data.access.slime.SlimeAdapter;
-import com.yahoo.vespa.config.search.SummaryConfig;
 import com.yahoo.prelude.ConfigurationException;
 import com.yahoo.container.search.LegacyEmulationConfig;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
-import java.util.Set;
 import java.util.logging.Logger;
+
+import static com.yahoo.data.access.Type.OBJECT;
 
 /**
  * A set of docsum definitions
@@ -27,7 +27,6 @@ public final class DocsumDefinitionSet {
     public static final int SLIME_MAGIC_ID = 0x55555555;
     private final static Logger log = Logger.getLogger(DocsumDefinitionSet.class.getName());
 
-    private final HashMap<Long, DocsumDefinition> definitions = new HashMap<>();
     private final HashMap<String, DocsumDefinition> definitionsByName = new HashMap<>();
     private final LegacyEmulationConfig emulationConfig;
 
@@ -39,14 +38,6 @@ public final class DocsumDefinitionSet {
     public DocsumDefinitionSet(DocumentdbInfoConfig.Documentdb config, LegacyEmulationConfig emulConfig) {
         this.emulationConfig = emulConfig;
         configure(config);
-    }
-
-    /** Returns a docsum definition by id
-     * @param id document summary class id
-     * @return a DocsumDefinition for the id, if found.
-     */
-    public final DocsumDefinition getDocsumDefinition(long id) {
-        return definitions.get(new Long(id));
     }
 
     /**
@@ -67,33 +58,24 @@ public final class DocsumDefinitionSet {
      * @param summaryClass the requested summary class
      * @param data docsum data from backend
      * @param hit the Hit corresponding to this document summary
+     * @return Error message or null on success.
      * @throws ConfigurationException if the summary class of this hit is missing
      */
-    public final void lazyDecode(String summaryClass, byte[] data, FastHit hit) {
+    public final String lazyDecode(String summaryClass, byte[] data, FastHit hit) {
         ByteBuffer buffer = ByteBuffer.wrap(data);
         buffer.order(ByteOrder.LITTLE_ENDIAN);
         long docsumClassId = buffer.getInt();
         if (docsumClassId != SLIME_MAGIC_ID) {
-            log.warning("Only expecting SchemaLess docsums");
-            // TODO: Not used, remove   - bratseth 2017-01-016
-            DocsumDefinition docsumDefinition = lookupDocsum(docsumClassId);
-            Docsum docsum = new Docsum(docsumDefinition, data);
-            hit.addSummary(docsum);
-        } else {
-            DocsumDefinition docsumDefinition = lookupDocsum(summaryClass);
-            Slime value = BinaryFormat.decode(buffer.array(), buffer.arrayOffset()+buffer.position(), buffer.remaining());
-            hit.addSummary(docsumDefinition, new SlimeAdapter(value.get()));
+            throw new IllegalArgumentException("Only expecting SchemaLess docsums - summary class:" + summaryClass + " hit:" + hit);
         }
-    }
-
-    private DocsumDefinition lookupDocsum(long docsumClassId) {
-        DocsumDefinition docsumDefinition = getDocsumDefinition(docsumClassId);
-        if (docsumDefinition == null) {
-            throw new ConfigurationException("Received hit with summary id " + docsumClassId +
-                    ", but this summary class is not in current summary config (" + toString() + ")" +
-                    " (that is, the system is in an inconsistent state)");
+        DocsumDefinition docsumDefinition = lookupDocsum(summaryClass);
+        Slime value = BinaryFormat.decode(buffer.array(), buffer.arrayOffset()+buffer.position(), buffer.remaining());
+        Inspector docsum = new SlimeAdapter(value.get());
+        if (docsum.type() != OBJECT) {
+            return "Hit " + hit + " failed: " + docsum.asString();
         }
-        return docsumDefinition;
+        hit.addSummary(docsumDefinition, docsum);
+        return null;
     }
 
     private DocsumDefinition lookupDocsum(String summaryClass) {
@@ -111,32 +93,26 @@ public final class DocsumDefinitionSet {
 
     public String toString() {
         StringBuilder sb = new StringBuilder();
-        Set<Map.Entry<Long, DocsumDefinition>> entrySet = definitions.entrySet();
-        boolean first = true;
-        for (Iterator<Map.Entry<Long, DocsumDefinition>> itr = entrySet.iterator(); itr.hasNext(); ) {
-            if (!first) {
+        for (Map.Entry<String, DocsumDefinition> e : definitionsByName.entrySet() ) {
+            if (sb.length() != 0) {
                 sb.append(",");
-            } else {
-                first = false;
             }
-            Map.Entry<Long, DocsumDefinition> entry = itr.next();
-            sb.append("[").append(entry.getKey()).append(",").append(entry.getValue().getName()).append("]");
+            sb.append("[").append(e.getKey()).append(",").append(e.getValue().getName()).append("]");
         }
         return sb.toString();
     }
 
     public int size() {
-        return definitions.size();
+        return definitionsByName.size();
     }
 
     private void configure(DocumentdbInfoConfig.Documentdb config) {
         for (int i = 0; i < config.summaryclass().size(); ++i) {
             DocumentdbInfoConfig.Documentdb.Summaryclass sc = config.summaryclass(i);
             DocsumDefinition docSumDef = new DocsumDefinition(sc, emulationConfig);
-            definitions.put((long) sc.id(), docSumDef);
             definitionsByName.put(sc.name(), docSumDef);
         }
-        if (definitions.size() == 0) {
+        if (definitionsByName.size() == 0) {
             log.warning("No summary classes found in DocumentdbInfoConfig.Documentdb");
         }
     }

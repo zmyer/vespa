@@ -2,7 +2,6 @@
 package com.yahoo.config.model.application.provider;
 
 import com.yahoo.config.application.TestBase;
-import com.yahoo.config.application.api.RuleConfigDeriver;
 import com.yahoo.config.application.api.ApplicationPackage;
 import com.yahoo.config.provision.Environment;
 import com.yahoo.config.provision.RegionName;
@@ -16,6 +15,7 @@ import org.xml.sax.SAXException;
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.transform.TransformerException;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
 
@@ -42,12 +42,7 @@ public class FilesApplicationPackageTest {
         FilesApplicationPackage app = FilesApplicationPackage.fromFile(appDir);
 
         ApplicationPackage processed = app.preprocess(new Zone(Environment.dev, RegionName.defaultName()),
-                new RuleConfigDeriver() {
-                    @Override
-                    public void derive(String ruleBaseDir, String outputDir) throws Exception {
-                    }
-                },
-                new BaseDeployLogger());
+                                                      new BaseDeployLogger());
         assertTrue(new File(appDir, ".preprocessed").exists());
         String expectedServices = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?><services xmlns:deploy=\"vespa\" xmlns:preprocess=\"properties\" version=\"1.0\">\n" +
                 "    <admin version=\"2.0\">\n" +
@@ -81,7 +76,7 @@ public class FilesApplicationPackageTest {
     }
 
     @Test
-    public void testDeploymentXmlNotAvailable() throws IOException, TransformerException, ParserConfigurationException, SAXException {
+    public void testDeploymentXmlNotAvailable()  {
         File appDir = new File("src/test/resources/multienvapp");
         assertFalse(new File(appDir, "deployment.xml").exists());
         FilesApplicationPackage app = FilesApplicationPackage.fromFile(appDir);
@@ -89,7 +84,7 @@ public class FilesApplicationPackageTest {
     }
 
     @Test
-    public void testDeploymentXml() throws IOException, TransformerException, ParserConfigurationException, SAXException {
+    public void testDeploymentXml() throws IOException {
         File appDir = new File("src/test/resources/app-with-deployment");
         final File deployment = new File(appDir, "deployment.xml");
         assertTrue(deployment.exists());

@@ -40,7 +40,7 @@ import java.util.logging.Logger;
 public class NodeRepositoryProvisioner implements Provisioner {
 
     private static Logger log = Logger.getLogger(NodeRepositoryProvisioner.class.getName());
-    private static final int SPARE_CAPACITY_PROD = 2;
+    private static final int SPARE_CAPACITY_PROD = 0;
     private static final int SPARE_CAPACITY_NONPROD = 0;
 
     private final NodeRepository nodeRepository;
@@ -50,9 +50,13 @@ public class NodeRepositoryProvisioner implements Provisioner {
     private final Activator activator;
     private final BiConsumer<List<Node>, String> debugRecorder;
 
+    int getSpareCapacityProd() {
+        return SPARE_CAPACITY_PROD;
+    }
+
     @Inject
     public NodeRepositoryProvisioner(NodeRepository nodeRepository, NodeFlavors flavors, Zone zone) {
-        this(nodeRepository, flavors, zone, Clock.systemUTC(), (x,y) -> {});
+        this(nodeRepository, flavors, zone, Clock.systemUTC(), (x, y) -> {});
     }
 
     public NodeRepositoryProvisioner(NodeRepository nodeRepository, NodeFlavors flavors, Zone zone, Clock clock, BiConsumer<List<Node>, String> debugRecorder) {

@@ -7,6 +7,7 @@
     <groupId>com.yahoo.vespa</groupId>
     <artifactId>parent</artifactId>
     <version>6-SNAPSHOT</version>
+    <relativePath>../parent/pom.xml</relativePath>
   </parent>
   <artifactId>config-proxy</artifactId>
   <packaging>jar</packaging>
@@ -56,6 +57,11 @@
       <groupId>org.hamcrest</groupId>
       <artifactId>hamcrest-core</artifactId>
       <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.yahoo.vespa</groupId>
+      <artifactId>filedistribution</artifactId>
+      <version>${project.version}</version>
     </dependency>
   </dependencies>
   <build>

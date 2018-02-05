@@ -47,10 +47,12 @@
 #include <vespa/storageframework/generic/status/htmlstatusreporter.h>
 #include <vespa/storageframework/generic/clock/timer.h>
 #include <vespa/vespalib/stllike/hash_map.h>
-#include <vespa/vespalib/util/sync.h>
 #include <vespa/vdslib/state/nodestate.h>
 #include <vespa/config/subscription/configuri.h>
 #include <list>
+#include <unordered_map>
+#include <mutex>
+#include <condition_variable>
 
 namespace storage {
 
@@ -77,9 +79,8 @@ class StorageBucketDBInitializer : public StorageLink,
         DoneInitializeHandler& _doneInitializeHandler;
         ServiceLayerComponent _component;
         const spi::PartitionStateList& _partitions;
-        StorBucketDatabase& _bucketDatabase;
+        const ContentBucketSpaceRepo& _bucketSpaceRepo;
         uint32_t _nodeIndex;
-        lib::Distribution& _distribution;
         lib::NodeState _nodeState; // Disk info for ideal state calculations
         framework::Thread::UP _thread;
 
@@ -87,6 +88,8 @@ class StorageBucketDBInitializer : public StorageLink,
                DoneInitializeHandler& doneInitializeHandler,
                ServiceLayerComponentRegister&,
                const Config&);
+
+        StorBucketDatabase &getBucketDatabase(document::BucketSpace bucketSpace) const;
     };
     struct Metrics : public metrics::MetricSet {
         metrics::LongCountMetric _wrongDisk;
@@ -118,20 +121,26 @@ class StorageBucketDBInitializer : public StorageLink,
             // This lock is held while the worker thread is working, such that
             // status retrieval can lock it. Listing part only grabs it when
             // needed to supporting listing in multiple threads
-        vespalib::Monitor _workerMonitor;
+        mutable std::mutex       _workerLock;
+        std::condition_variable  _workerCond;
             // This lock protects the reply list.
-        vespalib::Monitor _replyLock;
+        std::mutex               _replyLock;
 
         GlobalState();
         ~GlobalState();
     };
 
+public:
+    using BucketSpaceReadState = std::unordered_map<document::BucketSpace,
+            std::unique_ptr<BucketReadState>, document::BucketSpace::hash>;
+    using ReadState = std::vector<std::unique_ptr<BucketSpaceReadState>>;
 
+private:
     Config _config;
     System _system;
     Metrics _metrics;
     GlobalState _state;
-    std::vector<std::unique_ptr<BucketReadState>> _readState;
+    ReadState _readState;
 
 public:
     StorageBucketDBInitializer(const config::ConfigUri&,
@@ -179,14 +188,15 @@ public:
     bool handleBadLocation(const document::BucketId&,
                            std::vector<uint32_t>& path);
     /** Register a bucket in the bucket database. */
-    void registerBucket(const document::BucketId&,
+    void registerBucket(const document::Bucket &bucket,
+                        const lib::Distribution &distribution,
                         spi::PartitionId,
                         api::BucketInfo bucketInfo);
     /**
      * Sends more read bucket info to a given disk. Lock must already be taken.
      * Will be released by function prior to sending messages down.
      */
-    void sendReadBucketInfo(spi::PartitionId);
+    void sendReadBucketInfo(spi::PartitionId, document::BucketSpace bucketSpace);
     /** Check whether initialization is complete. Should hold lock to call it.*/
     void checkIfDone();
 

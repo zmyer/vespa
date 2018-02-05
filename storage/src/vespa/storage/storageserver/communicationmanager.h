@@ -11,7 +11,6 @@
 #pragma once
 
 #include "communicationmanagermetrics.h"
-#include "messageallocationtypes.h"
 #include "documentapiconverter.h"
 #include <vespa/storage/common/storagelink.h>
 #include <vespa/storage/common/storagecomponent.h>
@@ -27,6 +26,8 @@
 #include <map>
 #include <queue>
 #include <atomic>
+#include <mutex>
+#include <vespa/config-bucketspaces.h>
 
 namespace mbus {
     class RPCMessageBus;
@@ -35,55 +36,22 @@ namespace mbus {
 }
 namespace storage {
 
+class BucketResolver;
 class VisitorMbusSession;
 class Visitor;
 class VisitorThread;
 class FNetListener;
 class RPCRequestWrapper;
 
-class PriorityQueue {
+class Queue {
 private:
-    struct Key {
-        uint8_t priority {255};
-        uint64_t seqNum {0};
-
-        Key(uint8_t pri, uint64_t seq)
-            : priority(pri), seqNum(seq)
-        {
-        }
-    };
-    using ValueType = std::pair<Key, api::StorageMessage::SP>;
-
-    struct PriorityThenFifoCmp {
-        bool operator()(const ValueType& lhs,
-                        const ValueType& rhs) const noexcept
-        {
-            // priority_queue has largest element on top, so reverse order
-            // since our semantics have 0 as the highest priority.
-            if (lhs.first.priority != rhs.first.priority) {
-                return (lhs.first.priority > rhs.first.priority);
-            }
-            return (lhs.first.seqNum > rhs.first.seqNum);
-        }
-    };
-
-    using QueueType = std::priority_queue<
-            ValueType,
-            std::vector<ValueType>,
-            PriorityThenFifoCmp>;
-
-    // Sneakily chosen priority such that effectively only RPC commands are
-    // allowed in front of replies. Replies must have the same effective
-    // priority or they will get reordered and all hell breaks loose.
-    static constexpr uint8_t FIXED_REPLY_PRIORITY = 1;
-
+    using QueueType = std::queue<std::shared_ptr<api::StorageMessage>>;
     QueueType _queue;
     vespalib::Monitor _queueMonitor;
-    uint64_t _msgCounter;
 
 public:
-    PriorityQueue();
-    virtual ~PriorityQueue();
+    Queue();
+    ~Queue();
 
     /**
      * Returns the next event from the event queue
@@ -95,17 +63,14 @@ public:
     bool getNext(std::shared_ptr<api::StorageMessage>& msg, int timeout);
 
     /**
-     * If `msg` is a StorageCommand, enqueues it using the priority stored in
-     * the command. If it's a reply, enqueues it using a fixed but very high
-     * priority that ensure replies are processed before commands but also
-     * ensures that replies are FIFO-ordered relative to each other.
+     * Enqueue msg in FIFO order.
      */
-    void enqueue(const std::shared_ptr<api::StorageMessage>& msg);
+    void enqueue(std::shared_ptr<api::StorageMessage> msg);
 
     /** Signal queue monitor. */
     void signal();
 
-    int size();
+    size_t size() const;
 };
 
 class StorageTransportContext : public api::TransportContext {
@@ -135,11 +100,13 @@ private:
     CommunicationManagerMetrics _metrics;
 
     std::unique_ptr<FNetListener> _listener;
-    PriorityQueue _eventQueue;
+    Queue _eventQueue;
     // XXX: Should perhaps use a configsubscriber and poll from StorageComponent ?
     std::unique_ptr<config::ConfigFetcher> _configFetcher;
-    typedef std::vector< std::pair<framework::SecondTime, mbus::IProtocol::SP> > Protocols;
-    Protocols _earlierGenerations;
+    using EarlierProtocol = std::pair<framework::SecondTime, mbus::IProtocol::SP>;
+    using EarlierProtocols = std::vector<EarlierProtocol>;
+    std::mutex       _earlierGenerationsLock;
+    EarlierProtocols _earlierGenerations;
 
     void onOpen() override;
     void onClose() override;
@@ -147,10 +114,13 @@ private:
     void process(const std::shared_ptr<api::StorageMessage>& msg);
 
     using CommunicationManagerConfig= vespa::config::content::core::StorCommunicationmanagerConfig;
+    using BucketspacesConfig = vespa::config::content::core::BucketspacesConfig;
 
     void configureMessageBusLimits(const CommunicationManagerConfig& cfg);
     void configure(std::unique_ptr<CommunicationManagerConfig> config) override;
     void receiveStorageReply(const std::shared_ptr<api::StorageReply>&);
+    void fail_with_unresolvable_bucket_space(std::unique_ptr<documentapi::DocumentMessage> msg,
+                                             const vespalib::string& error_message);
 
     void serializeNodeState(const api::GetNodeStateReply& gns, std::ostream& os, bool includeDescription,
                             bool includeDiskDescription, bool useOldFormat) const;
@@ -169,10 +139,7 @@ private:
     std::atomic<bool> _closed;
     DocumentApiConverter _docApiConverter;
     framework::Thread::UP _thread;
-    MessageAllocationTypes _messageAllocTypes;
 
-    const framework::MemoryAllocationType&
-    getAllocationType(api::StorageMessage& msg) const;
     void updateMetrics(const MetricLockGuard &) override;
 
     // Test needs access to configure() for live reconfig testing.
@@ -183,7 +150,7 @@ public:
                          const config::ConfigUri & configUri);
     ~CommunicationManager();
 
-    void enqueue(const std::shared_ptr<api::StorageMessage> & msg);
+    void enqueue(std::shared_ptr<api::StorageMessage> msg);
     mbus::RPCMessageBus& getMessageBus() { assert(_mbus.get()); return *_mbus; }
     const PriorityConverter& getPriorityConverter() const { return _docApiConverter.getPriorityConverter(); }
 
@@ -207,6 +174,9 @@ public:
 
     void handleReply(std::unique_ptr<mbus::Reply> msg) override;
     void updateMessagebusProtocol(const document::DocumentTypeRepo::SP &repo);
+    void updateBucketSpacesConfig(const BucketspacesConfig&);
+
+    const CommunicationManagerMetrics& metrics() const noexcept { return _metrics; }
 };
 
 } // storage

@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.net.URI;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 
@@ -35,7 +36,45 @@ public abstract class LoggingRequestHandler extends ThreadedHttpRequestHandler {
         this(executor, accessLog, null);
     }
 
+    public static class Context {
+        final Executor executor;
+        final AccessLog accessLog;
+        final Metric metric;
+        @Inject
+        public Context(Executor executor, AccessLog accessLog, Metric metric) {
+            this.executor = executor;
+            this.accessLog = accessLog;
+            this.metric = metric;
+        }
+        public Context(Context other) {
+            this.executor = other.executor;
+            this.accessLog = other.accessLog;
+            this.metric = other.metric;
+        }
+        public Executor getExecutor() { return executor; }
+        public AccessLog getAccessLog() { return accessLog; }
+        public Metric getMetric() { return metric; }
+    }
+    public static Context testOnlyContext() {
+        return new Context(new Executor() {
+                @Override
+                public void execute(Runnable command) {
+                    command.run();
+                }
+            },
+            AccessLog.voidAccessLog(),
+            null);
+    }
+
     @Inject
+    public LoggingRequestHandler(Context ctx) {
+        this(ctx.executor, ctx.accessLog, ctx.metric);
+    }
+
+    public LoggingRequestHandler(Context ctx, boolean allowAsyncResponse) {
+        this(ctx.executor, ctx.accessLog, ctx.metric, allowAsyncResponse);
+    }
+
     public LoggingRequestHandler(Executor executor, AccessLog accessLog, Metric metric) {
         this(executor, accessLog, metric, false);
     }
@@ -46,16 +85,18 @@ public abstract class LoggingRequestHandler extends ThreadedHttpRequestHandler {
     }
 
     @Override
-    protected LoggingCompletionHandler createLoggingCompletionHandler(
-            long startTime, long renderStartTime, HttpResponse response,
-            HttpRequest httpRequest, ContentChannelOutputStream rendererWiring) {
+    protected LoggingCompletionHandler createLoggingCompletionHandler(long startTime,
+                                                                      long renderStartTime,
+                                                                      HttpResponse response,
+                                                                      HttpRequest httpRequest,
+                                                                      ContentChannelOutputStream rendererWiring) {
         return new LoggingHandler(startTime, renderStartTime, httpRequest, response, rendererWiring);
     }
 
     private static String getClientIP(com.yahoo.jdisc.http.HttpRequest httpRequest) {
         SocketAddress clientAddress = httpRequest.getRemoteAddress();
-        if (clientAddress == null)
-            return "0.0.0.0";
+        if (clientAddress == null) return "0.0.0.0";
+
         return clientAddress.toString();
     }
 
@@ -67,24 +108,21 @@ public abstract class LoggingRequestHandler extends ThreadedHttpRequestHandler {
         }
     }
 
-    private static String remoteHostAddress(
-            com.yahoo.jdisc.http.HttpRequest httpRequest) {
+    private static String remoteHostAddress(com.yahoo.jdisc.http.HttpRequest httpRequest) {
         SocketAddress remoteAddress = httpRequest.getRemoteAddress();
-        if (remoteAddress == null)
-            return "0.0.0.0";
+        if (remoteAddress == null) return "0.0.0.0";
+
         if (remoteAddress instanceof InetSocketAddress) {
-            return ((InetSocketAddress) remoteAddress).getAddress()
-                    .getHostAddress();
+            return ((InetSocketAddress) remoteAddress).getAddress().getHostAddress();
         } else {
-            throw new RuntimeException(
-                    "Expected remote address of type InetSocketAddress, got "
-                            + remoteAddress.getClass().getName());
+            throw new RuntimeException("Expected remote address of type InetSocketAddress, got " +
+                                       remoteAddress.getClass().getName());
         }
     }
 
     private void logTimes(long startTime, String sourceIP,
-            long renderStartTime, long commitStartTime, long endTime,
-            String req, String normalizedQuery, Timing t) {
+                          long renderStartTime, long commitStartTime, long endTime,
+                          String req, String normalizedQuery, Timing t) {
 
         // note: intentionally only taking time since request was received
         long totalTime = endTime - startTime;
@@ -102,33 +140,33 @@ public abstract class LoggingRequestHandler extends ThreadedHttpRequestHandler {
             return;
         }
 
-        StringBuilder msgbuf = new StringBuilder();
-        msgbuf.append(normalizedQuery);
-        msgbuf.append(" from ").append(sourceIP).append(". ");
+        StringBuilder b = new StringBuilder();
+        b.append(normalizedQuery);
+        b.append(" from ").append(sourceIP).append(". ");
 
         if (requestOverhead > 0) {
-            msgbuf.append("Time from HTTP connection open to request reception ");
-            msgbuf.append(requestOverhead).append(" ms. ");
+            b.append("Time from HTTP connection open to request reception ");
+            b.append(requestOverhead).append(" ms. ");
         }
         if (summaryStartTime != 0) {
-            msgbuf.append("Request time: ");
-            msgbuf.append(summaryStartTime - startTime).append(" ms. ");
-            msgbuf.append("Summary fetch time: ");
-            msgbuf.append(renderStartTime - summaryStartTime).append(" ms. ");
+            b.append("Request time: ");
+            b.append(summaryStartTime - startTime).append(" ms. ");
+            b.append("Summary fetch time: ");
+            b.append(renderStartTime - summaryStartTime).append(" ms. ");
         } else {
             long spentSearching = renderStartTime - startTime;
-            msgbuf.append("Processing time: ").append(spentSearching).append(" ms. ");
+            b.append("Processing time: ").append(spentSearching).append(" ms. ");
         }
 
-        msgbuf.append("Result rendering/transfer: ");
-        msgbuf.append(commitStartTime - renderStartTime).append(" ms. ");
-        msgbuf.append("End transaction: ");
-        msgbuf.append(endTime - commitStartTime).append(" ms. ");
-        msgbuf.append("Total: ").append(totalTime).append(" ms. ");
-        msgbuf.append("Timeout: ").append(timeoutInterval).append(" ms. ");
-        msgbuf.append("Request string: ").append(req);
+        b.append("Result rendering/transfer: ");
+        b.append(commitStartTime - renderStartTime).append(" ms. ");
+        b.append("End transaction: ");
+        b.append(endTime - commitStartTime).append(" ms. ");
+        b.append("Total: ").append(totalTime).append(" ms. ");
+        b.append("Timeout: ").append(timeoutInterval).append(" ms. ");
+        b.append("Request string: ").append(req);
 
-        log.log(LogLevel.WARNING, "Slow execution. " + msgbuf);
+        log.log(LogLevel.WARNING, "Slow execution. " + b);
     }
 
     private static class NullResponse extends ExtendedResponse {
@@ -137,10 +175,11 @@ public abstract class LoggingRequestHandler extends ThreadedHttpRequestHandler {
         }
 
         @Override
-        public void render(OutputStream output, ContentChannel networkChannel,
-                CompletionHandler handler) throws IOException {
+        public void render(OutputStream output, ContentChannel networkChannel, CompletionHandler handler)
+                throws IOException {
             // NOP
         }
+
     }
 
     private class LoggingHandler implements LoggingCompletionHandler {
@@ -153,9 +192,8 @@ public abstract class LoggingRequestHandler extends ThreadedHttpRequestHandler {
         private final ContentChannelOutputStream rendererWiring;
         private final ExtendedResponse extendedResponse;
 
-        LoggingHandler(long startTime, long renderStartTime,
-                HttpRequest httpRequest, HttpResponse httpResponse,
-                ContentChannelOutputStream rendererWiring) {
+        LoggingHandler(long startTime, long renderStartTime, HttpRequest httpRequest, HttpResponse httpResponse,
+                       ContentChannelOutputStream rendererWiring) {
             this.startTime = startTime;
             this.renderStartTime = renderStartTime;
             this.commitStartTime = renderStartTime;
@@ -195,20 +233,19 @@ public abstract class LoggingRequestHandler extends ThreadedHttpRequestHandler {
         }
 
         private void writeToLogs(long endTime) {
-            final com.yahoo.jdisc.http.HttpRequest jdiscRequest = httpRequest.getJDiscRequest();
+            com.yahoo.jdisc.http.HttpRequest jdiscRequest = httpRequest.getJDiscRequest();
 
-            logTimes(
-                    startTime,
-                    getClientIP(jdiscRequest),
-                    renderStartTime,
-                    commitStartTime,
-                    endTime,
-                    jdiscRequest.getUri().toString(),
-                    extendedResponse.getParsedQuery(),
-                    extendedResponse.getTiming());
+            logTimes(startTime,
+                     getClientIP(jdiscRequest),
+                     renderStartTime,
+                     commitStartTime,
+                     endTime,
+                     jdiscRequest.getUri().toString(),
+                     extendedResponse.getParsedQuery(),
+                     extendedResponse.getTiming());
 
-            final Optional<AccessLogEntry> jdiscRequestAccessLogEntry
-                    = AccessLoggingRequestHandler.getAccessLogEntry(jdiscRequest);
+            Optional<AccessLogEntry> jdiscRequestAccessLogEntry =
+                    AccessLoggingRequestHandler.getAccessLogEntry(jdiscRequest);
 
             if (jdiscRequestAccessLogEntry.isPresent()) {
                 // This means we are running with Jetty, not Netty.
@@ -237,18 +274,17 @@ public abstract class LoggingRequestHandler extends ThreadedHttpRequestHandler {
         }
     }
 
-    private void populateAccessLogEntryNotCreatedByHttpServer(
-            final AccessLogEntry logEntry,
-            final com.yahoo.jdisc.http.HttpRequest httpRequest,
-            final Timing timing,
-            final String fullRequest,
-            final long commitStartTime,
-            final long startTime,
-            final long written,
-            final int status) {
+    private void populateAccessLogEntryNotCreatedByHttpServer(AccessLogEntry logEntry,
+                                                              com.yahoo.jdisc.http.HttpRequest httpRequest,
+                                                              Timing timing,
+                                                              String fullRequest,
+                                                              long commitStartTime,
+                                                              long startTime,
+                                                              long written,
+                                                              int status) {
         try {
-            final InetSocketAddress remoteAddress = AccessLogUtil.getRemoteAddress(httpRequest);
-            final long evalStartTime = getEvalStart(timing, startTime);
+            InetSocketAddress remoteAddress = AccessLogUtil.getRemoteAddress(httpRequest);
+            long evalStartTime = getEvalStart(timing, startTime);
             logEntry.setIpV4Address(remoteHostAddress(httpRequest));
             logEntry.setTimeStamp(evalStartTime);
             logEntry.setDurationBetweenRequestResponse(commitStartTime - evalStartTime);
@@ -258,14 +294,22 @@ public abstract class LoggingRequestHandler extends ThreadedHttpRequestHandler {
                 logEntry.setRemoteAddress(remoteAddress);
                 logEntry.setRemotePort(remoteAddress.getPort());
             }
-            logEntry.setURI(AccessLogUtil.getUri(httpRequest));
+            URI uri = AccessLogUtil.getUri(httpRequest);
+            setDeprecatedUri(logEntry, uri);
+            logEntry.setRawPath(uri.getRawPath());
+            logEntry.setRawQuery(uri.getRawQuery());
             logEntry.setUserAgent(AccessLogUtil.getUserAgentHeader(httpRequest));
             logEntry.setReferer(AccessLogUtil.getReferrerHeader(httpRequest));
             logEntry.setHttpMethod(AccessLogUtil.getHttpMethod(httpRequest));
             logEntry.setHttpVersion(AccessLogUtil.getHttpVersion(httpRequest));
         } catch (Exception e) {
-            log.log(LogLevel.WARNING, "Could not populate the access log ["
-                    + fullRequest + "]", e);
+            log.log(LogLevel.WARNING, "Could not populate the access log [" + fullRequest + "]", e);
         }
     }
+
+    @SuppressWarnings("deprecation")
+    private static void setDeprecatedUri(AccessLogEntry logEntry, URI uri) {
+        logEntry.setURI(uri);
+    }
+
 }

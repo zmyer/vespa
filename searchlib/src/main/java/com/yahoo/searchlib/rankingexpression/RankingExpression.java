@@ -2,18 +2,26 @@
 package com.yahoo.searchlib.rankingexpression;
 
 import com.yahoo.searchlib.rankingexpression.evaluation.Context;
-import com.yahoo.searchlib.rankingexpression.evaluation.DoubleValue;
 import com.yahoo.searchlib.rankingexpression.evaluation.Value;
 import com.yahoo.searchlib.rankingexpression.parser.ParseException;
 import com.yahoo.searchlib.rankingexpression.parser.RankingExpressionParser;
 import com.yahoo.searchlib.rankingexpression.parser.TokenMgrError;
-import com.yahoo.searchlib.rankingexpression.rule.ConstantNode;
 import com.yahoo.searchlib.rankingexpression.rule.ExpressionNode;
 import com.yahoo.searchlib.rankingexpression.rule.SerializationContext;
-import com.yahoo.searchlib.rankingexpression.rule.SetMembershipNode;
+import com.yahoo.tensor.TensorType;
+import com.yahoo.tensor.evaluation.TypeContext;
 
-import java.io.*;
-import java.util.*;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.Reader;
+import java.io.Serializable;
+import java.io.StringReader;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
 
 /**
  * <p>A ranking expression. Ranking expressions are used to calculate a rank score for a searched instance from a set of
@@ -92,13 +100,15 @@ public class RankingExpression implements Serializable {
     }
 
     /**
-     * Creates a ranking expression from a string
+     * Creates a new ranking expression by consuming from the reader
      *
-     * @param expression The reader that contains the string to parse.
+     * @param name the name of the ranking expression
+     * @param expression the expression to parse.
      * @throws ParseException if the string could not be parsed.
      */
-    public RankingExpression(String expression) throws ParseException {
+    public RankingExpression(String name, String expression) throws ParseException {
         try {
+            this.name = name;
             if (expression == null || expression.length() == 0) {
                 throw new IllegalArgumentException("Empty ranking expressions are not allowed");
             }
@@ -109,6 +119,16 @@ public class RankingExpression implements Serializable {
             p.initCause(e);
             throw p;
         }
+    }
+
+    /**
+     * Creates a ranking expression from a string
+     *
+     * @param expression The reader that contains the string to parse.
+     * @throws ParseException if the string could not be parsed.
+     */
+    public RankingExpression(String expression) throws ParseException {
+        this("", expression);
     }
 
     /**
@@ -247,6 +267,16 @@ public class RankingExpression implements Serializable {
     }
 
     /**
+     * Validates the type correctness of the given expression with the given context and
+     * returns the type this expression will produce from the given type context
+     *
+     * @throws IllegalArgumentException if this expression is not type correct in this context
+     */
+    public TensorType type(TypeContext context) {
+        return root.type(context);
+    }
+
+    /**
      * Returns the value of evaluating this expression over the given context.
      *
      * @param context The variable bindings to use for this evaluation.
@@ -255,6 +285,20 @@ public class RankingExpression implements Serializable {
      */
     public Value evaluate(Context context) {
         return root.evaluate(context);
+    }
+
+    /**
+     * Creates a ranking expression from a string
+     *
+     * @throws IllegalArgumentException if the string is not a valid ranking expression
+     */
+    public static RankingExpression from(String expression) {
+        try {
+            return new RankingExpression(expression);
+        }
+        catch (ParseException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
 }

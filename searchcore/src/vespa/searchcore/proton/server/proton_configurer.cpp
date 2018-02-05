@@ -7,12 +7,38 @@
 #include "i_document_db_config_owner.h"
 #include <vespa/vespalib/util/lambdatask.h>
 #include <vespa/vespalib/util/threadstackexecutorbase.h>
+#include <vespa/document/bucket/fixed_bucket_spaces.h>
+#include <vespa/config-bucketspaces.h>
+#include <vespa/vespalib/util/exceptions.h>
+#include <vespa/vespalib/stllike/asciistream.h>
 #include <future>
 
 using vespalib::makeLambdaTask;
 using vespa::config::search::core::ProtonConfig;
 
 namespace proton {
+
+namespace {
+
+document::BucketSpace
+getBucketSpace(const BootstrapConfig &bootstrapConfig, const DocTypeName &name)
+{
+    const auto &bucketspaces = *bootstrapConfig.getBucketspacesConfigSP();
+    if (bucketspaces.enableMultipleBucketSpaces) {
+        for (const auto &entry : bucketspaces.documenttype) {
+            if (entry.name == name.getName()) {
+                return document::FixedBucketSpaces::from_string(entry.bucketspace);
+            }
+        }
+        vespalib::asciistream ost;
+        ost << "Could not map from document type name '" << name.getName() << "' to bucket space name";
+        throw vespalib::IllegalStateException(ost.str(), VESPA_STRLOC);
+    }
+    return document::FixedBucketSpaces::default_space();
+}
+
+}
+
 
 ProtonConfigurer::ProtonConfigurer(vespalib::ThreadStackExecutorBase &executor,
                                    IProtonConfigurerOwner &owner)
@@ -90,7 +116,7 @@ ProtonConfigurer::skipConfig(const ProtonConfigSnapshot *configSnapshot, bool in
 {
     // called by proton executor thread
     std::lock_guard<std::mutex> guard(_mutex);
-    assert((_activeConfigSnapshot.get() == nullptr) == initialConfig);
+    assert(!_activeConfigSnapshot == initialConfig);
     if (_activeConfigSnapshot.get() == configSnapshot) {
         return true; // config snapshot already applied
     }
@@ -114,7 +140,8 @@ ProtonConfigurer::applyConfig(std::shared_ptr<ProtonConfigSnapshot> configSnapsh
     _owner.applyConfig(bootstrapConfig);
     for (const auto &ddbConfig : protonConfig.documentdb) {
         DocTypeName docTypeName(ddbConfig.inputdoctypename);
-        configureDocumentDB(*configSnapshot, docTypeName, ddbConfig.configid, initializeThreads);
+        document::BucketSpace bucketSpace = getBucketSpace(*bootstrapConfig, docTypeName);
+        configureDocumentDB(*configSnapshot, docTypeName, bucketSpace, ddbConfig.configid, initializeThreads);
     }
     pruneDocumentDBs(*configSnapshot);
     size_t gen = bootstrapConfig->getGeneration();
@@ -124,7 +151,11 @@ ProtonConfigurer::applyConfig(std::shared_ptr<ProtonConfigSnapshot> configSnapsh
 }
 
 void
-ProtonConfigurer::configureDocumentDB(const ProtonConfigSnapshot &configSnapshot, const DocTypeName &docTypeName, const vespalib::string &configId, const InitializeThreads &initializeThreads)
+ProtonConfigurer::configureDocumentDB(const ProtonConfigSnapshot &configSnapshot,
+                                      const DocTypeName &docTypeName,
+                                      document::BucketSpace bucketSpace,
+                                      const vespalib::string &configId,
+                                      const InitializeThreads &initializeThreads)
 {
     // called by proton executor thread
     const auto &bootstrapConfig = configSnapshot.getBootstrapConfig();
@@ -134,7 +165,7 @@ ProtonConfigurer::configureDocumentDB(const ProtonConfigSnapshot &configSnapshot
     const auto &documentDBConfig = cfgitr->second;
     auto dbitr(_documentDBs.find(docTypeName));
     if (dbitr == _documentDBs.end()) {
-        auto *newdb = _owner.addDocumentDB(docTypeName, configId, bootstrapConfig, documentDBConfig, initializeThreads);
+        auto *newdb = _owner.addDocumentDB(docTypeName, bucketSpace, configId, bootstrapConfig, documentDBConfig, initializeThreads);
         if (newdb != nullptr) {
             auto insres = _documentDBs.insert(std::make_pair(docTypeName, newdb));
             assert(insres.second);
@@ -173,10 +204,10 @@ ProtonConfigurer::applyInitialConfig(InitializeThreads initializeThreads)
 {
     // called by proton app main thread
     assert(!_executor.isCurrentThread());
-    std::promise<bool> promise;
-    std::future<bool> future = promise.get_future();
-    _executor.execute(makeLambdaTask([this, initializeThreads, &promise]() { applyConfig(getPendingConfigSnapshot(), initializeThreads, true); promise.set_value(true); }));
-    (void) future.get();
+    std::promise<void> promise;
+    auto future = promise.get_future();
+    _executor.execute(makeLambdaTask([this, initializeThreads, &promise]() { applyConfig(getPendingConfigSnapshot(), initializeThreads, true); promise.set_value(); }));
+    future.wait();
 }
 
 } // namespace proton

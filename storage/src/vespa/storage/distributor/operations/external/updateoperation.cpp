@@ -5,6 +5,7 @@
 #include <vespa/storageapi/message/bucket.h>
 #include <vespa/storageapi/message/persistence.h>
 #include <vespa/document/fieldvalue/document.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".distributor.callback.doc.update");
@@ -12,8 +13,10 @@ LOG_SETUP(".distributor.callback.doc.update");
 
 using namespace storage::distributor;
 using namespace storage;
+using document::BucketSpace;
 
 UpdateOperation::UpdateOperation(DistributorComponent& manager,
+                                 DistributorBucketSpace &bucketSpace,
                                  const std::shared_ptr<api::UpdateCommand> & msg,
                                  PersistenceOperationMetricSet& metric)
     : Operation(),
@@ -23,7 +26,8 @@ UpdateOperation::UpdateOperation(DistributorComponent& manager,
                msg->getTimestamp()),
       _tracker(_trackerInstance),
       _msg(msg),
-      _manager(manager)
+      _manager(manager),
+      _bucketSpace(bucketSpace)
 {
 }
 
@@ -68,7 +72,7 @@ UpdateOperation::onStart(DistributorMessageSender& sender)
                     _msg->getDocumentId()));
 
     std::vector<BucketDatabase::Entry> entries;
-    _manager.getBucketDatabase().getParents(bucketId, entries);
+    _bucketSpace.getBucketDatabase().getParents(bucketId, entries);
 
     if (entries.empty()) {
         _tracker.fail(sender,
@@ -90,7 +94,7 @@ UpdateOperation::onStart(DistributorMessageSender& sender)
 
         for (uint32_t i = 0; i < nodes.size(); i++) {
             std::shared_ptr<api::UpdateCommand> command(
-                    new api::UpdateCommand(entries[j].getBucketId(),
+                    new api::UpdateCommand(document::Bucket(_msg->getBucket().getBucketSpace(), entries[j].getBucketId()),
                             _msg->getUpdate(),
                             _msg->getTimestamp()));
             copyMessageSettings(*_msg, *command);

@@ -1,7 +1,8 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 #include "mergeoperation.h"
 #include <vespa/storage/distributor/idealstatemanager.h>
-#include <array>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
+#include <vespa/storage/distributor/pendingmessagetracker.h>
 
 #include <vespa/log/bufferedlogger.h>
 LOG_SETUP(".distributor.operation.idealstate.merge");
@@ -104,7 +105,7 @@ struct NodeIndexComparator
 void
 MergeOperation::onStart(DistributorMessageSender& sender)
 {
-    BucketDatabase::Entry entry = _manager->getDistributorComponent().getBucketDatabase().get(getBucketId());
+    BucketDatabase::Entry entry = _bucketSpace->getBucketDatabase().get(getBucketId());
     if (!entry.valid()) {
         LOGBP(debug, "Unable to merge nonexisting bucket %s", getBucketId().toString().c_str());
         _ok = false;
@@ -126,7 +127,7 @@ MergeOperation::onStart(DistributorMessageSender& sender)
     }
     _infoBefore = entry.getBucketInfo();
 
-    generateSortedNodeList(_manager->getDistributorComponent().getDistribution(),
+    generateSortedNodeList(_bucketSpace->getDistribution(),
                            clusterState,
                            getBucketId(),
                            _limiter,
@@ -138,7 +139,7 @@ MergeOperation::onStart(DistributorMessageSender& sender)
 
     if (_mnodes.size() > 1) {
         auto msg = std::make_shared<api::MergeBucketCommand>(
-                getBucketId(),
+                getBucket(),
                 _mnodes,
                 _manager->getDistributorComponent().getUniqueTimestamp(),
                 clusterState.getVersion());
@@ -228,7 +229,7 @@ MergeOperation::deleteSourceOnlyNodes(
         _removeOperation.reset(
                 new RemoveBucketOperation(
                         _manager->getDistributorComponent().getClusterName(),
-                        BucketAndNodes(getBucketId(), sourceOnlyNodes)));
+                        BucketAndNodes(getBucket(), sourceOnlyNodes)));
         // Must not send removes to source only copies if something has caused
         // pending load to the copy after the merge was sent!
         if (_removeOperation->isBlocked(sender.getPendingMessageTracker())) {
@@ -273,7 +274,7 @@ MergeOperation::onReceive(DistributorMessageSender& sender,
     _ok = result.success();
     if (_ok) {
         BucketDatabase::Entry entry(
-                _manager->getDistributorComponent().getBucketDatabase().get(getBucketId()));
+                _bucketSpace->getBucketDatabase().get(getBucketId()));
         if (!entry.valid()) {
             LOG(debug, "Bucket %s no longer exists after merge",
                 getBucketId().toString().c_str());

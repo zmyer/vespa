@@ -11,6 +11,7 @@ namespace document {
 
 class Bucket {
 public:
+    Bucket() noexcept;
     Bucket(const Bucket&) noexcept = default;
     Bucket& operator=(const Bucket&) noexcept = default;
     Bucket(BucketSpace bucketSpace, BucketId bucketId) noexcept : _bucketSpace(bucketSpace), _bucketId(bucketId) {}
@@ -44,5 +45,6 @@ private:
 };
 
 vespalib::asciistream& operator<<(vespalib::asciistream&, const Bucket&);
+std::ostream& operator<<(std::ostream&, const Bucket&);
 
 }

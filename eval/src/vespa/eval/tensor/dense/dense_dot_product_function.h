@@ -5,27 +5,21 @@
 #include <vespa/eval/eval/tensor_function.h>
 #include <vespa/vespalib/hwaccelrated/iaccelrated.h>
 
-namespace vespalib {
-namespace tensor {
+namespace vespalib::tensor {
 
 /**
  * Tensor function for a dot product between two 1-dimensional dense tensors.
  */
-class DenseDotProductFunction : public eval::TensorFunction
+class DenseDotProductFunction : public eval::tensor_function::Op2
 {
 private:
-    using InjectUP = std::unique_ptr<eval::tensor_function::Inject>;
-
-    size_t _lhsTensorId;
-    size_t _rhsTensorId;
     hwaccelrated::IAccelrated::UP _hwAccelerator;
 
 public:
-    DenseDotProductFunction(size_t lhsTensorId_, size_t rhsTensorId_);
-    size_t lhsTensorId() const { return _lhsTensorId; }
-    size_t rhsTensorId() const { return _rhsTensorId; }
-    virtual const eval::Value &eval(const Input &input, Stash &stash) const override;
+    DenseDotProductFunction(const eval::TensorFunction &lhs_in,
+                            const eval::TensorFunction &rhs_in);
+    eval::InterpretedFunction::Instruction compile_self(Stash &stash) const override;
+    static const eval::TensorFunction &optimize(const eval::TensorFunction &expr, Stash &stash);
 };
 
-} // namespace tensor
-} // namespace vespalib
+} // namespace vespalib::tensor

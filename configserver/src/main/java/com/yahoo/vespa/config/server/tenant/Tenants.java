@@ -11,7 +11,6 @@ import com.yahoo.log.LogLevel;
 import com.yahoo.path.Path;
 import com.yahoo.vespa.config.server.GlobalComponentRegistry;
 import com.yahoo.vespa.config.server.monitoring.MetricUpdater;
-import com.yahoo.vespa.config.server.monitoring.Metrics;
 import com.yahoo.vespa.curator.Curator;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent;
@@ -28,7 +27,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -42,7 +40,7 @@ import java.util.logging.Logger;
  * implemented support for it).
  *
  * This instance is called from two different threads, the http handler threads and the zookeeper watcher threads.
- * To create or delete a tenant, the handler calls {@link Tenants#writeTenantPath} and {@link Tenants#deleteTenant} methods.
+ * To create or delete a tenant, the handler calls {@link Tenants#addTenant} and {@link Tenants#deleteTenant} methods.
  * This will delete shared state from zookeeper, and return, so it does not mean a tenant is immediately deleted.
  *
  * Once a tenant is deleted from zookeeper, the zookeeper watcher thread will get notified on all configservers, and
@@ -73,17 +71,15 @@ public class Tenants implements ConnectionStateListener, PathChildrenCacheListen
 
 
     /**
-     * New instance from the tenants in the given component registry's ZooKeeper. Will set watch when reading them.
+     * New instance from the tenants in the given component registry's ZooKeeper data.
      * 
      * @param globalComponentRegistry a {@link com.yahoo.vespa.config.server.GlobalComponentRegistry}
-     * @throws Exception is creating the Tenants instance fails
      */
     @Inject
-    public Tenants(GlobalComponentRegistry globalComponentRegistry, Metrics metrics) throws Exception {
-        // Note: unit tests may want to use the constructor below to avoid setting watch by calling readTenants().
+    public Tenants(GlobalComponentRegistry globalComponentRegistry) {
         this.globalComponentRegistry = globalComponentRegistry;
         this.curator = globalComponentRegistry.getCurator();
-        metricUpdater = metrics.getOrCreateMetricUpdater(Collections.emptyMap());
+        metricUpdater = globalComponentRegistry.getMetrics().getOrCreateMetricUpdater(Collections.emptyMap());
         this.tenantListeners.add(globalComponentRegistry.getTenantListener());
         curator.framework().getConnectionStateListenable().addListener(this);
 
@@ -94,20 +90,22 @@ public class Tenants implements ConnectionStateListener, PathChildrenCacheListen
         this.directoryCache = curator.createDirectoryCache(tenantsPath.getAbsolute(), false, false, pathChildrenExecutor);
         directoryCache.start();
         directoryCache.addListener(this);
-        tenantsChanged(readTenants());
+        log.log(LogLevel.INFO, "Creating all tenants"); // TODO: Change to debug
+        createTenants();
         notifyTenantsLoaded();
+        log.log(LogLevel.INFO, "All tenants created"); // TODO: Change to debug
     }
 
     /**
-     * New instance containing the given tenants. This will not watch in ZooKeeper. 
+     * New instance containing the given tenants. Creates no system tenants and no Zookeeper watches. For testing only.
      * @param globalComponentRegistry a {@link com.yahoo.vespa.config.server.GlobalComponentRegistry} instance
-     * @param metrics a {@link com.yahoo.vespa.config.server.monitoring.Metrics} instance
      * @param tenants a collection of {@link Tenant}s
      */
-    public Tenants(GlobalComponentRegistry globalComponentRegistry, Metrics metrics, Collection<Tenant> tenants) {
+    // TODO: Get rid of the second argument and let callers use addTenant() instead
+    public Tenants(GlobalComponentRegistry globalComponentRegistry, Collection<Tenant> tenants) {
         this.globalComponentRegistry = globalComponentRegistry;
         this.curator = globalComponentRegistry.getCurator();
-        metricUpdater = metrics.getOrCreateMetricUpdater(Collections.<String, String>emptyMap());
+        metricUpdater = globalComponentRegistry.getMetrics().getOrCreateMetricUpdater(Collections.emptyMap());
         this.tenantListeners.add(globalComponentRegistry.getTenantListener());
         curator.create(tenantsPath);
         this.directoryCache = curator.createDirectoryCache(tenantsPath.getAbsolute(), false, false, pathChildrenExecutor);
@@ -122,18 +120,18 @@ public class Tenants implements ConnectionStateListener, PathChildrenCacheListen
 
     // Pre-condition: tenants path needs to exist in zk
     private LinkedHashMap<TenantName, Tenant> addTenants(Collection<Tenant> newTenants) {
-        LinkedHashMap<TenantName, Tenant> sessionTenants = new LinkedHashMap<>();
+        LinkedHashMap<TenantName, Tenant> tenants = new LinkedHashMap<>();
         for (Tenant t : newTenants) {
-            sessionTenants.put(t.getName(), t);
+            tenants.put(t.getName(), t);
         }
-        log.log(LogLevel.DEBUG, "Tenants at startup: " + sessionTenants);
-        metricUpdater.setTenants(tenants.size());
-        return sessionTenants;
+        log.log(LogLevel.DEBUG, "Tenants at startup: " + tenants);
+        metricUpdater.setTenants(this.tenants.size());
+        return tenants;
     }
     
-    public synchronized void addTenant(Tenant tenant) {
-        tenants.put(tenant.getName(), tenant);
-        metricUpdater.setTenants(tenants.size());
+    public synchronized void addTenant(TenantName tenantName) {
+        writeTenantPath(tenantName);
+        createTenant(tenantName);
     }
 
     /**
@@ -141,7 +139,7 @@ public class Tenants implements ConnectionStateListener, PathChildrenCacheListen
      *
      * @return a set of tenant names
      */
-    private Set<TenantName> readTenants() {
+    private Set<TenantName> readTenantsFromZooKeeper() {
         Set<TenantName> tenants = new LinkedHashSet<>();
         for (String tenant : curator.getChildren(tenantsPath)) {
             tenants.add(TenantName.from(tenant));
@@ -149,45 +147,47 @@ public class Tenants implements ConnectionStateListener, PathChildrenCacheListen
         return tenants;
     }
 
-    synchronized void tenantsChanged(Set<TenantName> newTenants) throws Exception {
-        log.log(LogLevel.DEBUG, "Tenants changed: " + newTenants);
-        checkForRemovedTenants(newTenants);
-        checkForAddedTenants(newTenants);
+    synchronized void createTenants() {
+        Set<TenantName> allTenants = readTenantsFromZooKeeper();
+        log.log(LogLevel.DEBUG, "Create tenants, tenants found in zookeeper: " + allTenants);
+        checkForRemovedTenants(allTenants);
+        checkForAddedTenants(allTenants);
         metricUpdater.setTenants(tenants.size());
     }
 
     private void checkForRemovedTenants(Set<TenantName> newTenants) {
-        Map<TenantName, Tenant> current = new LinkedHashMap<>(tenants);
-        for (Map.Entry<TenantName, Tenant> entry : current.entrySet()) {
-            TenantName tenant = entry.getKey();
-            if (!newTenants.contains(tenant)) {
-                notifyRemovedTenant(tenant);
-                entry.getValue().close();
-                tenants.remove(tenant);
+        for (TenantName tenantName : ImmutableSet.copyOf(tenants.keySet())) {
+            if (!newTenants.contains(tenantName)) {
+                deleteTenant(tenantName);
             }
         }
     }
 
-    private void checkForAddedTenants(Set<TenantName> newTenants) throws Exception {
+    private void checkForAddedTenants(Set<TenantName> newTenants) {
+        // TODO: Creating an executor here for every invocation does not seem optimal
         ExecutorService executor = Executors.newFixedThreadPool(globalComponentRegistry.getConfigserverConfig().numParallelTenantLoaders());
-        Map<TenantName, Tenant> addedTenants = new ConcurrentHashMap<>();
         for (TenantName tenantName : newTenants) {
             // Note: the http handler will check if the tenant exists, and throw accordingly
-            if (!tenants.containsKey(tenantName)) {
-                executor.execute(() -> {
-                    try {
-                        Tenant tenant = TenantBuilder.create(globalComponentRegistry, tenantName, getTenantPath(tenantName)).build();
-                        notifyNewTenant(tenant);
-                        addedTenants.put(tenantName, tenant);
-                    } catch (Exception e) {
-                        log.log(LogLevel.WARNING, "Error loading tenant '" + tenantName + "', skipping.", e);
-                    }
-                });
-            }
+            executor.execute(() -> createTenant(tenantName));
         }
         executor.shutdown();
-        executor.awaitTermination(365, TimeUnit.DAYS); // Timeout should never happen
-        tenants.putAll(addedTenants);
+        try {
+            executor.awaitTermination(365, TimeUnit.DAYS); // Timeout should never happen
+        } catch (InterruptedException e) {
+            throw new RuntimeException("Executor for creating tenants did not terminate within timeout");
+        }
+    }
+
+    private void createTenant(TenantName tenantName) {
+        if (tenants.containsKey(tenantName)) return;
+
+        try {
+            Tenant tenant = TenantBuilder.create(globalComponentRegistry, tenantName).build();
+            notifyNewTenant(tenant);
+            tenants.putIfAbsent(tenantName, tenant);
+        } catch (Exception e) {
+            log.log(LogLevel.WARNING, "Error loading tenant '" + tenantName + "', skipping.", e);
+        }
     }
 
     /**
@@ -237,12 +237,10 @@ public class Tenants implements ConnectionStateListener, PathChildrenCacheListen
      * Writes the path of the given tenant into ZooKeeper, for watchers to react on
      *
      * @param name name of the tenant
-     * @return this Tenants
      */
-    public synchronized Tenants writeTenantPath(TenantName name) {
+    private synchronized void writeTenantPath(TenantName name) {
         Path tenantPath = getTenantPath(name);
         curator.createAtomically(tenantPath, tenantPath.append(Tenant.SESSIONS), tenantPath.append(Tenant.APPLICATIONS));
-        return this;
     }
 
     /**
@@ -252,8 +250,14 @@ public class Tenants implements ConnectionStateListener, PathChildrenCacheListen
      * @return this Tenants instance
      */
     public synchronized Tenants deleteTenant(TenantName name) {
-        Tenant tenant = tenants.get(name);
-        tenant.delete();
+        if (name.equals(DEFAULT_TENANT))
+            throw new IllegalArgumentException("Deleting 'default' tenant is not allowed");
+        Tenant tenant = tenants.remove(name);
+        if (tenant == null) {
+            throw new IllegalArgumentException("Deleting '" + name + "' failed, tenant does not exist");
+        }
+        notifyRemovedTenant(name);
+        tenant.close();
         return this;
     }
 
@@ -268,7 +272,7 @@ public class Tenants implements ConnectionStateListener, PathChildrenCacheListen
      * @return the log string
      */
     public static String logPre(ApplicationId app) {
-        if (TenantName.defaultName().equals(app.tenant())) return "";
+        if (DEFAULT_TENANT.equals(app.tenant())) return "";
         StringBuilder ret = new StringBuilder()
             .append(logPre(app.tenant()))
             .append("app:"+app.application().value())
@@ -312,11 +316,11 @@ public class Tenants implements ConnectionStateListener, PathChildrenCacheListen
     }
 
     @Override
-    public void childEvent(CuratorFramework framework, PathChildrenCacheEvent event) throws Exception {
+    public void childEvent(CuratorFramework framework, PathChildrenCacheEvent event) {
         switch (event.getType()) {
             case CHILD_ADDED:
             case CHILD_REMOVED:
-                tenantsChanged(readTenants());
+                createTenants();
                 break;
         }
     }
@@ -344,11 +348,32 @@ public class Tenants implements ConnectionStateListener, PathChildrenCacheListen
 
     /**
      * Gets zookeeper path for tenant data
+     *
      * @param tenantName tenant name
      * @return a {@link com.yahoo.path.Path} to the zookeeper data for a tenant
      */
     public static Path getTenantPath(TenantName tenantName) {
         return tenantsPath.append(tenantName.value());
+    }
+
+    /**
+     * Gets zookeeper path for session data for a tenant
+     *
+     * @param tenantName tenant name
+     * @return a {@link com.yahoo.path.Path} to the zookeeper sessions data for a tenant
+     */
+    public static Path getSessionsPath(TenantName tenantName) {
+        return getTenantPath(tenantName).append(Tenant.SESSIONS);
+    }
+
+    /**
+     * Gets zookeeper path for application data for a tenant
+     *
+     * @param tenantName tenant name
+     * @return a {@link com.yahoo.path.Path} to the zookeeper application data for a tenant
+     */
+    public static Path getApplicationsPath(TenantName tenantName) {
+        return getTenantPath(tenantName).append(Tenant.APPLICATIONS);
     }
 
 }

@@ -1,15 +1,22 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.vespa.hosted.controller;
 
-import com.yahoo.config.provision.ApplicationId;
+import com.google.inject.Inject;
+import com.yahoo.component.AbstractComponent;
 import com.yahoo.config.provision.Environment;
 import com.yahoo.config.provision.RegionName;
 import com.yahoo.config.provision.SystemName;
-import com.yahoo.config.provision.Zone;
+import com.yahoo.vespa.hosted.controller.api.integration.zone.ZoneId;
+import com.yahoo.vespa.hosted.controller.api.identifiers.DeploymentId;
+import com.yahoo.vespa.athenz.api.AthenzService;
 import com.yahoo.vespa.hosted.controller.api.integration.zone.ZoneRegistry;
+import com.yahoo.vespa.hosted.controller.api.integration.zone.ZoneFilter;
+import com.yahoo.vespa.hosted.controller.api.integration.zone.ZoneFilterMock;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -19,15 +26,45 @@ import java.util.Optional;
 /**
  * @author mpolden
  */
-public class ZoneRegistryMock implements ZoneRegistry {
+public class ZoneRegistryMock extends AbstractComponent implements ZoneRegistry {
 
-    private final Map<Zone, Duration> deploymentTimeToLive = new HashMap<>();
+    private final Map<ZoneId, Duration> deploymentTimeToLive = new HashMap<>();
+    private final Map<Environment, RegionName> defaultRegionForEnvironment = new HashMap<>();
+    private List<ZoneId> zones = new ArrayList<>();
+    private SystemName system = SystemName.main;
 
-    public void setDeploymentTimeToLive(Zone zone, Duration duration) {
-        deploymentTimeToLive.put(zone, duration);
+    @Inject
+    public ZoneRegistryMock() {
+        zones.add(ZoneId.from("prod", "corp-us-east-1"));
+        zones.add(ZoneId.from("prod", "us-east-3"));
+        zones.add(ZoneId.from("prod", "us-west-1"));
+        zones.add(ZoneId.from("prod", "us-central-1"));
+        zones.add(ZoneId.from("prod", "eu-west-1"));
     }
 
-    private SystemName system = SystemName.main;
+    public ZoneRegistryMock setDeploymentTimeToLive(ZoneId zone, Duration duration) {
+        deploymentTimeToLive.put(zone, duration);
+        return this;
+    }
+
+    public ZoneRegistryMock setDefaultRegionForEnvironment(Environment environment, RegionName region) {
+        defaultRegionForEnvironment.put(environment, region);
+        return this;
+    }
+
+    public ZoneRegistryMock setZones(List<ZoneId> zones) {
+        this.zones = zones;
+        return this;
+    }
+
+    public ZoneRegistryMock setZones(ZoneId... zone) {
+        return setZones(Arrays.asList(zone));
+    }
+
+    public ZoneRegistryMock setSystem(SystemName system) {
+        this.system = system;
+        return this;
+    }
 
     @Override
     public SystemName system() {
@@ -35,38 +72,57 @@ public class ZoneRegistryMock implements ZoneRegistry {
     }
 
     @Override
-    public List<Zone> zones() {
-        return Collections.singletonList(new Zone(SystemName.main, Environment.from("prod"), RegionName.from("corp-us-east-1")));
+    public ZoneFilter zones() {
+        return ZoneFilterMock.from(Collections.unmodifiableList(zones));
+    }
+
+    public AthenzService getConfigserverAthenzService(ZoneId zone) {
+        return new AthenzService("vespadomain", "provider-" + zone.environment().value() + "-" + zone.region().value());
     }
 
     @Override
-    public Optional<Zone> getZone(Environment environment, RegionName region) {
-        return zones().stream().filter(z -> z.environment().equals(environment) && z.region().equals(region)).findFirst();
+    public boolean hasZone(ZoneId zoneId) {
+        return zones.contains(zoneId);
     }
 
     @Override
-    public List<URI> getConfigServerUris(Environment environment, RegionName region) {
-        return getZone(environment, region)
-                .map(z -> URI.create(String.format("http://cfg.%s.%s.test", environment.value(), region.value())))
-                .map(Collections::singletonList)
-                .orElse(Collections.emptyList());
+    public List<URI> getConfigServerSecureUris(ZoneId zoneId) {
+        return Collections.singletonList(URI.create(String.format("https://cfg.%s.test:4443", zoneId.value())));
     }
 
     @Override
-    public Optional<URI> getLogServerUri(Environment environment, RegionName region) {
-        return getZone(environment, region)
-                .map(z -> URI.create(String.format("http://log.%s.%s.test", environment.value(), region.value())));
+    public Optional<URI> getLogServerUri(DeploymentId deploymentId) {
+        if ( ! hasZone(deploymentId.zoneId()))
+            return Optional.empty();
+
+        String kibanaQuery = "/#/discover?_g=()&_a=(columns:!(_source)," +
+                             "index:'logstash-*',interval:auto," +
+                             "query:(query_string:(analyze_wildcard:!t,query:'" +
+                             "HV-tenant:%22" + deploymentId.applicationId().tenant().value() + "%22%20" +
+                             "AND%20HV-application:%22" + deploymentId.applicationId().application().value() + "%22%20" +
+                             "AND%20HV-region:%22" + deploymentId.zoneId().region().value() + "%22%20" +
+                             "AND%20HV-instance:%22" + deploymentId.applicationId().instance().value() + "%22%20" +
+                             "AND%20HV-environment:%22" + deploymentId.zoneId().environment().value() + "%22'))," +
+                             "sort:!('@timestamp',desc))";
+
+        URI kibanaPath = URI.create(kibanaQuery);
+        return Optional.of(URI.create(String.format("http://log.%s.test", deploymentId.zoneId().value())).resolve(kibanaPath));
     }
 
     @Override
-    public Optional<Duration> getDeploymentTimeToLive(Environment environment, RegionName region) {
-        return Optional.ofNullable(deploymentTimeToLive.get(new Zone(environment, region)));
+    public Optional<Duration> getDeploymentTimeToLive(ZoneId zoneId) {
+        return Optional.ofNullable(deploymentTimeToLive.get(zoneId));
     }
 
     @Override
-    public URI getMonitoringSystemUri(Environment environment, RegionName name, ApplicationId application) {
-        return URI.create("http://monitoring-system.test/?environment=" + environment.value() + "&region="
-                                  + name.value() + "&application=" + application.toShortString());
+    public Optional<RegionName> getDefaultRegion(Environment environment) {
+        return Optional.ofNullable(defaultRegionForEnvironment.get(environment));
+    }
+
+    @Override
+    public URI getMonitoringSystemUri(DeploymentId deploymentId) {
+        return URI.create("http://monitoring-system.test/?environment=" + deploymentId.zoneId().environment().value() + "&region="
+                          + deploymentId.zoneId().region().value() + "&application=" + deploymentId.applicationId().toShortString());
     }
 
     @Override
@@ -74,7 +130,4 @@ public class ZoneRegistryMock implements ZoneRegistry {
         return URI.create("http://dashboard.test");
     }
 
-    public void setSystem(SystemName system) {
-        this.system = system;
-    }
 }

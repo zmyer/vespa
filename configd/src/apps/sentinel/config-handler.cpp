@@ -56,7 +56,8 @@ ConfigHandler::ConfigHandler()
       _outputConnections(),
       _boundPort(0),
       _commandSocket(listen(0)),
-      _startMetrics()
+      _startMetrics(),
+      _stateApi(_startMetrics.producer)
 {
     _startMetrics.startedTime = time(nullptr);
 }
@@ -398,20 +399,7 @@ ConfigHandler::handleCommand(CommandConnection *c)
 void
 ConfigHandler::updateMetrics()
 {
-    vespalib::SimpleMetricSnapshot snapshot(_startMetrics.snapshotStart, _startMetrics.snapshotEnd);
-    snapshot.addCount("sentinel.restarts", "how many times sentinel restarted a service",
-                      _startMetrics.totalRestartsLastSnapshot);
-    snapshot.addGauge("sentinel.running", "how many services the sentinel has running currently",
-                      _startMetrics.currentlyRunningServices);
-    _stateApi.myMetrics.setMetrics(snapshot.asString());
-
-    vespalib::SimpleMetricSnapshot totals(_startMetrics.startedTime, time(nullptr));
-    totals.addCount("sentinel.restarts", "how many times sentinel restarted a service",
-                    _startMetrics.totalRestartsCounter);
-    totals.addGauge("sentinel.running", "how many services the sentinel has running currently",
-                    _startMetrics.currentlyRunningServices);
-    _stateApi.myMetrics.setTotalMetrics(totals.asString());
-
+    _startMetrics.maybeLog();
 }
 
 void

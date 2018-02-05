@@ -3,12 +3,14 @@
 
 #include "documentmessage.h"
 #include <vespa/document/bucket/bucketid.h>
+#include <vespa/vespalib/stllike/string.h>
 
 namespace documentapi {
 
 class GetBucketListMessage : public DocumentMessage {
 private:
     document::BucketId _bucketId;
+    vespalib::string _bucketSpace;
 
 protected:
     // Implements DocumentMessage.
@@ -16,30 +18,23 @@ protected:
 
 public:
     /**
-     * Constructs a new message for deserialization.
-     */
-    GetBucketListMessage();
-
-    /**
      * Constructs a new message with initial content.
      *
      * @param bucketId The bucket whose list to retrieve.
      */
     GetBucketListMessage(const document::BucketId &bucketId);
 
+    ~GetBucketListMessage();
+
     /**
      * Returns the bucket whose list to retrieve.
      *
-     * @return The bucket id.
+     * @return The bucket.
      */
-    const document::BucketId& getBucketId() const { return _bucketId; }
+    const document::BucketId &getBucketId() const { return _bucketId; }
 
-    /**
-     * Sets the bucket whose list to retrieve.
-     *
-     * @param id The bucket id to set.
-     */
-    void setBucketId(const document::BucketId& id) { _bucketId = id; }
+    const vespalib::string &getBucketSpace() const { return _bucketSpace; }
+    void setBucketSpace(const vespalib::string &value) { _bucketSpace = value; }
     uint32_t getType() const override;
     string toString() const override { return "getbucketlistmessage"; }
 };

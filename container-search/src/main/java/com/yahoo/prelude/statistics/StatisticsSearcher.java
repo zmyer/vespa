@@ -9,6 +9,7 @@ import com.yahoo.jdisc.Metric;
 import com.yahoo.log.LogLevel;
 import com.yahoo.metrics.simple.MetricSettings;
 import com.yahoo.metrics.simple.MetricReceiver;
+import com.yahoo.processing.request.CompoundName;
 import com.yahoo.search.Result;
 import com.yahoo.search.Searcher;
 import com.yahoo.search.result.ErrorHit;
@@ -43,6 +44,7 @@ import static com.yahoo.container.protect.Error.*;
 @Before(PhaseNames.RAW_QUERY)
 public class StatisticsSearcher extends Searcher {
 
+    private static final CompoundName IGNORE_QUERY = new CompoundName("metrics.ignore");
     private static final String MAX_QUERY_LATENCY_METRIC = "max_query_latency";
     private static final String EMPTY_RESULTS_METRIC = "empty_results";
     private static final String HITS_PER_QUERY_METRIC = "hits_per_query";
@@ -66,14 +68,14 @@ public class StatisticsSearcher extends Searcher {
     private Value peakQPS; // peak 1s QPS
     private Counter emptyResults; // number of results containing no concrete hits
     private Value hitsPerQuery; // mean number of hits per query
-    private long prevMaxQPSTime; // previous measurement time of QPS
-    private double queriesForQPS = 0.0;
-    private final Object peakQpsLock = new Object();
+
+    private final PeakQpsReporter peakQpsReporter;
+
 
     private Metric metric;
     private Map<String, Metric.Context> chainContexts = new CopyOnWriteHashMap<>();
     private Map<String, Metric.Context> statePageOnlyContexts = new CopyOnWriteHashMap<>();
-
+    private java.util.Timer scheduler = new java.util.Timer(true);
 
     private void initEvents(com.yahoo.statistics.Statistics manager, MetricReceiver metricReceiver) {
         queries = new Counter(QUERIES_METRIC, manager, false);
@@ -108,37 +110,63 @@ public class StatisticsSearcher extends Searcher {
             metric.set(ACTIVE_QUERIES_METRIC, searchQueriesInFlight, null);
         }
     }
+    private class PeakQpsReporter extends java.util.TimerTask {
+        private long prevMaxQPSTime = System.currentTimeMillis();
+        private long queriesForQPS = 0;
+        private Metric.Context metricContext = null;
+        public void setContext(Metric.Context metricContext) {
+            if (this.metricContext == null) {
+                synchronized(this) {
+                    this.metricContext = metricContext;
+                }
+            }
+        }
+        @Override
+        public void run() {
+            long now = System.currentTimeMillis();
+            synchronized (this) {
+                if (metricContext == null) return;
+                flushPeakQps(now);
+            }
+        }
+        private void flushPeakQps(long now) {
+            double ms = (double) (now - prevMaxQPSTime);
+            final double value = ((double)queriesForQPS) / (ms / 1000.0);
+            peakQPS.put(value);
+            metric.set(PEAK_QPS_METRIC, value, metricContext);
+            prevMaxQPSTime = now;
+            queriesForQPS = 0;
+        }
+        public void countQuery() {
+            synchronized (this) {
+                ++queriesForQPS;
+            }
+        }
+    }
 
     StatisticsSearcher(Metric metric) {
         this(com.yahoo.statistics.Statistics.nullImplementation, metric, MetricReceiver.nullImplementation);
     }
 
     public StatisticsSearcher(com.yahoo.statistics.Statistics manager, Metric metric, MetricReceiver metricReceiver) {
+        this.peakQpsReporter = new PeakQpsReporter();
         this.metric = metric;
         initEvents(manager, metricReceiver);
+        scheduler.schedule(peakQpsReporter, 1000, 1000);
+    }
+
+    @Override
+    public void deconstruct() {
+        scheduler.cancel();
     }
 
     public String getMyID() {
         return (getId().stringValue());
     }
 
-    private void qps(long now, Metric.Context metricContext) {
-        // We can either have peakQpsLock _or_ have prevMaxQpsTime as a volatile
-        // and queriesForQPS as an AtomicInteger. That would lead no locking,
-        // but two memory barriers in the common case. Don't change till we know
-        // that is actually better.
-        synchronized (peakQpsLock) {
-            if ((now - prevMaxQPSTime) >= (1000)) {
-                double ms = (double) (now - prevMaxQPSTime);
-                final double peakQPS = queriesForQPS / (ms / 1000);
-                this.peakQPS.put(peakQPS);
-                metric.set(PEAK_QPS_METRIC, peakQPS, metricContext);
-                queriesForQPS = 1.0d;
-                prevMaxQPSTime = now;
-            } else {
-                queriesForQPS += 1.0d;
-            }
-        }
+    private void qps(Metric.Context metricContext) {
+        peakQpsReporter.setContext(metricContext);
+        peakQpsReporter.countQuery();
     }
 
     private Metric.Context getChainMetricContext(String chainName) {
@@ -159,12 +187,16 @@ public class StatisticsSearcher extends Searcher {
      * 3) .....
      */
     public Result search(com.yahoo.search.Query query, Execution execution) {
+        if(query.properties().getBoolean(IGNORE_QUERY,false)){
+            return execution.search(query);
+        }
+
         Metric.Context metricContext = getChainMetricContext(execution.chain().getId().stringValue());
 
         incrQueryCount(metricContext);
         logQuery(query);
         long start = System.currentTimeMillis(); // Start time, in millisecs.
-        qps(start, metricContext);
+        qps(metricContext);
         Result result;
         //handle exceptions thrown below in searchers
         try {
@@ -173,7 +205,6 @@ public class StatisticsSearcher extends Searcher {
             incrErrorCount(null, metricContext);
             throw e;
         }
-
 
         long end = System.currentTimeMillis(); // Start time, in millisecs.
         long latency = end - start;

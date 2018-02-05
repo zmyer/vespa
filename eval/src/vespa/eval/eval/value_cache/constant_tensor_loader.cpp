@@ -4,6 +4,7 @@
 #include <vespa/eval/eval/tensor.h>
 #include <vespa/eval/eval/tensor_engine.h>
 #include <vespa/eval/eval/tensor_spec.h>
+#include <vespa/vespalib/objects/nbostream.h>
 #include <vespa/vespalib/io/mapped_file_input.h>
 #include <vespa/vespalib/data/lz4_input_decoder.h>
 #include <vespa/vespalib/data/slime/slime.h>
@@ -54,22 +55,19 @@ void decode_json(const vespalib::string &path, Slime &slime) {
     } else {
         if (ends_with(path, ".lz4")) {
             size_t buffer_size = 64 * 1024;
-            Lz4InputDecoder lz4_decoder(file, buffer_size);            
+            Lz4InputDecoder lz4_decoder(file, buffer_size);
             decode_json(path, lz4_decoder, slime);
             if (lz4_decoder.failed()) {
                 LOG(warning, "file contains lz4 errors (%s): %s",
                     lz4_decoder.reason().c_str(), path.c_str());
             }
         } else {
-            decode_json(path, file, slime);            
+            decode_json(path, file, slime);
         }
     }
 }
 
 } // namespace vespalib::eval::<unnamed>
-
-using ErrorConstant = SimpleConstantValue<ErrorValue>;
-using TensorConstant = SimpleConstantValue<TensorValue>;
 
 ConstantValue::UP
 ConstantTensorLoader::create(const vespalib::string &path, const vespalib::string &type) const
@@ -77,8 +75,13 @@ ConstantTensorLoader::create(const vespalib::string &path, const vespalib::strin
     ValueType value_type = ValueType::from_spec(type);
     if (value_type.is_error()) {
         LOG(warning, "invalid type specification: %s", type.c_str());
-        auto tensor = _engine.create(TensorSpec("double"));
-        return std::make_unique<TensorConstant>(_engine.type_of(*tensor), std::move(tensor));
+        return std::make_unique<SimpleConstantValue>(_engine.from_spec(TensorSpec("double")));
+    }
+    if (ends_with(path, ".tbf")) {
+        vespalib::MappedFileInput file(path);
+        vespalib::Memory content = file.get();
+        vespalib::nbostream stream(content.data, content.size);
+        return std::make_unique<SimpleConstantValue>(_engine.decode(stream));
     }
     Slime slime;
     decode_json(path, slime);
@@ -96,8 +99,7 @@ ConstantTensorLoader::create(const vespalib::string &path, const vespalib::strin
         cells[i]["address"].traverse(extractor);
         spec.add(address, cells[i]["value"].asDouble());
     }
-    auto tensor = _engine.create(spec);
-    return std::make_unique<TensorConstant>(_engine.type_of(*tensor), std::move(tensor));
+    return std::make_unique<SimpleConstantValue>(_engine.from_spec(spec));
 }
 
 } // namespace vespalib::eval

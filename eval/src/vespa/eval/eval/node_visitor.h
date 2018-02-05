@@ -22,15 +22,13 @@ struct NodeVisitor {
     virtual void visit(const nodes::Number       &) = 0;
     virtual void visit(const nodes::Symbol       &) = 0;
     virtual void visit(const nodes::String       &) = 0;
-    virtual void visit(const nodes::Array        &) = 0;
+    virtual void visit(const nodes::In           &) = 0;
     virtual void visit(const nodes::Neg          &) = 0;
     virtual void visit(const nodes::Not          &) = 0;
     virtual void visit(const nodes::If           &) = 0;
-    virtual void visit(const nodes::Let          &) = 0;
     virtual void visit(const nodes::Error        &) = 0;
 
     // tensor nodes
-    virtual void visit(const nodes::TensorSum    &) = 0;
     virtual void visit(const nodes::TensorMap    &) = 0;
     virtual void visit(const nodes::TensorJoin   &) = 0;
     virtual void visit(const nodes::TensorReduce &) = 0;
@@ -52,7 +50,6 @@ struct NodeVisitor {
     virtual void visit(const nodes::LessEqual    &) = 0;
     virtual void visit(const nodes::Greater      &) = 0;
     virtual void visit(const nodes::GreaterEqual &) = 0;
-    virtual void visit(const nodes::In           &) = 0;
     virtual void visit(const nodes::And          &) = 0;
     virtual void visit(const nodes::Or           &) = 0;
 
@@ -82,6 +79,7 @@ struct NodeVisitor {
     virtual void visit(const nodes::IsNan        &) = 0;
     virtual void visit(const nodes::Relu         &) = 0;
     virtual void visit(const nodes::Sigmoid      &) = 0;
+    virtual void visit(const nodes::Elu          &) = 0;
 
     virtual ~NodeVisitor() {}
 };
@@ -91,16 +89,14 @@ struct NodeVisitor {
  * of all types not specifically handled.
  **/
 struct EmptyNodeVisitor : NodeVisitor {
-    virtual void visit(const nodes::Number       &) override {}
-    virtual void visit(const nodes::Symbol       &) override {}
-    virtual void visit(const nodes::String       &) override {}
-    virtual void visit(const nodes::Array        &) override {}
-    virtual void visit(const nodes::Neg          &) override {}
-    virtual void visit(const nodes::Not          &) override {}
-    virtual void visit(const nodes::If           &) override {}
-    virtual void visit(const nodes::Let          &) override {}
+    void visit(const nodes::Number       &) override {}
+    void visit(const nodes::Symbol       &) override {}
+    void visit(const nodes::String       &) override {}
+    void visit(const nodes::In           &) override {}
+    void visit(const nodes::Neg          &) override {}
+    void visit(const nodes::Not          &) override {}
+    void visit(const nodes::If           &) override {}
     void visit(const nodes::Error        &) override {}
-    void visit(const nodes::TensorSum    &) override {}
     void visit(const nodes::TensorMap    &) override {}
     void visit(const nodes::TensorJoin   &) override {}
     void visit(const nodes::TensorReduce &) override {}
@@ -120,7 +116,6 @@ struct EmptyNodeVisitor : NodeVisitor {
     void visit(const nodes::LessEqual    &) override {}
     void visit(const nodes::Greater      &) override {}
     void visit(const nodes::GreaterEqual &) override {}
-    void visit(const nodes::In           &) override {}
     void visit(const nodes::And          &) override {}
     void visit(const nodes::Or           &) override {}
     void visit(const nodes::Cos          &) override {}
@@ -148,6 +143,7 @@ struct EmptyNodeVisitor : NodeVisitor {
     void visit(const nodes::IsNan        &) override {}
     void visit(const nodes::Relu         &) override {}
     void visit(const nodes::Sigmoid      &) override {}
+    void visit(const nodes::Elu          &) override {}
 };
 
 } // namespace vespalib::eval

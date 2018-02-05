@@ -73,7 +73,9 @@ public class Processing {
                 TensorFieldProcessor::new,
                 RankProfileTypeSettingsProcessor::new,
                 ReferenceFieldsProcessor::new,
+                ImportedFieldsInSummayValidator::new,
                 FastAccessValidator::new,
+                ReservedMacroNames::new,
 
                 // These two should be last.
                 IndexingValidation::new,

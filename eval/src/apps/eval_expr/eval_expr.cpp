@@ -3,7 +3,7 @@
 #include <vespa/eval/eval/function.h>
 #include <vespa/eval/eval/interpreted_function.h>
 #include <vespa/eval/eval/tensor_spec.h>
-
+#include <vespa/eval/eval/simple_tensor_engine.h>
 
 using namespace vespalib::eval;
 
@@ -12,7 +12,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <expr>\n", argv[0]);
         fprintf(stderr, "  the expression must be self-contained (no arguments)\n");
         fprintf(stderr, "  quote the expression to make it a single parameter\n");
-        fprintf(stderr, "  use let to simulate parameters: let(x, 1, x + 3)\n");
         return 1;
     }
     Function function = Function::parse({}, argv[1]);
@@ -22,12 +21,12 @@ int main(int argc, char **argv) {
     }
     InterpretedFunction interpreted(SimpleTensorEngine::ref(), function, NodeTypes());
     InterpretedFunction::Context ctx(interpreted);
-    InterpretedFunction::SimpleParams params({});
+    SimpleParams params({});
     const Value &result = interpreted.eval(ctx, params);
     if (result.is_double()) {
         fprintf(stdout, "%.32g\n", result.as_double());
     } else if (result.is_tensor()) {
-        vespalib::string str = SimpleTensorEngine::ref().to_spec(*result.as_tensor()).to_string();
+        vespalib::string str = SimpleTensorEngine::ref().to_spec(result).to_string();
         fprintf(stdout, "%s\n", str.c_str());
     } else {
         fprintf(stdout, "error\n");

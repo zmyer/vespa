@@ -4,14 +4,18 @@
 #include "putoperation.h"
 #include <vespa/storageapi/message/multioperation.h>
 #include <vespa/storageapi/message/persistence.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".distributor.callback.doc.multioperation");
+
+using document::BucketSpace;
 
 namespace storage::distributor {
 
 MultiOperationOperation::MultiOperationOperation(
         DistributorComponent& manager,
+        DistributorBucketSpace &bucketSpace,
         const std::shared_ptr<api::MultiOperationCommand> & msg,
         PersistenceOperationMetricSet& metric)
     : Operation(),
@@ -20,6 +24,7 @@ MultiOperationOperation::MultiOperationOperation(
       _tracker(_trackerInstance),
       _msg(msg),
       _manager(manager),
+      _bucketSpace(bucketSpace),
       _minUseBits(manager.getDistributor().getConfig().getMinimalBucketSplit())
 {
 }
@@ -34,14 +39,14 @@ MultiOperationOperation::sendToBucket(
     std::vector<uint16_t> targetNodes;
     std::vector<MessageTracker::ToSend> createBucketBatch;
 
-    if (PutOperation::checkCreateBucket(_manager.getDistribution(),
+    if (PutOperation::checkCreateBucket(_bucketSpace.getDistribution(),
                                         _manager.getClusterState(),
                                         e,
                                         targetNodes,
                                         createBucketBatch,
                                         *moCommand))
     {
-        _manager.getBucketDatabase().update(e);
+        _bucketSpace.getBucketDatabase().update(e);
     }
 
     if (createBucketBatch.size()) {
@@ -141,18 +146,18 @@ MultiOperationOperation::onStart(DistributorMessageSender& sender)
     {
         if (operationIt->valid()) {
             document::DocumentId docId = operationIt->getDocumentId();
-            document::BucketId bucketId(
-                    _manager.getBucketIdFactory().getBucketId(docId));
+            document::Bucket bucket(_msg->getBucket().getBucketSpace(),
+                                    _manager.getBucketIdFactory().getBucketId(docId));
 
-            LOG(debug, "Operation with documentid %s mapped to bucketid %s", docId.toString().c_str(), bucketId.toString().c_str());
+            LOG(debug, "Operation with documentid %s mapped to bucket %s", docId.toString().c_str(), bucket.toString().c_str());
 
             // OK, we have a bucket ID, must now know which buckets this belongs
             // to
             std::vector<BucketDatabase::Entry> entries;
-            _manager.getBucketDatabase().getParents(bucketId, entries);
+            _bucketSpace.getBucketDatabase().getParents(bucket.getBucketId(), entries);
 
             if (entries.empty()) {
-                entries.push_back(_manager.createAppropriateBucket(bucketId));
+                entries.push_back(_manager.createAppropriateBucket(bucket));
             }
 
             for (uint32_t i = 0; i < entries.size(); ++i) {
@@ -190,11 +195,12 @@ MultiOperationOperation::onStart(DistributorMessageSender& sender)
         }
         assert(blockSize > 4);
 
+        document::Bucket bucket(_msg->getBucket().getBucketSpace(), bucketIt->first);
         //now create a MultiOperationCommand with the new DocumentList
         std::shared_ptr<api::MultiOperationCommand>
             command(new api::MultiOperationCommand(
                             _manager.getTypeRepo(),
-                            bucketIt->first, blockSize));
+                            bucket, blockSize));
         copyMessageSettings(*_msg, *command);
 
         LOG(debug, "Block size %d", blockSize);

@@ -2,24 +2,24 @@
 package com.yahoo.vespa.model.filedistribution;
 
 import com.yahoo.config.FileReference;
+import com.yahoo.config.model.api.ConfigServerSpec;
 import com.yahoo.config.model.api.FileDistribution;
 import com.yahoo.config.application.api.FileRegistry;
+import com.yahoo.vespa.model.ConfigProxy;
 import com.yahoo.vespa.model.Host;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
-import static java.util.Arrays.asList;
-
-
 /**
  * Responsible for directing distribution of files to hosts.
  *
- * @author tonytv
+ * @author Tony Vaagenes
  */
 public class FileDistributor {
 
     private final FileRegistry fileRegistry;
+    private final List<ConfigServerSpec> configServerSpecs;
 
     /** A map from files to the hosts to which that file should be distributed */
     private final Map<FileReference, Set<Host>> filesToHosts = new LinkedHashMap<>();
@@ -38,9 +38,29 @@ public class FileDistributor {
         return reference;
     }
 
+    /**
+     * Adds the given file to the associated application packages' registry of file and marks the file
+     * for distribution to the given hosts.
+     * <b>Note: This class receives ownership of the given collection.</b>
+     *
+     * @return the reference to the file, created by the application package
+     */
+    public FileReference sendUriToHosts(String uri, Collection<Host> hosts) {
+        FileReference reference = fileRegistry.addUri(uri);
+        if (reference != null) {
+            addToFilesToDistribute(reference, hosts);
+        }
+
+        return reference;
+    }
+
     /** Same as sendFileToHost(relativePath,Collections.singletonList(host) */
     public FileReference sendFileToHost(String relativePath, Host host) {
         return sendFileToHosts(relativePath, Arrays.asList(host));
+    }
+
+    public FileReference sendUriToHost(String uri, Host host) {
+        return sendUriToHosts(uri, Arrays.asList(host));
     }
 
     private void addToFilesToDistribute(FileReference reference, Collection<Host> hosts) {
@@ -57,8 +77,9 @@ public class FileDistributor {
         return hosts;
     }
 
-    public FileDistributor(FileRegistry fileRegistry) {
+    public FileDistributor(FileRegistry fileRegistry, List<ConfigServerSpec> configServerSpecs) {
         this.fileRegistry = fileRegistry;
+        this.configServerSpecs = configServerSpecs;
     }
 
     /** Returns the files which has been marked for distribution to the given host */
@@ -81,7 +102,7 @@ public class FileDistributor {
     }
 
     public Set<String> getTargetHostnames() {
-        return getTargetHosts().stream().map(Host::getHostName).collect(Collectors.toSet());
+        return getTargetHosts().stream().map(Host::getHostname).collect(Collectors.toSet());
     }
 
     /** Returns the host which is the source of the files */
@@ -97,12 +118,18 @@ public class FileDistributor {
     public void sendDeployedFiles(FileDistribution dbHandler) {
         String fileSourceHost = fileSourceHost();
         for (Host host : getTargetHosts()) {
-            if ( ! host.getHostName().equals(fileSourceHost)) {
-                dbHandler.sendDeployedFiles(host.getHostName(), filesToSendToHost(host));
+            if ( ! host.getHostname().equals(fileSourceHost)) {
+                dbHandler.sendDeployedFiles(host.getHostname(), filesToSendToHost(host));
+                dbHandler.startDownload(host.getHostname(), ConfigProxy.BASEPORT, filesToSendToHost(host));
             }
         }
+        // Ask other config servers to download, for redundancy
+        if (configServerSpecs != null)
+            configServerSpecs.stream()
+                    .filter(configServerSpec -> !configServerSpec.getHostName().equals(fileSourceHost))
+                    .forEach(spec -> dbHandler.startDownload(spec.getHostName(), spec.getConfigServerPort(), allFilesToSend()));
+
         dbHandler.sendDeployedFiles(fileSourceHost, allFilesToSend());
-        dbHandler.limitSendingOfDeployedFilesTo(union(getTargetHostnames(), fileSourceHost));
         dbHandler.removeDeploymentsThatHaveDifferentApplicationId(getTargetHostnames());
     }
 
@@ -112,10 +139,4 @@ public class FileDistributor {
         dbHandler.reloadDeployFileDistributor();
     }
 
-    private Set<String> union(Set<String> hosts, String... additionalHosts) {
-        Set<String> result = new HashSet<>(hosts);
-        result.addAll(asList(additionalHosts));
-        return result;
-    }
-    
 }

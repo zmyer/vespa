@@ -6,6 +6,7 @@
     <groupId>com.yahoo.vespa</groupId>
     <artifactId>parent</artifactId>
     <version>6-SNAPSHOT</version>
+    <relativePath>../parent/pom.xml</relativePath>
   </parent>
   <artifactId>config-model</artifactId>
   <packaging>container-plugin</packaging>
@@ -276,11 +277,6 @@
     </dependency>
     <dependency>
       <groupId>com.yahoo.vespa</groupId>
-      <artifactId>filedistribution</artifactId>
-      <version>${project.version}</version>
-    </dependency>
-     <dependency>
-      <groupId>com.yahoo.vespa</groupId>
       <artifactId>searchsummary</artifactId>
       <version>${project.version}</version>
     </dependency>
@@ -312,6 +308,20 @@
       <groupId>org.scala-lang.modules</groupId>
       <artifactId>scala-xml_${scala.major-version}</artifactId>
       <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.google.protobuf</groupId>
+      <artifactId>protobuf-java</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.tensorflow</groupId>
+      <artifactId>proto</artifactId>
+      <version>1.4.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.tensorflow</groupId>
+      <artifactId>tensorflow</artifactId>
+      <version>1.4.0</version>
     </dependency>
   </dependencies>
 

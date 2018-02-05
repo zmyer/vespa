@@ -11,9 +11,16 @@ LOG_SETUP("datastore_test");
 namespace search {
 namespace datastore {
 
+using vespalib::alloc::MemoryAllocator;
+
+struct IntReclaimer
+{
+    static void reclaim(int *) {}
+};
+
 class MyStore : public DataStore<int, EntryRefT<3, 2> > {
 private:
-    typedef DataStore<int, EntryRefT<3, 2> > ParentType;
+    using ParentType = DataStore<int, EntryRefT<3, 2> >;
     using ParentType::_activeBufferIds;
 public:
     MyStore() {}
@@ -60,19 +67,22 @@ public:
 
 using GrowthStats = std::vector<int>;
 
+constexpr float ALLOC_GROW_FACTOR = 0.4;
+constexpr size_t HUGE_PAGE_CLUSTER_SIZE = (MemoryAllocator::HUGEPAGE_SIZE / sizeof(int));
+
 class GrowStore
 {
-    using Store = DataStoreT<EntryRefT<22>>;
+    using Store = DataStoreT<EntryRefT<24>>;
     using RefType = Store::RefType;
     Store _store;
     BufferType<int> _firstType;
     BufferType<int> _type;
     uint32_t _typeId;
 public:
-    GrowStore(size_t minSize, size_t minSwitch)
+    GrowStore(size_t minClusters, size_t maxClusters, size_t numClustersForNewBuffer)
         : _store(),
-          _firstType(1, 1, 64, 0),
-          _type(1, minSize, 64, minSwitch),
+          _firstType(1, 1, maxClusters, 0, ALLOC_GROW_FACTOR),
+          _type(1, minClusters, maxClusters, numClustersForNewBuffer, ALLOC_GROW_FACTOR),
           _typeId(0)
     {
         (void) _store.addType(&_firstType);
@@ -85,16 +95,16 @@ public:
         GrowthStats sizes;
         int i = 0;
         int previ = 0;
-        int prevBuffer = -1;
+        int prevBufferId = -1;
         while (sizes.size() < bufs) {
             RefType iRef(_store.allocator<int>(_typeId).alloc().ref);
-            int buffer = iRef.bufferId();
-            if (buffer != prevBuffer) {
-                if (prevBuffer >= 0) {
+            int bufferId = iRef.bufferId();
+            if (bufferId != prevBufferId) {
+                if (prevBufferId >= 0) {
                     sizes.push_back(i - previ);
                     previ = i;
                 }
-                prevBuffer = buffer;
+                prevBufferId = bufferId;
             }
             ++i;
         }
@@ -125,30 +135,11 @@ public:
     MemoryUsage getMemoryUsage() const { return _store.getMemoryUsage(); }
 };
 
-typedef MyStore::RefType MyRef;
-
-class Test : public vespalib::TestApp {
-private:
-    bool assertMemStats(const DataStoreBase::MemStats & exp,
-                        const DataStoreBase::MemStats & act);
-    void requireThatEntryRefIsWorking();
-    void requireThatAlignedEntryRefIsWorking();
-    void requireThatEntriesCanBeAddedAndRetrieved();
-    void requireThatAddEntryTriggersChangeOfBuffer();
-    void requireThatWeCanHoldAndTrimBuffers();
-    void requireThatWeCanHoldAndTrimElements();
-    void requireThatWeCanUseFreeLists();
-    void requireThatMemoryStatsAreCalculated();
-    void requireThatMemoryUsageIsCalculated();
-    void requireThatWecanDisableElemHoldList();
-    void requireThatBufferGrowthWorks();
-public:
-    int Main() override;
-};
+using MyRef = MyStore::RefType;
 
 bool
-Test::assertMemStats(const DataStoreBase::MemStats & exp,
-                     const DataStoreBase::MemStats & act)
+assertMemStats(const DataStoreBase::MemStats &exp,
+               const DataStoreBase::MemStats &act)
 {
     if (!EXPECT_EQUAL(exp._allocElems, act._allocElems)) return false;
     if (!EXPECT_EQUAL(exp._usedElems, act._usedElems)) return false;
@@ -160,10 +151,9 @@ Test::assertMemStats(const DataStoreBase::MemStats & exp,
     return true;
 }
 
-void
-Test::requireThatEntryRefIsWorking()
+TEST("require that entry ref is working")
 {
-    typedef EntryRefT<22> MyRefType;
+    using MyRefType = EntryRefT<22>;
     EXPECT_EQUAL(4194304u, MyRefType::offsetSize());
     EXPECT_EQUAL(1024u, MyRefType::numBuffers());
     {
@@ -189,10 +179,9 @@ Test::requireThatEntryRefIsWorking()
     }
 }
 
-void
-Test::requireThatAlignedEntryRefIsWorking()
+TEST("require that aligned entry ref is working")
 {
-    typedef AlignedEntryRefT<22, 2> MyRefType; // 4 byte alignement
+    using MyRefType = AlignedEntryRefT<22, 2>; // 4 byte alignement
     EXPECT_EQUAL(4 * 4194304u, MyRefType::offsetSize());
     EXPECT_EQUAL(1024u, MyRefType::numBuffers());
     EXPECT_EQUAL(0u, MyRefType::align(0));
@@ -218,10 +207,9 @@ Test::requireThatAlignedEntryRefIsWorking()
     }
 }
 
-void
-Test::requireThatEntriesCanBeAddedAndRetrieved()
+TEST("require that entries can be added and retrieved")
 {
-    typedef DataStore<int> IntStore;
+    using IntStore = DataStore<int>;
     IntStore ds;
     EntryRef r1 = ds.addEntry(10);
     EntryRef r2 = ds.addEntry(20);
@@ -237,10 +225,9 @@ Test::requireThatEntriesCanBeAddedAndRetrieved()
     EXPECT_EQUAL(30, ds.getEntry(r3));
 }
 
-void
-Test::requireThatAddEntryTriggersChangeOfBuffer()
+TEST("require that add entry triggers change of buffer")
 {
-    typedef DataStore<uint64_t, EntryRefT<10, 10> > Store;
+    using Store = DataStore<uint64_t, EntryRefT<10, 10> >;
     Store s;
     uint64_t num = 0;
     uint32_t lastId = 0;
@@ -264,8 +251,7 @@ Test::requireThatAddEntryTriggersChangeOfBuffer()
     LOG(info, "Added %" PRIu64 " nums in 2 buffers", num);
 }
 
-void
-Test::requireThatWeCanHoldAndTrimBuffers()
+TEST("require that we can hold and trim buffers")
 {
     MyStore s;
     EXPECT_EQUAL(0u, MyRef(s.addEntry(1)).bufferId());
@@ -310,8 +296,7 @@ Test::requireThatWeCanHoldAndTrimBuffers()
     EXPECT_TRUE(s.getBufferState(3).size() == 0);
 }
 
-void
-Test::requireThatWeCanHoldAndTrimElements()
+TEST("require that we can hold and trim elements")
 {
     MyStore s;
     MyRef r1 = s.addEntry(1);
@@ -336,39 +321,44 @@ Test::requireThatWeCanHoldAndTrimElements()
     EXPECT_EQUAL(0, s.getEntry(r3));
 }
 
-void
-Test::requireThatWeCanUseFreeLists()
+MyRef
+toRef(Handle<int> handle)
+{
+    return MyRef(handle.ref);
+}
+
+TEST("require that we can use free lists")
 {
     MyStore s;
     s.enableFreeLists();
-    MyRef r1 = s.addEntry2(1);
-    s.holdElem(r1, 1);
+    auto allocator = s.freeListAllocator<IntReclaimer>();
+    auto h1 = allocator.alloc(1);
+    s.holdElem(h1.ref, 1);
     s.transferHoldLists(10);
-    MyRef r2 = s.addEntry2(2);
-    s.holdElem(r2, 1);
+    auto h2 = allocator.alloc(2);
+    s.holdElem(h2.ref, 1);
     s.transferHoldLists(20);
     s.trimElemHoldList(11);
-    MyRef r3 = s.addEntry2(3); // reuse r1
-    EXPECT_EQUAL(r1.offset(), r3.offset());
-    EXPECT_EQUAL(r1.bufferId(), r3.bufferId());
-    MyRef r4 = s.addEntry2(4);
-    EXPECT_EQUAL(r2.offset() + 1, r4.offset());
+    auto h3 = allocator.alloc(3); // reuse h1.ref
+    EXPECT_EQUAL(toRef(h1).offset(), toRef(h3).offset());
+    EXPECT_EQUAL(toRef(h1).bufferId(), toRef(h3).bufferId());
+    auto h4 = allocator.alloc(4);
+    EXPECT_EQUAL(toRef(h2).offset() + 1, toRef(h4).offset());
     s.trimElemHoldList(21);
-    MyRef r5 = s.addEntry2(5); // reuse r2
-    EXPECT_EQUAL(r2.offset(), r5.offset());
-    EXPECT_EQUAL(r2.bufferId(), r5.bufferId());
-    MyRef r6 = s.addEntry2(6);
-    EXPECT_EQUAL(r4.offset() + 1, r6.offset());
-    EXPECT_EQUAL(3, s.getEntry(r1));
-    EXPECT_EQUAL(5, s.getEntry(r2));
-    EXPECT_EQUAL(3, s.getEntry(r3));
-    EXPECT_EQUAL(4, s.getEntry(r4));
-    EXPECT_EQUAL(5, s.getEntry(r5));
-    EXPECT_EQUAL(6, s.getEntry(r6));
+    auto h5 = allocator.alloc(5); // reuse h2.ref
+    EXPECT_EQUAL(toRef(h2).offset(), toRef(h5).offset());
+    EXPECT_EQUAL(toRef(h2).bufferId(), toRef(h5).bufferId());
+    auto h6 = allocator.alloc(6);
+    EXPECT_EQUAL(toRef(h4).offset() + 1, toRef(h6).offset());
+    EXPECT_EQUAL(3, s.getEntry(h1.ref));
+    EXPECT_EQUAL(5, s.getEntry(h2.ref));
+    EXPECT_EQUAL(3, s.getEntry(h3.ref));
+    EXPECT_EQUAL(4, s.getEntry(h4.ref));
+    EXPECT_EQUAL(5, s.getEntry(h5.ref));
+    EXPECT_EQUAL(6, s.getEntry(h6.ref));
 }
 
-void
-Test::requireThatMemoryStatsAreCalculated()
+TEST("require that memory stats are calculated")
 {
     MyStore s;
     DataStoreBase::MemStats m;
@@ -421,8 +411,7 @@ Test::requireThatMemoryStatsAreCalculated()
     EXPECT_TRUE(assertMemStats(m, s.getMemStats()));
 }
 
-void
-Test::requireThatMemoryUsageIsCalculated()
+TEST("require that memory usage is calculated")
 {
     MyStore s;
     MyRef r = s.addEntry(10);
@@ -440,9 +429,7 @@ Test::requireThatMemoryUsageIsCalculated()
     s.trimHoldLists(101);
 }
 
-
-void
-Test::requireThatWecanDisableElemHoldList()
+TEST("require that we can disable elemement hold list")
 {
     MyStore s;
     MyRef r1 = s.addEntry(10);
@@ -471,65 +458,50 @@ Test::requireThatWecanDisableElemHoldList()
     s.trimHoldLists(101);
 }
 
-namespace
-{
+namespace {
 
 void assertGrowStats(GrowthStats expSizes,
                      GrowthStats expFirstBufSizes,
                      size_t expInitMemUsage,
-                     size_t minSize, size_t minSwitch)
+                     size_t minClusters, size_t numClustersForNewBuffer, size_t maxClusters = 128)
 {
-    EXPECT_EQUAL(expSizes, GrowStore(minSize, minSwitch).getGrowthStats(9));
-    EXPECT_EQUAL(expFirstBufSizes, GrowStore(minSize, minSwitch).getFirstBufGrowStats());
-    EXPECT_EQUAL(expInitMemUsage, GrowStore(minSize, minSwitch).getMemoryUsage().allocatedBytes());
+    EXPECT_EQUAL(expSizes, GrowStore(minClusters, maxClusters, numClustersForNewBuffer).getGrowthStats(expSizes.size()));
+    EXPECT_EQUAL(expFirstBufSizes, GrowStore(minClusters, maxClusters, numClustersForNewBuffer).getFirstBufGrowStats());
+    EXPECT_EQUAL(expInitMemUsage, GrowStore(minClusters, maxClusters, numClustersForNewBuffer).getMemoryUsage().allocatedBytes());
 }
 
 }
-void
-Test::requireThatBufferGrowthWorks()
+
+TEST("require that buffer growth works")
 {
     // Always switch to new buffer, min size 4
-    TEST_DO(assertGrowStats({ 4, 8, 16, 32, 64, 64, 64, 64, 64 },
+    TEST_DO(assertGrowStats({ 4, 4, 4, 4, 8, 16, 16, 32, 64, 64 },
                             { 4 }, 20, 4, 0));
     // Resize if buffer size is less than 4, min size 0
-    TEST_DO(assertGrowStats({ 4, 8, 16, 32, 64, 64, 64, 64, 64 },
+    TEST_DO(assertGrowStats({ 4, 4, 4, 4, 8, 16, 16, 32, 64, 64 },
                             { 0, 1, 2, 4 }, 4, 0, 4));
-    // Alwais switch to new buffer, min size 16
-    TEST_DO(assertGrowStats({ 16, 32, 64, 64, 64, 64, 64, 64, 64 },
+    // Always switch to new buffer, min size 16
+    TEST_DO(assertGrowStats({ 16, 16, 16, 32, 32, 64, 128, 128, 128 },
                             { 16 }, 68, 16, 0));
     // Resize if buffer size is less than 16, min size 0
-    TEST_DO(assertGrowStats({ 16, 32, 64, 64, 64, 64, 64, 64, 64 },
+    TEST_DO(assertGrowStats({ 16, 16, 16, 32, 32, 64, 128, 128, 128 },
                             { 0, 1, 2, 4, 8, 16 }, 4, 0, 16));
     // Resize if buffer size is less than 16, min size 4
-    TEST_DO(assertGrowStats({ 16, 32, 64, 64, 64, 64, 64, 64, 64 },
+    TEST_DO(assertGrowStats({ 16, 16, 16, 32, 32, 64, 128, 128, 128 },
                             { 4, 8, 16 }, 20, 4, 16));
     // Always switch to new buffer, min size 0
-    TEST_DO(assertGrowStats({ 1, 1, 2, 4, 8, 16, 32, 64, 64},
+    TEST_DO(assertGrowStats({ 1, 1, 1, 1, 1, 2, 2, 4, 8, 8, 16, 32 },
                             { 0, 1 }, 4, 0, 0));
-}
 
-int
-Test::Main()
-{
-    TEST_INIT("datastore_test");
-
-    requireThatEntryRefIsWorking();
-    requireThatAlignedEntryRefIsWorking();
-    requireThatEntriesCanBeAddedAndRetrieved();
-    requireThatAddEntryTriggersChangeOfBuffer();
-    requireThatWeCanHoldAndTrimBuffers();
-    requireThatWeCanHoldAndTrimElements();
-    requireThatWeCanUseFreeLists();
-    requireThatMemoryStatsAreCalculated();
-    requireThatMemoryUsageIsCalculated();
-    requireThatWecanDisableElemHoldList();
-    requireThatBufferGrowthWorks();
-
-    TEST_DONE();
+    // Buffers with sizes larger than the huge page size of the mmap allocator.
+    ASSERT_EQUAL(524288u, HUGE_PAGE_CLUSTER_SIZE);
+    TEST_DO(assertGrowStats({ 262144, 262144, 262144, 524288, 524288, 524288 * 2, 524288 * 3, 524288 * 4, 524288 * 5, 524288 * 5 },
+                            { 0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144 },
+                            4, 0, HUGE_PAGE_CLUSTER_SIZE / 2, HUGE_PAGE_CLUSTER_SIZE * 5));
 }
 
 }
 }
 
-TEST_APPHOOK(search::datastore::Test);
+TEST_MAIN() { TEST_RUN_ALL(); }
 

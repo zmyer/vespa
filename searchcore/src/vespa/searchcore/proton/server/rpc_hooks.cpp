@@ -35,8 +35,8 @@ RPCHooksBase::checkState(StateArg::UP arg)
 {
     fastos::TimeStamp now(fastos::ClockSystem::now());
     if (now < arg->_dueTime) {
-        MonitorGuard guard(_stateMonitor);
-        if ( guard.wait(std::min(1000L, (arg->_dueTime - now)/fastos::TimeStamp::MS)) ) {
+        std::unique_lock<std::mutex> guard(_stateLock);
+        if (_stateCond.wait_for(guard, std::chrono::milliseconds(std::min(1000L, (arg->_dueTime - now)/fastos::TimeStamp::MS))) == std::cv_status::no_timeout) {
             LOG(debug, "state has changed");
             reportState(*arg->_session, arg->_req);
             arg->_req->Return();
@@ -189,15 +189,24 @@ RPCHooksBase::initRPC()
     
 }
 
+RPCHooksBase::Params::Params(Proton &parent, uint32_t port, const vespalib::string &ident)
+        : proton(parent),
+          slobrok_config(config::ConfigUri("admin/slobrok.0")),
+          identity(ident),
+          rtcPort(port)
+{ }
+
+RPCHooksBase::Params::~Params() = default;
+
 RPCHooksBase::RPCHooksBase(Params &params)
     : _proton(params.proton),
       _docsumByRPC(new DocsumByRPC(_proton.getDocsumBySlime())),
       _orb(std::make_unique<FRT_Supervisor>()),
       _regAPI(*_orb, params.slobrok_config),
-      _executor(48, 128 * 1024),
-      _ooscli(params, *_orb)
-{
-}
+      _stateLock(),
+      _stateCond(),
+      _executor(48, 128 * 1024)
+{ }
 
 void
 RPCHooksBase::open(Params & params)
@@ -209,9 +218,7 @@ RPCHooksBase::open(Params & params)
     LOG(debug, "started monitoring interface");
 }
 
-RPCHooksBase::~RPCHooksBase()
-{
-}
+RPCHooksBase::~RPCHooksBase() = default;
 
 void
 RPCHooksBase::close()
@@ -220,8 +227,8 @@ RPCHooksBase::close()
     _orb->ShutDown(true);
     _executor.shutdown();
     {
-        MonitorGuard guard(_stateMonitor);
-        guard.broadcast();
+        std::lock_guard<std::mutex> guard(_stateLock);
+        _stateCond.notify_all();
     }
     _executor.sync();
 }

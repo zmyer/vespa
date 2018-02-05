@@ -88,6 +88,8 @@ public:
      * value along with compression config.
      */
     void set(vespalib::DataBuffer &&buf, ssize_t len, const CompressionConfig &compression);
+    // Keep buffer uncompressed
+    void set(vespalib::DataBuffer &&buf, ssize_t len);
 
     /**
      * Decompress value into temporary buffer and deserialize document from
@@ -110,18 +112,26 @@ private:
 class BackingStore {
 public:
     BackingStore(IDataStore &store, const CompressionConfig &compression) :
-            _backingStore(store),
-            _compression(compression) { }
+        _backingStore(store),
+        _compression(compression)
+    { }
 
     bool read(DocumentIdT key, Value &value) const;
     void visit(const IDocumentStore::LidVector &lids, const DocumentTypeRepo &repo, IDocumentVisitor &visitor) const;
     void write(DocumentIdT, const Value &) {}
     void erase(DocumentIdT) {}
-    const CompressionConfig &getCompression(void) const { return _compression; }
+    const CompressionConfig &getCompression() const { return _compression; }
+    void reconfigure(const CompressionConfig &compression);
 private:
     IDataStore &_backingStore;
-    const CompressionConfig _compression;
+    CompressionConfig _compression;
 };
+
+
+void
+Value::set(vespalib::DataBuffer &&buf, ssize_t len) {
+    set(std::move(buf), len, CompressionConfig());
+}
 
 void
 Value::set(vespalib::DataBuffer &&buf, ssize_t len, const CompressionConfig &compression) {
@@ -172,6 +182,11 @@ BackingStore::read(DocumentIdT key, Value &value) const {
     return found;
 }
 
+void
+BackingStore::reconfigure(const CompressionConfig &compression) {
+    _compression = compression;
+}
+
 }
 
 using CacheParams = vespalib::CacheParam<
@@ -189,6 +204,15 @@ public:
 using VisitCache = docstore::VisitCache;
 using docstore::Value;
 
+bool
+DocumentStore::Config::operator == (const Config &rhs) const {
+    return (_maxCacheBytes == rhs._maxCacheBytes) &&
+            (_allowVisitCaching == rhs._allowVisitCaching) &&
+            (_initialCacheEntries == rhs._initialCacheEntries) &&
+            (_compression == rhs._compression);
+}
+
+
 DocumentStore::DocumentStore(const Config & config, IDataStore & store)
     : IDocumentStore(),
       _config(config),
@@ -201,8 +225,15 @@ DocumentStore::DocumentStore(const Config & config, IDataStore & store)
     _cache->reserveElements(config.getInitialCacheEntries());
 }
 
-DocumentStore::~DocumentStore()
-{
+DocumentStore::~DocumentStore() {}
+
+void
+DocumentStore::reconfigure(const Config & config) {
+    _cache->setCapacityBytes(config.getMaxCacheBytes());
+    _store->reconfigure(config.getCompression());
+    _visitCache->reconfigure(_config.getMaxCacheBytes(), config.getCompression());
+
+    _config = config;
 }
 
 bool
@@ -413,7 +444,7 @@ DocumentStore::WrapVisitor<Visitor>::visit(uint32_t lid,
     buf.writeBytes(buffer, sz);
     ssize_t len = sz;
     if (len > 0) {
-        value.set(std::move(buf), len, _compression);
+        value.set(std::move(buf), len);
     }
     if (! value.empty()) {
         document::Document::UP doc(value.deserializeDocument(_repo)); 

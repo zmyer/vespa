@@ -11,7 +11,6 @@ import com.yahoo.vespa.hosted.dockerapi.metrics.MetricReceiverWrapper;
 import com.yahoo.vespa.hosted.node.admin.ContainerNodeSpec;
 import com.yahoo.vespa.hosted.node.admin.docker.DockerOperations;
 import com.yahoo.vespa.hosted.node.admin.maintenance.StorageMaintainer;
-import com.yahoo.vespa.hosted.node.admin.maintenance.acl.AclMaintainer;
 import com.yahoo.vespa.hosted.node.admin.nodeagent.NodeAgent;
 import com.yahoo.vespa.hosted.node.admin.util.PrefixLogger;
 
@@ -47,7 +46,7 @@ public class NodeAdminImpl implements NodeAdmin {
     private final DockerOperations dockerOperations;
     private final Function<String, NodeAgent> nodeAgentFactory;
     private final StorageMaintainer storageMaintainer;
-    private final AclMaintainer aclMaintainer;
+    private final Runnable aclMaintainer;
 
     private final Clock clock;
     private boolean previousWantFrozen;
@@ -62,7 +61,7 @@ public class NodeAdminImpl implements NodeAdmin {
     public NodeAdminImpl(final DockerOperations dockerOperations,
                          final Function<String, NodeAgent> nodeAgentFactory,
                          final StorageMaintainer storageMaintainer,
-                         final AclMaintainer aclMaintainer,
+                         final Runnable aclMaintainer,
                          final MetricReceiverWrapper metricReceiver,
                          final Clock clock) {
         this.dockerOperations = dockerOperations;
@@ -147,7 +146,8 @@ public class NodeAdminImpl implements NodeAdmin {
 
     @Override
     public void stopNodeAgentServices(List<String> hostnames) {
-        nodeAgents.values().stream()
+        // Each container may spend 1-1:30 minutes stopping
+        nodeAgents.values().parallelStream()
                 .filter(nodeAgent -> hostnames.contains(nodeAgent.getHostname()))
                 .forEach(NodeAgent::stopServices);
     }
@@ -178,9 +178,10 @@ public class NodeAdminImpl implements NodeAdmin {
             }
         }, 0, 55, TimeUnit.SECONDS);
 
+        int delay = 120; // WARNING: Reducing this will increase the load on config servers.
         aclScheduler.scheduleWithFixedDelay(() -> {
             if (!isFrozen()) aclMaintainer.run();
-        }, 30, 60, TimeUnit.SECONDS);
+        }, 30, delay, TimeUnit.SECONDS);
     }
 
     @Override

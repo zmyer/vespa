@@ -8,6 +8,7 @@
 #include "protocolrepository.h"
 #include <vespa/messagebus/network/inetwork.h>
 #include <vespa/vespalib/util/exceptions.h>
+#include <vespa/vespalib/util/gate.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".messagebus");
@@ -83,7 +84,7 @@ namespace mbus {
 
 MessageBus::MessageBus(INetwork &net, ProtocolSet protocols) :
     _network(net),
-    _lock("mbus::MessageBus::_lock", false),
+    _lock(),
     _routingTables(),
     _sessions(),
     _protocolRepository(std::make_unique<ProtocolRepository>()),
@@ -106,7 +107,7 @@ MessageBus::MessageBus(INetwork &net, ProtocolSet protocols) :
 
 MessageBus::MessageBus(INetwork &net, const MessageBusParams &params) :
     _network(net),
-    _lock("mbus::MessageBus::_lock", false),
+    _lock(),
     _routingTables(),
     _sessions(),
     _protocolRepository(std::make_unique<ProtocolRepository>()),

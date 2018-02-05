@@ -101,9 +101,9 @@ struct Renamer {
 
 } // namespace vespalib::tensor::<unnamed>
 
-constexpr size_t ValueType::Dimension::npos;
+constexpr ValueType::Dimension::size_type ValueType::Dimension::npos;
 
-ValueType::~ValueType() { }
+ValueType::~ValueType() = default;
 bool
 ValueType::is_sparse() const
 {
@@ -263,6 +263,40 @@ ValueType::concat(const ValueType &lhs, const ValueType &rhs, const vespalib::st
         result.dimensions.emplace_back(dimension, 2);
     }
     return tensor_type(std::move(result.dimensions));
+}
+
+ValueType
+ValueType::either(const ValueType &one, const ValueType &other)
+{
+    if (one.is_error() || other.is_error()) {
+        return error_type();
+    }
+    if (one == other) {
+        return one;
+    }
+    if (!one.is_tensor() || !other.is_tensor()) {
+        return any_type();
+    }
+    if (one.dimensions().size() != other.dimensions().size()) {
+        return tensor_type({});
+    }
+    std::vector<Dimension> dims;
+    for (size_t i = 0; i < one.dimensions().size(); ++i) {
+        const Dimension &a = one.dimensions()[i];
+        const Dimension &b = other.dimensions()[i];
+        if (a.name != b.name) {
+            return tensor_type({});
+        }
+        if (a.is_mapped() != b.is_mapped()) {
+            return tensor_type({});
+        }
+        if (a.size == b.size) {
+            dims.push_back(a);
+        } else {
+            dims.emplace_back(a.name, 0);
+        }
+    }
+    return tensor_type(std::move(dims));
 }
 
 std::ostream &

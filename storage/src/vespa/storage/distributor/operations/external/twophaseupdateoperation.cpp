@@ -4,23 +4,24 @@
 #include "getoperation.h"
 #include "putoperation.h"
 #include "updateoperation.h"
-#include <vespa/document/fieldvalue/document.h>
-#include <vespa/document/datatype/documenttype.h>
-#include <vespa/document/select/parser.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
 #include <vespa/storageapi/message/persistence.h>
 #include <vespa/storageapi/message/batch.h>
+#include <vespa/document/datatype/documenttype.h>
+#include <vespa/document/select/parser.h>
 #include <vespa/vespalib/stllike/hash_map.hpp>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".distributor.callback.twophaseupdate");
 
 using namespace std::literals::string_literals;
+using document::BucketSpace;
 
-namespace storage {
-namespace distributor {
+namespace storage::distributor {
 
 TwoPhaseUpdateOperation::TwoPhaseUpdateOperation(
         DistributorComponent& manager,
+        DistributorBucketSpace &bucketSpace,
         const std::shared_ptr<api::UpdateCommand>& msg,
         DistributorMetricSet& metrics,
         SequencingHandle sequencingHandle)
@@ -31,6 +32,7 @@ TwoPhaseUpdateOperation::TwoPhaseUpdateOperation(
     _updateCmd(msg),
     _updateReply(),
     _manager(manager),
+    _bucketSpace(bucketSpace),
     _sendState(SendState::NONE_SENT),
     _mode(Mode::FAST_PATH),
     _replySent(false)
@@ -147,7 +149,7 @@ TwoPhaseUpdateOperation::isFastPathPossible() const
 {
     // Fast path iff bucket exists AND is consistent (split and copies).
     std::vector<BucketDatabase::Entry> entries;
-    _manager.getBucketDatabase().getParents(_updateDocBucketId, entries);
+    _bucketSpace.getBucketDatabase().getParents(_updateDocBucketId, entries);
 
     if (entries.size() != 1) {
         return false;
@@ -160,7 +162,7 @@ TwoPhaseUpdateOperation::startFastPathUpdate(DistributorMessageSender& sender)
 {
     _mode = Mode::FAST_PATH;
     std::shared_ptr<UpdateOperation> updateOperation(
-            new UpdateOperation(_manager, _updateCmd, _updateMetric));
+            new UpdateOperation(_manager, _bucketSpace, _updateCmd, _updateMetric));
 
     IntermediateMessageSender intermediate(
             _sentMessageMap, updateOperation, sender);
@@ -180,14 +182,15 @@ TwoPhaseUpdateOperation::startSafePathUpdate(DistributorMessageSender& sender)
         _updateCmd->getDocumentId().toString().c_str());
 
     _mode = Mode::SLOW_PATH;
+    document::Bucket bucket(_updateCmd->getBucket().getBucketSpace(), document::BucketId(0));
     std::shared_ptr<api::GetCommand> get(
             std::make_shared<api::GetCommand>(
-                document::BucketId(0),
+                bucket,
                 _updateCmd->getDocumentId(),
                 "[all]"));
     copyMessageSettings(*_updateCmd, *get);
     std::shared_ptr<GetOperation> getOperation(
-            std::make_shared<GetOperation>(_manager, get, _getMetric));
+            std::make_shared<GetOperation>(_manager, _bucketSpace, get, _getMetric));
 
     IntermediateMessageSender intermediate(
             _sentMessageMap, getOperation, sender);
@@ -222,8 +225,9 @@ TwoPhaseUpdateOperation::onStart(DistributorMessageSender& sender) {
 bool
 TwoPhaseUpdateOperation::lostBucketOwnershipBetweenPhases() const
 {
+    document::Bucket updateDocBucket(_updateCmd->getBucket().getBucketSpace(), _updateDocBucketId);
     BucketOwnership bo(_manager.checkOwnershipInPendingAndCurrentState(
-            _updateDocBucketId));
+            updateDocBucket));
     return !bo.isOwned();
 }
 
@@ -249,11 +253,12 @@ TwoPhaseUpdateOperation::schedulePutsWithUpdatedDocument(
         sendLostOwnershipTransientErrorReply(sender);
         return;
     }
+    document::Bucket bucket(_updateCmd->getBucket().getBucketSpace(), document::BucketId(0));
     std::shared_ptr<api::PutCommand> put(
-            new api::PutCommand(document::BucketId(0), doc, putTimestamp));
+            new api::PutCommand(bucket, doc, putTimestamp));
     copyMessageSettings(*_updateCmd, *put);
     std::shared_ptr<PutOperation> putOperation(
-            new PutOperation(_manager, put, _putMetric));
+            new PutOperation(_manager, _bucketSpace, put, _putMetric));
 
     IntermediateMessageSender intermediate(
             _sentMessageMap, putOperation, sender);
@@ -336,8 +341,9 @@ TwoPhaseUpdateOperation::handleFastPathReceive(
                     _updateCmd->getDocumentId().toString().c_str());
 
                 _updateReply = intermediate._reply;
+                document::Bucket bucket(_updateCmd->getBucket().getBucketSpace(), bestNode.first);
                 std::shared_ptr<api::GetCommand> cmd(
-                    new api::GetCommand(bestNode.first,
+                    new api::GetCommand(bucket,
                     _updateCmd->getDocumentId(),
                     "[all]"));
                 copyMessageSettings(*_updateCmd, *cmd);
@@ -562,5 +568,4 @@ TwoPhaseUpdateOperation::onClose(DistributorMessageSender& sender) {
     }
 }
 
-} // distributor
-} // storage
+}

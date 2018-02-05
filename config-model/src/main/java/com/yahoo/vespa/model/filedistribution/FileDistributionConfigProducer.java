@@ -2,19 +2,23 @@
 package com.yahoo.vespa.model.filedistribution;
 
 import com.yahoo.config.application.api.FileRegistry;
+import com.yahoo.config.model.api.ConfigServerSpec;
 import com.yahoo.config.model.producer.AbstractConfigProducer;
 import com.yahoo.vespa.model.Host;
 import com.yahoo.vespa.model.admin.FileDistributionOptions;
 
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * @author tonytv
+ * @author hmusum
+ * <p>
+ * File distribution config producer, delegates getting config to {@link DummyFileDistributionConfigProducer} (one per host)
  */
 public class FileDistributionConfigProducer extends AbstractConfigProducer {
 
-    private final Map<Host, FileDistributorService> fileDistributorServices = new IdentityHashMap<>();
+    private final Map<Host, AbstractConfigProducer> fileDistributionConfigProducers = new IdentityHashMap<>();
     private final FileDistributor fileDistributor;
     private final FileDistributionOptions options;
 
@@ -22,14 +26,6 @@ public class FileDistributionConfigProducer extends AbstractConfigProducer {
         super(parent, "filedistribution");
         this.fileDistributor = fileDistributor;
         this.options = options;
-    }
-
-    public FileDistributorService getFileDistributorService(Host host) {
-        FileDistributorService service = fileDistributorServices.get(host);
-        if (service == null) {
-            throw new IllegalStateException("No file distribution service for host " + host);
-        }
-        return service;
     }
 
     public FileDistributor getFileDistributor() {
@@ -40,8 +36,8 @@ public class FileDistributionConfigProducer extends AbstractConfigProducer {
         return options;
     }
 
-    public void addFileDistributionService(Host host, FileDistributorService fds) {
-        fileDistributorServices.put(host, fds);
+    public void addFileDistributionConfigProducer(Host host, AbstractConfigProducer fileDistributionConfigProducer) {
+        fileDistributionConfigProducers.put(host, fileDistributionConfigProducer);
     }
 
     public static class Builder {
@@ -52,10 +48,14 @@ public class FileDistributionConfigProducer extends AbstractConfigProducer {
             this.options = fileDistributionOptions;
         }
 
-        public FileDistributionConfigProducer build(AbstractConfigProducer ancestor, FileRegistry fileRegistry) {
-            FileDistributor fileDistributor = new FileDistributor(fileRegistry);
+        public FileDistributionConfigProducer build(AbstractConfigProducer ancestor, FileRegistry fileRegistry, List<ConfigServerSpec> configServerSpec) {
+            FileDistributor fileDistributor = new FileDistributor(fileRegistry, configServerSpec);
             return new FileDistributionConfigProducer(ancestor, fileDistributor, options);
         }
+    }
+
+    public AbstractConfigProducer getConfigProducer(Host host) {
+        return fileDistributionConfigProducers.get(host);
     }
 
 }

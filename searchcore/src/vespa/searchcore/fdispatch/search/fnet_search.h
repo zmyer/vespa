@@ -112,7 +112,7 @@ public:
     bool IsConnected() const { return _channel != NULL; }
     void Connect(FastS_FNET_Engine *engine);
     void Connect_HasDSLock(FastS_FNET_Engine *engine);
-    FastS_EngineBase * getPartition(const FastOS_Mutex & dsMutex, bool userow, FastS_FNET_DataSet *dataset);
+    FastS_EngineBase * getPartition(const std::unique_lock<std::mutex> &dsGuard, bool userow, FastS_FNET_DataSet *dataset);
     void allocGDX(search::docsummary::GetDocsumArgs *args, const search::engine::PropertiesMap &properties);
     void postGDX(uint32_t *pendingDocsums, uint32_t *pendingDocsumNodes);
     vespalib::string toString() const;
@@ -214,7 +214,7 @@ public:
     };
 
 private:
-    FastOS_Mutex             _lock;
+    std::mutex               _lock;
     FastS_TimeKeeper        *_timeKeeper;
     double                   _startTime;
     Timeout                  _timeout;
@@ -272,11 +272,8 @@ private:
     uint32_t getFixedRowCandidate();
     uint32_t getHashedRow() const;
 
-    void Lock()   { _lock.Lock();   }
-    void Unlock() { _lock.Unlock(); }
-
-    bool BeginFNETWork();
-    void EndFNETWork();
+    std::unique_lock<std::mutex> BeginFNETWork();
+    void EndFNETWork(std::unique_lock<std::mutex> searchGuard);
 
     void EncodePartIDs(uint32_t partid, uint32_t rowid, bool mld,
                        FS4Packet_QUERYRESULTX::FS4_hit *pt,
@@ -331,6 +328,10 @@ public:
         _util.SetAlignedHitCount(numHits);
         _util.CalcHitCount();
         _util.AllocAlignedHitBuf();
+    }
+    void ST_AdjustNumHits(uint32_t numHits) {
+        _util.SetAlignedHitCount(numHits);
+        _util.CalcHitCount();
     }
     uint32_t ST_GetAlignedSearchOffset() const { return _util.GetAlignedSearchOffset(); }
     uint32_t ST_GetAlignedMaxHits() const { return _util.GetAlignedMaxHits(); }

@@ -41,7 +41,8 @@ public class RestUri {
         GROUP_AND_EXPRESSION_ERROR(-12),
         TIME_OUT(-13),
         INTERRUPTED(-14),
-        UNSPECIFIED(-15);
+        UNSPECIFIED(-15),
+        UNKNOWN_BUCKET_SPACE(-16);
 
         public final long value;
         apiErrorCodes(long value) {

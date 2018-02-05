@@ -13,6 +13,7 @@
 #include <vespa/searchcore/proton/test/documentdb_config_builder.h>
 #include <vespa/searchsummary/config/config-juniperrc.h>
 #include <vespa/vespalib/io/fileutil.h>
+#include <vespa/config-bucketspaces.h>
 #include <vespa/vespalib/testkit/test_kit.h>
 
 using namespace cloud::config::filedistribution;
@@ -23,6 +24,7 @@ using namespace search::index;
 using namespace search;
 using namespace vespa::config::search::core;
 using namespace vespa::config::search;
+using vespa::config::content::core::BucketspacesConfig;
 using proton::matching::RankingConstants;
 
 typedef DocumentDBConfigHelper DBCM;
@@ -35,16 +37,15 @@ DocumentDBConfig::SP
 makeBaseConfigSnapshot()
 {
     config::DirSpec spec(TEST_PATH("cfg"));
-    ConfigKeySet extraKeySet;
-    extraKeySet.add<MycfgConfig>("");
-    DBCM dbcm(spec, "test", extraKeySet);
+
+    DBCM dbcm(spec, "test");
     DocumenttypesConfigSP dtcfg(config::ConfigGetter<DocumenttypesConfig>::getConfig("", spec).release());
-    BootstrapConfig::SP b(new BootstrapConfig(1,
-                                              dtcfg,
+    BootstrapConfig::SP b(new BootstrapConfig(1, dtcfg,
                                               DocumentTypeRepo::SP(new DocumentTypeRepo(*dtcfg)),
                                               std::make_shared<ProtonConfig>(),
                                               std::make_shared<FiledistributorrpcConfig>(),
-                                              std::make_shared<TuneFileDocumentDB>()));
+                                              std::make_shared<BucketspacesConfig>(),
+                                              std::make_shared<TuneFileDocumentDB>(), HwInfo()));
     dbcm.forwardConfig(b);
     dbcm.nextGeneration(0);
     DocumentDBConfig::SP snap = dbcm.getConfig();
@@ -70,19 +71,6 @@ makeEmptyConfigSnapshot()
 void incInt(int *i, const DocumentType&) { ++*i; }
 
 void
-assertEqualExtraConfigs(const DocumentDBConfig &expSnap, const DocumentDBConfig &actSnap)
-{
-    const ConfigSnapshot &exp = expSnap.getExtraConfigs();
-    const ConfigSnapshot &act = actSnap.getExtraConfigs();
-    EXPECT_EQUAL(1u, exp.size());
-    EXPECT_EQUAL(1u, act.size());
-    std::unique_ptr<MycfgConfig> expCfg = exp.getConfig<MycfgConfig>("");
-    std::unique_ptr<MycfgConfig> actCfg = act.getConfig<MycfgConfig>("");
-    EXPECT_EQUAL("foo", expCfg->myField);
-    EXPECT_EQUAL("foo", actCfg->myField);
-}
-
-void
 assertEqualSnapshot(const DocumentDBConfig &exp, const DocumentDBConfig &act)
 {
     EXPECT_TRUE(exp.getRankProfilesConfig() == act.getRankProfilesConfig());
@@ -106,7 +94,6 @@ assertEqualSnapshot(const DocumentDBConfig &exp, const DocumentDBConfig &act)
     EXPECT_TRUE(*exp.getSchemaSP() == *act.getSchemaSP());
     EXPECT_EQUAL(expTypeCount, actTypeCount);
     EXPECT_EQUAL(exp.getConfigId(), act.getConfigId());
-    assertEqualExtraConfigs(exp, act);
 }
 
 DocumentDBConfig::SP
@@ -160,13 +147,12 @@ TEST_F("requireThatConfigCanBeSerializedAndDeserialized", DocumentDBConfig::SP(m
 TEST_F("requireThatConfigCanBeLoadedWithoutExtraConfigsDataFile", DocumentDBConfig::SP(makeBaseConfigSnapshot()))
 {
     saveBaseConfigSnapshot(*f, 70);
-    EXPECT_TRUE(vespalib::unlink("out/config-70/extraconfigs.dat"));
+    EXPECT_FALSE(vespalib::unlink("out/config-70/extraconfigs.dat"));
     DocumentDBConfig::SP esnap(makeEmptyConfigSnapshot());
     {
         FileConfigManager cm("out", myId, "dummy");
         cm.loadConfig(*esnap, 70, esnap);
     }
-    EXPECT_EQUAL(0u, esnap->getExtraConfigs().size());
 }
 
 
@@ -184,11 +170,9 @@ TEST_F("requireThatVisibilityDelayIsPropagated",
         protonConfigBuilder.maxvisibilitydelay = 100.0;
         FileConfigManager cm("out", myId, "dummy");
         using ProtonConfigSP = BootstrapConfig::ProtonConfigSP;
-        cm.setProtonConfig(
-                ProtonConfigSP(new ProtonConfig(protonConfigBuilder)));
+        cm.setProtonConfig(ProtonConfigSP(new ProtonConfig(protonConfigBuilder)));
         cm.loadConfig(*esnap, 70, esnap);
     }
-    EXPECT_EQUAL(0u, esnap->getExtraConfigs().size());
     EXPECT_EQUAL(61.0, esnap->getMaintenanceConfigSP()->getVisibilityDelay().sec());
 }
 

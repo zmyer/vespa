@@ -42,14 +42,13 @@ private:
     uint32_t countFiles(const vespalib::string &dir);
     void checkFilledDomainTest(const TransLogClient::Session::UP &s1, size_t numEntries);
     bool visitDomainTest(TransLogClient & tls, TransLogClient::Session * s1, const vespalib::string & name);
-    bool subscribeDomainTest(TransLogClient & tls, const vespalib::string & name);
     bool partialUpdateTest();
-    bool test1();
+    bool testVisitOverGeneratedDomain();
     bool testRemove();
     void createAndFillDomain(const vespalib::string & name, DomainPart::Crc crcMethod, size_t preExistingDomains);
     void verifyDomain(const vespalib::string & name);
     void testCrcVersions();
-    bool test2();
+    bool testVisitOverPreExistingDomain();
     void testMany();
     void testErase();
     void testSync();
@@ -59,22 +58,20 @@ private:
 
 TEST_APPHOOK(Test);
 
-class CallBackTest : public TransLogClient::Subscriber::Callback
+class CallBackTest : public TransLogClient::Visitor::Callback
 {
 private:
     virtual RPC::Result receive(const Packet & packet) override;
-    virtual void inSync() override { _inSync = true; }
     virtual void eof()    override { _eof = true; }
     typedef std::map<SerialNum, ByteBuffer> PacketMap;
     PacketMap _packetMap;
 public:
-    CallBackTest() : _inSync(false), _eof(false) { }
+    CallBackTest() : _eof(false) { }
     size_t size() const { return _packetMap.size(); }
     bool hasSerial(SerialNum n) const { return (_packetMap.find(n) != _packetMap.end()); }
-    void clear() { _inSync = false; _eof = false; _packetMap.clear(); }
+    void clear() {  _eof = false; _packetMap.clear(); }
     const ByteBuffer & packet(SerialNum n) { return (_packetMap.find(n)->second); }
 
-    bool      _inSync;
     bool      _eof;
 };
 
@@ -91,16 +88,14 @@ RPC::Result CallBackTest::receive(const Packet & p)
     return RPC::OK;
 }
 
-class CallBackManyTest : public TransLogClient::Subscriber::Callback
+class CallBackManyTest : public TransLogClient::Visitor::Callback
 {
 private:
     virtual RPC::Result receive(const Packet & packet) override;
-    virtual void inSync() override { _inSync = true; }
     virtual void eof()    override { _eof = true; }
 public:
-    CallBackManyTest(size_t start) : _inSync(false), _eof(false), _count(start), _value(start) { }
-    void clear() { _inSync = false; _eof = false; _count = 0; _value = 0; }
-    bool      _inSync;
+    CallBackManyTest(size_t start) : _eof(false), _count(start), _value(start) { }
+    void clear() { _eof = false; _count = 0; _value = 0; }
     bool      _eof;
     size_t    _count;
     size_t    _value;
@@ -121,21 +116,19 @@ RPC::Result CallBackManyTest::receive(const Packet & p)
     return RPC::OK;
 }
 
-class CallBackUpdate : public TransLogClient::Subscriber::Callback
+class CallBackUpdate : public TransLogClient::Visitor::Callback
 {
 public:
     typedef std::map<SerialNum, Identifiable *> PacketMap;
 private:
     virtual RPC::Result receive(const Packet & packet) override;
-    virtual void inSync() override { _inSync = true; }
     virtual void eof()    override { _eof = true; }
     PacketMap _packetMap;
 public:
-    CallBackUpdate() : _inSync(false), _eof(false) { }
+    CallBackUpdate() : _eof(false) { }
     virtual ~CallBackUpdate()         { while (_packetMap.begin() != _packetMap.end()) { delete _packetMap.begin()->second; _packetMap.erase(_packetMap.begin()); } }
     bool hasSerial(SerialNum n) const { return (_packetMap.find(n) != _packetMap.end()); }
     const PacketMap & map() const { return _packetMap; }
-    bool      _inSync;
     bool      _eof;
 };
 
@@ -176,16 +169,14 @@ class CallBackStatsTest : public TransLogClient::Session::Callback
 {
 private:
     virtual RPC::Result receive(const Packet & packet) override;
-    virtual void inSync() override { _inSync = true; }
     virtual void eof()    override { _eof = true; }
 public:
-    CallBackStatsTest() : _inSync(false), _eof(false),
+    CallBackStatsTest() : _eof(false),
                           _count(0), _inOrder(0),
                           _firstSerial(0), _lastSerial(0),
                           _prevSerial(0) { }
-    void clear() { _inSync = false; _eof = false; _count = 0; _inOrder = 0;
+    void clear() { _eof = false; _count = 0; _inOrder = 0;
         _firstSerial = 0; _lastSerial = 0; _inOrder = 0; }
-    bool      _inSync;
     bool      _eof;
     uint64_t  _count;
     uint64_t  _inOrder; // increase when next entry is one above previous
@@ -258,7 +249,6 @@ bool Test::partialUpdateTest()
     ASSERT_TRUE(visitor.get());
     ASSERT_TRUE( visitor->visit(5, 7) );
     for (size_t i(0); ! ca._eof && (i < 1000); i++ ) { FastOS_Thread::Sleep(10); }
-    ASSERT_TRUE( ! ca._inSync );
     ASSERT_TRUE( ca._eof );
     ASSERT_TRUE( ca.map().size() == 1);
     ASSERT_TRUE( ca.hasSerial(7) );
@@ -268,7 +258,6 @@ bool Test::partialUpdateTest()
     ASSERT_TRUE(visitor1.get());
     ASSERT_TRUE( visitor1->visit(4, 5) );
     for (size_t i(0); ! ca1._eof && (i < 1000); i++ ) { FastOS_Thread::Sleep(10); }
-    ASSERT_TRUE( ! ca1._inSync );
     ASSERT_TRUE( ca1._eof );
     ASSERT_TRUE( ca1.map().size() == 0);
 
@@ -277,7 +266,6 @@ bool Test::partialUpdateTest()
     ASSERT_TRUE(visitor2.get());
     ASSERT_TRUE( visitor2->visit(5, 6) );
     for (size_t i(0); ! ca2._eof && (i < 1000); i++ ) { FastOS_Thread::Sleep(10); }
-    ASSERT_TRUE( ! ca2._inSync );
     ASSERT_TRUE( ca2._eof );
     ASSERT_TRUE( ca2.map().size() == 0);
 
@@ -286,7 +274,6 @@ bool Test::partialUpdateTest()
     ASSERT_TRUE(visitor3.get());
     ASSERT_TRUE( visitor3->visit(5, 1000) );
     for (size_t i(0); ! ca3._eof && (i < 1000); i++ ) { FastOS_Thread::Sleep(10); }
-    ASSERT_TRUE( ! ca3._inSync );
     ASSERT_TRUE( ca3._eof );
     ASSERT_TRUE( ca3.map().size() == 1);
     ASSERT_TRUE( ca3.hasSerial(7) );
@@ -451,7 +438,6 @@ bool Test::visitDomainTest(TransLogClient & tls, TransLogClient::Session * s1, c
     ASSERT_TRUE(visitor.get());
     EXPECT_TRUE( visitor->visit(0, 1) );
     for (size_t i(0); ! ca._eof && (i < 60000); i++ ) { FastOS_Thread::Sleep(10); }
-    EXPECT_TRUE( ! ca._inSync );
     EXPECT_TRUE( ca._eof );
     EXPECT_TRUE( ! ca.hasSerial(0) );
     EXPECT_TRUE( ca.hasSerial(1) );
@@ -462,7 +448,6 @@ bool Test::visitDomainTest(TransLogClient & tls, TransLogClient::Session * s1, c
     ASSERT_TRUE(visitor.get());
     EXPECT_TRUE( visitor->visit(1, 2) );
     for (size_t i(0); ! ca._eof && (i < 60000); i++ ) { FastOS_Thread::Sleep(10); }
-    EXPECT_TRUE( ! ca._inSync );
     EXPECT_TRUE( ca._eof );
     EXPECT_TRUE( ! ca.hasSerial(0) );
     EXPECT_TRUE( ! ca.hasSerial(1) );
@@ -474,7 +459,6 @@ bool Test::visitDomainTest(TransLogClient & tls, TransLogClient::Session * s1, c
     EXPECT_TRUE(visitor.get());
     EXPECT_TRUE( visitor->visit(0, 3) );
     for (size_t i(0); ! ca._eof && (i < 60000); i++ ) { FastOS_Thread::Sleep(10); }
-    EXPECT_TRUE( ! ca._inSync );
     EXPECT_TRUE( ca._eof );
     EXPECT_TRUE( ! ca.hasSerial(0) );
     EXPECT_TRUE( ca.hasSerial(1) );
@@ -486,7 +470,6 @@ bool Test::visitDomainTest(TransLogClient & tls, TransLogClient::Session * s1, c
     ASSERT_TRUE(visitor.get());
     EXPECT_TRUE( visitor->visit(2, 3) );
     for (size_t i(0); ! ca._eof && (i < 60000); i++ ) { FastOS_Thread::Sleep(10); }
-    EXPECT_TRUE( ! ca._inSync );
     EXPECT_TRUE( ca._eof );
     EXPECT_TRUE( ! ca.hasSerial(0) );
     EXPECT_TRUE( !ca.hasSerial(1) );
@@ -497,24 +480,13 @@ bool Test::visitDomainTest(TransLogClient & tls, TransLogClient::Session * s1, c
     return retval;
 }
 
-bool Test::subscribeDomainTest(TransLogClient & tls, const vespalib::string & name)
+double
+getMaxSessionRunTime(TransLogServer &tls, const vespalib::string &domain)
 {
-    bool retval(true);
-    CallBackTest ca;
-    TransLogClient::Subscriber::UP subscriber = tls.createSubscriber(name, ca);
-    ASSERT_TRUE(subscriber.get());
-    ASSERT_TRUE( subscriber->subscribe(0) );
-    for (size_t i(0); ! ca._inSync && (i < 60000); i++ ) { FastOS_Thread::Sleep(10); }
-    ASSERT_TRUE( ca._inSync );
-    ASSERT_TRUE( ! ca.hasSerial(0) );
-    ASSERT_TRUE( ! ca._eof );
-    ASSERT_TRUE( ca.hasSerial(1) );
-    ASSERT_TRUE( ca.hasSerial(2) );
-    ASSERT_TRUE( ca.hasSerial(3) );
-    return retval;
+    return tls.getDomainStats()[domain].maxSessionRunTime.count();
 }
 
-bool Test::test1()
+bool Test::testVisitOverGeneratedDomain()
 {
     DummyFileHeaderContext fileHeaderContext;
     TransLogServer tlss("test7", 18377, ".", fileHeaderContext, 0x10000);
@@ -524,15 +496,18 @@ bool Test::test1()
     createDomainTest(tls, name);
     TransLogClient::Session::UP s1 = openDomainTest(tls, name);
     fillDomainTest(s1.get(), name);
+    EXPECT_EQUAL(0, getMaxSessionRunTime(tlss, "test1"));
     visitDomainTest(tls, s1.get(), name);
-    subscribeDomainTest(tls, name);
+    double maxSessionRunTime = getMaxSessionRunTime(tlss, "test1");
+    LOG(info, "testVisitOverGeneratedDomain(): maxSessionRunTime=%f", maxSessionRunTime);
+    EXPECT_GREATER(maxSessionRunTime, 0);
     return true;
 }
 
 void Test::createAndFillDomain(const vespalib::string & name, DomainPart::Crc crcMethod, size_t preExistingDomains)
 {
     DummyFileHeaderContext fileHeaderContext;
-    TransLogServer tlss("test13", 18377, ".", fileHeaderContext, 0x10000, false, 4, crcMethod);
+    TransLogServer tlss("test13", 18377, ".", fileHeaderContext, 0x10000, 4, crcMethod);
     TransLogClient tls("tcp/localhost:18377");
 
     createDomainTest(tls, name, preExistingDomains);
@@ -569,14 +544,14 @@ bool Test::testRemove()
     TransLogClient::Session::UP s1 = openDomainTest(tls, name);
     fillDomainTest(s1.get(), name);
     visitDomainTest(tls, s1.get(), name);
-    subscribeDomainTest(tls, name);
     ASSERT_TRUE(tls.remove(name));
 
     return true;
 }
 
-bool Test::test2()
+bool Test::testVisitOverPreExistingDomain()
 {
+    // Depends on Test::testVisitOverGeneratedDomain()
     DummyFileHeaderContext fileHeaderContext;
     TransLogServer tlss("test7", 18377, ".", fileHeaderContext, 0x10000);
     TransLogClient tls("tcp/localhost:18377");
@@ -584,7 +559,6 @@ bool Test::test2()
     vespalib::string name("test1");
     TransLogClient::Session::UP s1 = openDomainTest(tls, name);
     visitDomainTest(tls, s1.get(), name);
-    subscribeDomainTest(tls, name);
     return true;
 }
 
@@ -603,7 +577,6 @@ assertVisitStats(TransLogClient &tls, const vespalib::string &domain,
     for (size_t i(0); ! ca._eof && (i < 60000); i++ ) {
         FastOS_Thread::Sleep(10);
     }
-    ASSERT_TRUE(!ca._inSync);
     ASSERT_TRUE(ca._eof);
     EXPECT_EQUAL(expFirstSerial, ca._firstSerial);
     EXPECT_EQUAL(expLastSerial, ca._lastSerial);
@@ -651,7 +624,6 @@ void Test::testMany()
         ASSERT_TRUE(visitor.get());
         ASSERT_TRUE( visitor->visit(2, TOTAL_NUM_ENTRIES) );
         for (size_t i(0); ! ca._eof && (i < 60000); i++ ) { FastOS_Thread::Sleep(10); }
-        ASSERT_TRUE( ! ca._inSync );
         ASSERT_TRUE( ca._eof );
         EXPECT_EQUAL(ca._count, TOTAL_NUM_ENTRIES);
         EXPECT_EQUAL(ca._value, TOTAL_NUM_ENTRIES);
@@ -673,7 +645,6 @@ void Test::testMany()
         ASSERT_TRUE(visitor.get());
         ASSERT_TRUE( visitor->visit(2, TOTAL_NUM_ENTRIES) );
         for (size_t i(0); ! ca._eof && (i < 60000); i++ ) { FastOS_Thread::Sleep(10); }
-        ASSERT_TRUE( ! ca._inSync );
         ASSERT_TRUE( ca._eof );
         EXPECT_EQUAL(ca._count, TOTAL_NUM_ENTRIES);
         EXPECT_EQUAL(ca._value, TOTAL_NUM_ENTRIES);
@@ -908,8 +879,8 @@ int Test::Main()
     if (_argc > 0) {
         DummyFileHeaderContext::setCreator(_argv[0]);
     }
-    test1();
-    test2();
+    testVisitOverGeneratedDomain();
+    testVisitOverPreExistingDomain();
     testMany();
     testErase();
     partialUpdateTest();

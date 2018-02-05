@@ -8,7 +8,35 @@
 #include <vespa/log/log.h>
 LOG_SETUP(".persistence.filestor.modifiedbucketchecker");
 
+using document::BucketSpace;
+
 namespace storage {
+
+ModifiedBucketChecker::CyclicBucketSpaceIterator::
+CyclicBucketSpaceIterator(const ContentBucketSpaceRepo::BucketSpaces &bucketSpaces)
+    : _bucketSpaces(bucketSpaces),
+      _idx(0)
+{
+    std::sort(_bucketSpaces.begin(), _bucketSpaces.end());
+}
+
+ModifiedBucketChecker::BucketIdListResult::BucketIdListResult()
+    : _bucketSpace(document::BucketSpace::invalid()),
+      _buckets()
+{
+}
+
+void
+ModifiedBucketChecker::BucketIdListResult::reset(document::BucketSpace bucketSpace,
+                                                 document::bucket::BucketIdList &buckets)
+{
+    _bucketSpace = bucketSpace;
+    assert(_buckets.empty());
+    _buckets.swap(buckets);
+    // We pick chunks from the end of the list, so reverse it to get
+    // the same send order as order received.
+    std::reverse(_buckets.begin(), _buckets.end());
+}
 
 ModifiedBucketChecker::ModifiedBucketChecker(
         ServiceLayerComponentRegister& compReg,
@@ -21,6 +49,8 @@ ModifiedBucketChecker::ModifiedBucketChecker(
       _configFetcher(configUri.getContext()),
       _monitor(),
       _stateLock(),
+      _bucketSpaces(),
+      _rechecksNotStarted(),
       _pendingRequests(0),
       _maxPendingChunkSize(100),
       _singleThreadMode(false)
@@ -31,6 +61,7 @@ ModifiedBucketChecker::ModifiedBucketChecker(
     std::ostringstream threadName;
     threadName << "Modified bucket checker " << static_cast<void*>(this);
     _component.reset(new ServiceLayerComponent(compReg, threadName.str()));
+    _bucketSpaces = std::make_unique<CyclicBucketSpaceIterator>(_component->getBucketSpaceRepo().getBucketSpaces());
 }
 
 ModifiedBucketChecker::~ModifiedBucketChecker()
@@ -118,9 +149,9 @@ ModifiedBucketChecker::onInternalReply(
 }
 
 bool
-ModifiedBucketChecker::requestModifiedBucketsFromProvider()
+ModifiedBucketChecker::requestModifiedBucketsFromProvider(document::BucketSpace bucketSpace)
 {
-    spi::BucketIdListResult result(_provider.getModifiedBuckets());
+    spi::BucketIdListResult result(_provider.getModifiedBuckets(bucketSpace));
     if (result.hasError()) {
         LOG(debug, "getModifiedBuckets() failed: %s",
             result.toString().c_str());
@@ -128,11 +159,7 @@ ModifiedBucketChecker::requestModifiedBucketsFromProvider()
     }
     {
         vespalib::LockGuard guard(_stateLock);
-        assert(_rechecksNotStarted.empty());
-        _rechecksNotStarted.swap(result.getList());
-        // We pick chunks from the end of the list, so reverse it to get
-        // the same send order as order received.
-        std::reverse(_rechecksNotStarted.begin(), _rechecksNotStarted.end());
+        _rechecksNotStarted.reset(bucketSpace, result.getList());
     }
     return true;
 }
@@ -146,8 +173,8 @@ ModifiedBucketChecker::nextRecheckChunk(
     size_t n = std::min(_maxPendingChunkSize, _rechecksNotStarted.size());
 
     for (size_t i = 0; i < n; ++i) {
-        document::BucketId bid(_rechecksNotStarted.back());
-        commandsToSend.emplace_back(new RecheckBucketInfoCommand(bid));
+        document::Bucket bucket(_rechecksNotStarted.bucketSpace(), _rechecksNotStarted.back());
+        commandsToSend.emplace_back(new RecheckBucketInfoCommand(bucket));
         _rechecksNotStarted.pop_back();
     }
     _pendingRequests = n;
@@ -182,7 +209,7 @@ ModifiedBucketChecker::tick()
         shouldRequestFromProvider = !moreChunksRemaining();
     }
     if (shouldRequestFromProvider) {
-        if (!requestModifiedBucketsFromProvider()) {
+        if (!requestModifiedBucketsFromProvider(_bucketSpaces->next())) {
             return false;
         }
     }

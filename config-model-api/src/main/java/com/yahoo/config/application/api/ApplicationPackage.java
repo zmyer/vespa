@@ -4,9 +4,9 @@ package com.yahoo.config.application.api;
 import com.yahoo.config.provision.AllocatedHosts;
 import com.yahoo.config.provision.Version;
 import com.yahoo.config.provision.Zone;
-import com.yahoo.path.Path;
 import com.yahoo.io.IOUtils;
 import com.yahoo.io.reader.NamedReader;
+import com.yahoo.path.Path;
 import com.yahoo.text.XML;
 import com.yahoo.vespa.config.ConfigDefinitionKey;
 import org.w3c.dom.Element;
@@ -14,8 +14,17 @@ import org.xml.sax.SAXException;
 
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.transform.TransformerException;
-import java.io.*;
-import java.util.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
@@ -32,18 +41,24 @@ import java.util.jar.JarFile;
  */
 public interface ApplicationPackage {
 
-    // Caution!! If you add something here it must probably also be added to ZooKeeperClient.feedZKAppPkg
+    // Caution!! If you add something here it must probably also be added to ZooKeeperClient.write(applicationPackage)
 
     String HOSTS = "hosts.xml";
     String SERVICES = "services.xml";
 
     Path SEARCH_DEFINITIONS_DIR = Path.fromString("searchdefinitions");
     String COMPONENT_DIR = "components";
-    String TEMPLATES_DIR = "templates";
     String SEARCHCHAINS_DIR = "search/chains";
     String DOCPROCCHAINS_DIR = "docproc/chains";
     String PROCESSORCHAINS_DIR = "processor/chains";
     String ROUTINGTABLES_DIR = "routing/tables";
+
+    /** Machine-learned models - only present in user-uploaded package instances */
+    Path MODELS_DIR = Path.fromString("models");
+    /** Files generated from machine-learned models */
+    Path MODELS_GENERATED_DIR = Path.fromString("models.generated");
+    /** Files generated from machine-learned models which should be replicated in ZooKeeper */
+    Path MODELS_GENERATED_REPLICATED_DIR = MODELS_GENERATED_DIR.append("replicated");
 
     // NOTE: this directory is created in serverdb during deploy, and should not exist in the original user application
     /** Do not use */
@@ -121,7 +136,7 @@ public interface ApplicationPackage {
      */
     List<NamedReader> getFiles(Path pathFromRoot, String suffix, boolean recurse);
 
-    /** Same as getFiles(pathFromRoot,suffix,false) */
+    /** Same as getFiles(pathFromRoot, suffix, false) */
     default List<NamedReader> getFiles(Path pathFromRoot, String suffix) {
         return getFiles(pathFromRoot,suffix,false);
     }
@@ -228,9 +243,9 @@ public interface ApplicationPackage {
         throw new UnsupportedOperationException("This application package cannot write its metadata");
     }
 
-    /** 
-     * Returns the single host allocation info of this, or an empty map if no allocation is available 
-     * 
+    /**
+     * Returns the single host allocation info of this, or an empty map if no allocation is available
+     *
      * @deprecated please use #getAllocatedHosts
      */
     // TODO: Remove on Vespa 7
@@ -261,7 +276,24 @@ public interface ApplicationPackage {
      *
      * @return A new application package instance pointing to a new location
      */
-    default ApplicationPackage preprocess(Zone zone, RuleConfigDeriver ruleConfigDeriver, DeployLogger logger) throws IOException, TransformerException, ParserConfigurationException, SAXException {
+    // TODO: Remove when last version in use is 6.202
+    default ApplicationPackage preprocess(Zone zone, RuleConfigDeriver ruleConfigDeriver, DeployLogger logger)
+        throws IOException, TransformerException, ParserConfigurationException, SAXException {
+        throw new UnsupportedOperationException("This application package does not support preprocessing");
+    }
+
+    /**
+     * Preprocess an application for a given zone and return a new application package pointing to the preprocessed
+     * application package. This is the entry point for the multi environment application package support. This method
+     * will not mutate the existing application package.
+     *
+     * @param zone A valid {@link Zone} instance, used to decide which parts of services to keep and remove
+     * @param logger A {@link DeployLogger} to add output that will be returned to the user
+     *
+     * @return A new application package instance pointing to a new location
+     */
+    default ApplicationPackage preprocess(Zone zone, DeployLogger logger)
+            throws IOException, TransformerException, ParserConfigurationException, SAXException {
         throw new UnsupportedOperationException("This application package does not support preprocessing");
     }
 

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.yahoo.concurrent.ThreadFactoryFactory;
 import com.yahoo.vespa.hosted.dockerapi.Container;
 import com.yahoo.vespa.hosted.dockerapi.ContainerName;
+import com.yahoo.vespa.hosted.dockerapi.ContainerResources;
 import com.yahoo.vespa.hosted.dockerapi.Docker;
 import com.yahoo.vespa.hosted.dockerapi.DockerException;
 import com.yahoo.vespa.hosted.dockerapi.DockerExecTimeoutException;
@@ -16,7 +17,6 @@ import com.yahoo.vespa.hosted.dockerapi.metrics.MetricReceiverWrapper;
 import com.yahoo.vespa.hosted.node.admin.ContainerNodeSpec;
 import com.yahoo.vespa.hosted.node.admin.docker.DockerOperations;
 import com.yahoo.vespa.hosted.node.admin.maintenance.StorageMaintainer;
-import com.yahoo.vespa.hosted.node.admin.maintenance.acl.AclMaintainer;
 import com.yahoo.vespa.hosted.node.admin.noderepository.NodeRepository;
 import com.yahoo.vespa.hosted.node.admin.orchestrator.Orchestrator;
 import com.yahoo.vespa.hosted.node.admin.orchestrator.OrchestratorException;
@@ -58,6 +58,7 @@ public class NodeAgentImpl implements NodeAgent {
     private boolean isFrozen = true;
     private boolean wantFrozen = false;
     private boolean workToDoNow = true;
+    private boolean expectNodeNotInNodeRepo = false;
 
     private final Object monitor = new Object();
 
@@ -70,7 +71,7 @@ public class NodeAgentImpl implements NodeAgent {
     private final Orchestrator orchestrator;
     private final DockerOperations dockerOperations;
     private final StorageMaintainer storageMaintainer;
-    private final AclMaintainer aclMaintainer;
+    private final Runnable aclMaintainer;
     private final Environment environment;
     private final Clock clock;
     private final Duration timeBetweenEachConverge;
@@ -115,7 +116,7 @@ public class NodeAgentImpl implements NodeAgent {
             final Orchestrator orchestrator,
             final DockerOperations dockerOperations,
             final StorageMaintainer storageMaintainer,
-            final AclMaintainer aclMaintainer,
+            final Runnable aclMaintainer,
             final Environment environment,
             final Clock clock,
             final Duration timeBetweenEachConverge) {
@@ -318,6 +319,13 @@ public class NodeAgentImpl implements NodeAgent {
         if (!existingContainer.state.isRunning()) {
             return Optional.of("Container no longer running");
         }
+
+        ContainerResources wantedContainerResources = ContainerResources.from(
+                nodeSpec.minCpuCores, nodeSpec.minMainMemoryAvailableGb);
+        if (!wantedContainerResources.equals(existingContainer.resources)) {
+            return Optional.of("Container should be running with different resource allocation, wanted: " +
+                    wantedContainerResources + ", actual: " + existingContainer.resources);
+        }
         return Optional.empty();
     }
 
@@ -338,7 +346,7 @@ public class NodeAgentImpl implements NodeAgent {
                 }
             }
             if (currentFilebeatRestarter != null) currentFilebeatRestarter.cancel(true);
-            dockerOperations.removeContainer(existingContainer);
+            dockerOperations.removeContainer(existingContainer, nodeSpec);
             containerState = ABSENT;
             logger.info("Container successfully removed, new containerState is " + containerState);
             return Optional.empty();
@@ -371,7 +379,9 @@ public class NodeAgentImpl implements NodeAgent {
         boolean isFrozenCopy;
         synchronized (monitor) {
             while (!workToDoNow) {
-                long remainder = timeBetweenEachConverge.minus(Duration.between(lastConverge, clock.instant())).toMillis();
+                long remainder = timeBetweenEachConverge
+                        .minus(Duration.between(lastConverge, clock.instant()))
+                        .toMillis();
                 if (remainder > 0) {
                     try {
                         monitor.wait(remainder);
@@ -406,7 +416,7 @@ public class NodeAgentImpl implements NodeAgent {
                 // therefore be reset if we get an exception from docker.
                 numberOfUnhandledException++;
                 containerState = UNKNOWN;
-                logger.error("Caught a DockerExecption, resetting containerState to " + containerState, e);
+                logger.error("Caught a DockerException, resetting containerState to " + containerState, e);
             } catch (Exception e) {
                 numberOfUnhandledException++;
                 logger.error("Unhandled exception, ignoring.", e);
@@ -420,9 +430,15 @@ public class NodeAgentImpl implements NodeAgent {
 
     // Public for testing
     void converge() {
-        final ContainerNodeSpec nodeSpec = nodeRepository.getContainerNodeSpec(hostname)
-                .orElseThrow(() ->
-                        new IllegalStateException(String.format("Node '%s' missing from node repository.", hostname)));
+        final Optional<ContainerNodeSpec> nodeSpecOptional = nodeRepository.getContainerNodeSpec(hostname);
+
+        // We just removed the node from node repo, so this is expected until NodeAdmin stop this NodeAgent
+        if (!nodeSpecOptional.isPresent() && expectNodeNotInNodeRepo) return;
+
+        final ContainerNodeSpec nodeSpec = nodeSpecOptional.orElseThrow(() ->
+                new IllegalStateException(String.format("Node '%s' missing from node repository.", hostname)));
+        expectNodeNotInNodeRepo = false;
+
 
         Optional<Container> container = getContainer();
         if (!nodeSpec.equals(lastNodeSpec)) {
@@ -492,6 +508,7 @@ public class NodeAgentImpl implements NodeAgent {
                 storageMaintainer.cleanupNodeStorage(containerName, nodeSpec);
                 updateNodeRepoWithCurrentAttributes(nodeSpec);
                 nodeRepository.markNodeAvailableForNewAllocation(hostname);
+                expectNodeNotInNodeRepo = true;
                 break;
             default:
                 throw new RuntimeException("UNKNOWN STATE " + nodeSpec.nodeState.name());
@@ -516,6 +533,7 @@ public class NodeAgentImpl implements NodeAgent {
         Docker.ContainerStats stats = containerStats.get();
         final String APP = MetricReceiverWrapper.APPLICATION_NODE;
         final int totalNumCpuCores = ((List<Number>) ((Map) stats.getCpuStats().get("cpu_usage")).get("percpu_usage")).size();
+        final long cpuContainerKernelTime = ((Number) ((Map) stats.getCpuStats().get("cpu_usage")).get("usage_in_kernelmode")).longValue();
         final long cpuContainerTotalTime = ((Number) ((Map) stats.getCpuStats().get("cpu_usage")).get("total_usage")).longValue();
         final long cpuSystemTotalTime = ((Number) stats.getCpuStats().get("system_cpu_usage")).longValue();
         final long memoryTotalBytes = ((Number) stats.getMemoryStats().get("limit")).longValue();
@@ -524,26 +542,28 @@ public class NodeAgentImpl implements NodeAgent {
         final long diskTotalBytes = (long) (nodeSpec.minDiskAvailableGb * BYTES_IN_GB);
         final Optional<Long> diskTotalBytesUsed = storageMaintainer.getDiskUsageFor(containerName);
 
-        // CPU usage by a container as percentage of total host CPU, cpuPercentageOfHost, is given by dividing used
-        // CPU time by the container with CPU time used by the entire system.
-        // CPU usage by a container as percentage of total CPU allocated to it is given by dividing the
-        // cpuPercentageOfHost with the ratio of container minCpuCores by total number of CPU cores.
-        double cpuPercentageOfHost = lastCpuMetric.getCpuUsagePercentage(cpuContainerTotalTime, cpuSystemTotalTime);
-        double cpuPercentageOfAllocated = totalNumCpuCores * cpuPercentageOfHost / nodeSpec.minCpuCores;
+        lastCpuMetric.updateCpuDeltas(cpuSystemTotalTime, cpuContainerTotalTime, cpuContainerKernelTime);
+
+        // Ratio of CPU cores allocated to this container to total number of CPU cores on this host
+        final double allocatedCpuRatio = nodeSpec.minCpuCores / totalNumCpuCores;
+        double cpuUsageRatioOfAllocated = lastCpuMetric.getCpuUsageRatio() / allocatedCpuRatio;
+        double cpuKernelUsageRatioOfAllocated = lastCpuMetric.getCpuKernelUsageRatio() / allocatedCpuRatio;
+
         long memoryTotalBytesUsed = memoryTotalBytesUsage - memoryTotalBytesCache;
-        double memoryPercentUsed = 100.0 * memoryTotalBytesUsed / memoryTotalBytes;
-        Optional<Double> diskPercentUsed = diskTotalBytesUsed.map(used -> 100.0 * used / diskTotalBytes);
+        double memoryUsageRatio = (double) memoryTotalBytesUsed / memoryTotalBytes;
+        Optional<Double> diskUsageRatio = diskTotalBytesUsed.map(used -> (double) used / diskTotalBytes);
 
         List<DimensionMetrics> metrics = new ArrayList<>();
         DimensionMetrics.Builder systemMetricsBuilder = new DimensionMetrics.Builder(APP, dimensions)
                 .withMetric("mem.limit", memoryTotalBytes)
                 .withMetric("mem.used", memoryTotalBytesUsed)
-                .withMetric("mem.util", memoryPercentUsed)
-                .withMetric("cpu.util", cpuPercentageOfAllocated)
+                .withMetric("mem.util", 100 * memoryUsageRatio)
+                .withMetric("cpu.util", 100 * cpuUsageRatioOfAllocated)
+                .withMetric("cpu.sys.util", 100 * cpuKernelUsageRatioOfAllocated)
                 .withMetric("disk.limit", diskTotalBytes);
 
         diskTotalBytesUsed.ifPresent(diskUsed -> systemMetricsBuilder.withMetric("disk.used", diskUsed));
-        diskPercentUsed.ifPresent(diskUtil -> systemMetricsBuilder.withMetric("disk.util", diskUtil));
+        diskUsageRatio.ifPresent(diskRatio -> systemMetricsBuilder.withMetric("disk.util", 100 * diskRatio));
         metrics.add(systemMetricsBuilder.build());
 
         stats.getNetworks().forEach((interfaceName, interfaceStats) -> {
@@ -604,17 +624,35 @@ public class NodeAgentImpl implements NodeAgent {
     }
 
     class CpuUsageReporter {
+        private long containerKernelUsage = 0;
         private long totalContainerUsage = 0;
         private long totalSystemUsage = 0;
 
-        double getCpuUsagePercentage(long currentContainerUsage, long currentSystemUsage) {
-            long deltaSystemUsage = currentSystemUsage - totalSystemUsage;
-            double cpuUsagePct = (deltaSystemUsage == 0 || totalSystemUsage == 0) ?
-                    0 : 100.0 * (currentContainerUsage - totalContainerUsage) / deltaSystemUsage;
+        private long deltaContainerKernelUsage;
+        private long deltaContainerUsage;
+        private long deltaSystemUsage;
 
-            totalContainerUsage = currentContainerUsage;
-            totalSystemUsage = currentSystemUsage;
-            return cpuUsagePct;
+        private void updateCpuDeltas(long totalSystemUsage, long totalContainerUsage, long containerKernelUsage) {
+            deltaSystemUsage = this.totalSystemUsage == 0 ? 0 : (totalSystemUsage - this.totalSystemUsage);
+            deltaContainerUsage = totalContainerUsage - this.totalContainerUsage;
+            deltaContainerKernelUsage = containerKernelUsage - this.containerKernelUsage;
+
+            this.totalSystemUsage = totalSystemUsage;
+            this.totalContainerUsage = totalContainerUsage;
+            this.containerKernelUsage = containerKernelUsage;
+        }
+
+        /**
+         * Returns the CPU usage ratio for the docker container that this NodeAgent is managing
+         * in the time between the last two times updateCpuDeltas() was called. This is calculated
+         * by dividing the CPU time used by the container with the CPU time used by the entire system.
+         */
+        double getCpuUsageRatio() {
+            return deltaSystemUsage == 0 ? Double.NaN : (double) deltaContainerUsage / deltaSystemUsage;
+        }
+
+        double getCpuKernelUsageRatio() {
+            return deltaSystemUsage == 0 ? Double.NaN : (double) deltaContainerKernelUsage / deltaSystemUsage;
         }
     }
 

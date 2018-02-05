@@ -2,7 +2,6 @@
 
 #include "visitor.h"
 #include "visitormetrics.h"
-#include <vespa/storageframework/generic/memory/memorymanagerinterface.h>
 #include <vespa/storageframework/generic/clock/timer.h>
 #include <vespa/storageapi/message/datagram.h>
 #include <vespa/storage/persistence/messages.h>
@@ -16,6 +15,8 @@
 
 #include <vespa/log/log.h>
 LOG_SETUP(".visitor.instance");
+
+using document::BucketSpace;
 
 namespace storage {
 
@@ -211,7 +212,7 @@ Visitor::BucketIterationState::~BucketIterationState()
         LOG(debug, "Visitor '%s' sending DestroyIteratorCommand for %s, "
             "iterator id %zu.",
             _visitor._id.c_str(),
-            _bucketId.toString().c_str(),
+            _bucket.getBucketId().toString().c_str(),
             uint64_t(_iteratorId));
         _messageHandler.send(cmd, _visitor);
     }
@@ -242,6 +243,7 @@ Visitor::Visitor(StorageComponent& component)
       _visitorTarget(),
       _state(STATE_NOT_STARTED),
       _buckets(),
+      _bucketSpace(BucketSpace::invalid()),
       _currentBucket(),
       _bucketStates(),
       _calledStartingVisitor(false),
@@ -264,8 +266,7 @@ Visitor::Visitor(StorageComponent& component)
       _id(),
       _controlDestination(),
       _dataDestination(),
-      _documentSelection(),
-      _memoryManager(0)
+      _documentSelection()
 {
 }
 
@@ -600,10 +601,6 @@ Visitor::start(api::VisitorId id, api::StorageMessage::Id cmdId,
     _documentPriority = documentPriority;
 
     _state = STATE_RUNNING;
-    if (_memoryAllocType == 0) {
-        _memoryAllocType = &_component.getMemoryManager()
-                                      .getAllocationType("VISITOR_BUFFER");
-    }
 
     LOG(debug, "Starting visitor '%s' for %" PRIu64 " buckets from %" PRIu64 " to "
                "%" PRIu64 ". First is %s. Max pending replies: %u, include "
@@ -768,7 +765,8 @@ Visitor::onCreateIteratorReply(
 {
     std::list<BucketIterationState*>::reverse_iterator it = _bucketStates.rbegin();
 
-    document::BucketId bucketId(reply->getBucketId());
+    document::Bucket bucket(reply->getBucket());
+    document::BucketId bucketId(bucket.getBucketId());
     for (; it != _bucketStates.rend(); ++it) {
         if ((*it)->getBucketId() == bucketId) {
             break;
@@ -799,17 +797,7 @@ Visitor::onCreateIteratorReply(
 
     LOG(debug, "Visitor '%s' starting to visit bucket %s.",
         _id.c_str(), bucketId.toString().c_str());
-    framework::MemoryToken::UP token(
-            _memoryManager->allocate(
-                *_memoryAllocType, _docBlockSize, _docBlockSize, _priority));
-    if (token.get() == 0) {
-        // Not enough memory
-        return;
-    }
-    std::shared_ptr<GetIterCommand> cmd(
-            new GetIterCommand(std::move(token), bucketId,
-                               bucketState.getIteratorId(),
-                               _docBlockSize));
+    auto cmd = std::make_shared<GetIterCommand>(bucket, bucketState.getIteratorId(), _docBlockSize);
     cmd->setLoadType(_initiatingCmd->getLoadType());
     cmd->getTrace().setLevel(_traceLevel);
     cmd->setPriority(_priority);
@@ -1219,19 +1207,8 @@ Visitor::getIterators()
             it = _bucketStates.erase(it);
             continue;
         }
-        framework::MemoryToken::UP token(
-                _memoryManager->allocate(
-                    *_memoryAllocType, _docBlockSize, _docBlockSize,
-                    _priority));
-        if (token.get() == 0) {
-            // Not enough memory
-            return true;
-        }
-        std::shared_ptr<GetIterCommand> cmd(
-                new GetIterCommand(std::move(token),
-                                   bucketState.getBucketId(),
-                                   bucketState.getIteratorId(),
-                                   _docBlockSize));
+        auto cmd = std::make_shared<GetIterCommand>(
+                bucketState.getBucket(), bucketState.getIteratorId(), _docBlockSize);
         cmd->setLoadType(_initiatingCmd->getLoadType());
         cmd->getTrace().setLevel(_traceLevel);
         cmd->setPriority(_priority);
@@ -1257,11 +1234,11 @@ Visitor::getIterators()
            _bucketStates.size() < _visitorOptions._maxPending &&
            _currentBucket < _buckets.size())
     {
-        document::BucketId bucketId(_buckets[_currentBucket]);
+        document::Bucket bucket(_bucketSpace, _buckets[_currentBucket]);
         std::unique_ptr<BucketIterationState> newBucketState(
-                new BucketIterationState(*this, *_messageHandler, bucketId));
+                new BucketIterationState(*this, *_messageHandler, bucket));
         LOG(debug, "Visitor '%s': Sending create iterator for bucket %s.",
-                   _id.c_str(), bucketId.toString().c_str());
+                   _id.c_str(), bucket.getBucketId().toString().c_str());
 
         spi::Selection selection
             = spi::Selection(spi::DocumentSelection(_documentSelectionString));
@@ -1271,7 +1248,7 @@ Visitor::getIterators()
                 spi::Timestamp(_visitorOptions._toTime.getTime()));
 
         std::shared_ptr<CreateIteratorCommand> cmd(
-                new CreateIteratorCommand(bucketId,
+                new CreateIteratorCommand(bucket,
                                           selection,
                                           _visitorOptions._fieldSet,
                                           _visitorOptions._visitRemoves ?

@@ -4,21 +4,26 @@ package com.yahoo.vespa.config.server.rpc;
 import com.google.inject.Inject;
 import com.yahoo.cloud.config.ConfigserverConfig;
 import com.yahoo.concurrent.ThreadFactoryFactory;
+import com.yahoo.config.FileReference;
 import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.config.provision.HostLivenessTracker;
 import com.yahoo.config.provision.TenantName;
 import com.yahoo.config.provision.Version;
 import com.yahoo.jrt.Acceptor;
+import com.yahoo.jrt.DataValue;
 import com.yahoo.jrt.Int32Value;
+import com.yahoo.jrt.Int64Value;
 import com.yahoo.jrt.ListenFailedException;
 import com.yahoo.jrt.Method;
 import com.yahoo.jrt.Request;
 import com.yahoo.jrt.Spec;
 import com.yahoo.jrt.StringValue;
 import com.yahoo.jrt.Supervisor;
+import com.yahoo.jrt.Target;
 import com.yahoo.jrt.Transport;
 import com.yahoo.log.LogLevel;
 import com.yahoo.vespa.config.ErrorCode;
+import com.yahoo.vespa.config.JRTConnectionPool;
 import com.yahoo.vespa.config.JRTMethods;
 import com.yahoo.vespa.config.protocol.ConfigResponse;
 import com.yahoo.vespa.config.protocol.JRTServerConfigRequest;
@@ -27,6 +32,7 @@ import com.yahoo.vespa.config.protocol.Trace;
 import com.yahoo.vespa.config.server.SuperModelRequestHandler;
 import com.yahoo.vespa.config.server.application.ApplicationSet;
 import com.yahoo.vespa.config.server.GetConfigContext;
+import com.yahoo.vespa.config.server.filedistribution.FileServer;
 import com.yahoo.vespa.config.server.host.HostRegistries;
 import com.yahoo.vespa.config.server.host.HostRegistry;
 import com.yahoo.vespa.config.server.ReloadListener;
@@ -36,7 +42,11 @@ import com.yahoo.vespa.config.server.monitoring.MetricUpdaterFactory;
 import com.yahoo.vespa.config.server.tenant.TenantHandlerProvider;
 import com.yahoo.vespa.config.server.tenant.TenantListener;
 import com.yahoo.vespa.config.server.tenant.Tenants;
+import com.yahoo.vespa.filedistribution.FileDownloader;
+import com.yahoo.vespa.filedistribution.FileReceiver;
+import com.yahoo.vespa.filedistribution.FileReferenceData;
 
+import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -52,6 +62,8 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * An RPC server class that handles the config protocol RPC method "getConfigV3".
@@ -68,8 +80,9 @@ public class RpcServer implements Runnable, ReloadListener, TenantListener {
     static final int TRACELEVEL_DEBUG = 9;
     private static final String THREADPOOL_NAME = "rpcserver worker pool";
     private static final long SHUTDOWN_TIMEOUT = 60;
+
     private final Supervisor supervisor = new Supervisor(new Transport());
-    private Spec spec = null;
+    private Spec spec;
     private final boolean useRequestVersion;
     private final boolean hostedVespa;
 
@@ -83,8 +96,11 @@ public class RpcServer implements Runnable, ReloadListener, TenantListener {
     private final MetricUpdater metrics;
     private final MetricUpdaterFactory metricUpdaterFactory;
     private final HostLivenessTracker hostLivenessTracker;
+    private final FileServer fileServer;
     
     private final ThreadPoolExecutor executorService;
+    private final boolean useChunkedFileTransfer;
+    private final FileDownloader downloader;
     private volatile boolean allTenantsLoaded = false;
 
     /**
@@ -93,20 +109,25 @@ public class RpcServer implements Runnable, ReloadListener, TenantListener {
      * @param config The config to use for setting up this server
      */
     @Inject
-    public RpcServer(ConfigserverConfig config, SuperModelRequestHandler superModelRequestHandler, MetricUpdaterFactory metrics,
-                     HostRegistries hostRegistries, HostLivenessTracker hostLivenessTracker) {
+    public RpcServer(ConfigserverConfig config, SuperModelRequestHandler superModelRequestHandler,
+                     MetricUpdaterFactory metrics, HostRegistries hostRegistries,
+                     HostLivenessTracker hostLivenessTracker, FileServer fileServer) {
         this.superModelRequestHandler = superModelRequestHandler;
-        this.metricUpdaterFactory = metrics;
-        this.supervisor.setMaxOutputBufferSize(config.maxoutputbuffersize());
+        metricUpdaterFactory = metrics;
+        supervisor.setMaxOutputBufferSize(config.maxoutputbuffersize());
         this.metrics = metrics.getOrCreateMetricUpdater(Collections.<String, String>emptyMap());
         this.hostLivenessTracker = hostLivenessTracker;
         BlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<>(config.maxgetconfigclients());
-        executorService = new ThreadPoolExecutor(config.numthreads(), config.numthreads(), 0, TimeUnit.SECONDS, workQueue, ThreadFactoryFactory.getThreadFactory(THREADPOOL_NAME));
+        executorService = new ThreadPoolExecutor(config.numthreads(), config.numthreads(),
+                0, TimeUnit.SECONDS, workQueue, ThreadFactoryFactory.getThreadFactory(THREADPOOL_NAME));
         delayedConfigResponses = new DelayedConfigResponses(this, config.numDelayedResponseThreads());
         spec = new Spec(null, config.rpcport());
         hostRegistry = hostRegistries.getTenantHostRegistry();
         this.useRequestVersion = config.useVespaVersionInRequest();
         this.hostedVespa = config.hostedVespa();
+        this.fileServer = fileServer;
+        this.useChunkedFileTransfer = config.usechunkedtransfer();
+        downloader = fileServer.downloader();
         setUpHandlers();
     }
 
@@ -146,7 +167,7 @@ public class RpcServer implements Runnable, ReloadListener, TenantListener {
     }
 
     public void run() {
-        log.log(LogLevel.DEBUG, "Ready for requests on " + spec);
+        log.log(LogLevel.INFO, "Rpc server listening on port " + spec.port());
         try {
             Acceptor acceptor = supervisor.listen(spec);
             supervisor.transport().join();
@@ -180,6 +201,12 @@ public class RpcServer implements Runnable, ReloadListener, TenantListener {
         getSupervisor().addMethod(new Method("printStatistics", "", "s", this, "printStatistics")
                                   .methodDesc("printStatistics")
                                   .returnDesc(0, "statistics", "Statistics for server"));
+        getSupervisor().addMethod(new Method("filedistribution.serveFile", "s", "is", this, "serveFile"));
+        getSupervisor().addMethod(new Method("filedistribution.setFileReferencesToDownload", "S", "i",
+                                        this, "setFileReferencesToDownload")
+                                     .methodDesc("set which file references to download")
+                                     .paramDesc(0, "file references", "file reference to download")
+                                     .returnDesc(0, "ret", "0 if success, 1 otherwise"));
     }
 
     /**
@@ -223,7 +250,6 @@ public class RpcServer implements Runnable, ReloadListener, TenantListener {
         }
 
         for (int i = 0; i < responsesSent; i++) {
-
             try {
                 completionService.take();
             } catch (InterruptedException e) {
@@ -402,4 +428,135 @@ public class RpcServer implements Runnable, ReloadListener, TenantListener {
         return useRequestVersion;
     }
 
+    class WholeFileReceiver implements FileServer.Receiver {
+        Target target;
+        WholeFileReceiver(Target target) {
+            this.target = target;
+        }
+
+        @Override
+        public String toString() {
+            return target.toString();
+        }
+
+        @Override
+        public void receive(FileReferenceData fileData, FileServer.ReplayStatus status) {
+            Request fileBlob = new Request(FileReceiver.RECEIVE_METHOD);
+            fileBlob.parameters().add(new StringValue(fileData.fileReference().value()));
+            fileBlob.parameters().add(new StringValue(fileData.filename()));
+            fileBlob.parameters().add(new StringValue(fileData.type().name()));
+            fileBlob.parameters().add(new DataValue(fileData.content().array()));
+            fileBlob.parameters().add(new Int64Value(fileData.xxhash()));
+            fileBlob.parameters().add(new Int32Value(status.getCode()));
+            fileBlob.parameters().add(new StringValue(status.getDescription()));
+            target.invokeSync(fileBlob, 600);
+            if (fileBlob.isError()) {
+                log.warning("Failed delivering reference '" + fileData.fileReference().value() + "' with file '" + fileData.filename() + "' to " +
+                            target.toString() + " with error: '" + fileBlob.errorMessage() + "'.");
+            }
+        }
+    }
+
+    class ChunkedFileReceiver implements FileServer.Receiver {
+        Target target;
+        ChunkedFileReceiver(Target target) {
+            this.target = target;
+        }
+
+        @Override
+        public String toString() {
+            return target.toString();
+        }
+
+        @Override
+        public void receive(FileReferenceData fileData, FileServer.ReplayStatus status) {
+            int session = sendMeta(fileData);
+            sendParts(session, fileData);
+            sendEof(session, fileData, status);
+        }
+        private void sendParts(int session, FileReferenceData fileData) {
+            ByteBuffer bb = ByteBuffer.allocate(0x100000);
+            for (int partId = 0, read = fileData.nextContent(bb); read >= 0; partId++, read = fileData.nextContent(bb)) {
+                byte [] buf = bb.array();
+                if (buf.length != bb.position()) {
+                    buf = new byte [bb.position()];
+                    bb.flip();
+                    bb.get(buf);
+                }
+                sendPart(session, fileData.fileReference(), partId, buf);
+                bb.clear();
+            }
+        }
+        private int sendMeta(FileReferenceData fileData) {
+            Request request = new Request(FileReceiver.RECEIVE_META_METHOD);
+            request.parameters().add(new StringValue(fileData.fileReference().value()));
+            request.parameters().add(new StringValue(fileData.filename()));
+            request.parameters().add(new StringValue(fileData.type().name()));
+            request.parameters().add(new Int64Value(fileData.size()));
+            target.invokeSync(request, 600);
+            if (request.isError()) {
+                log.warning("Failed delivering meta for reference '" + fileData.fileReference().value() + "' with file '" + fileData.filename() + "' to " +
+                        target.toString() + " with error: '" + request.errorMessage() + "'.");
+                return 1;
+            } else {
+                if (request.returnValues().get(0).asInt32() != 0) {
+                    throw new IllegalArgumentException("Unknown error from target '" + target.toString() + "' during rpc call " + request.methodName());
+                }
+                return request.returnValues().get(1).asInt32();
+            }
+        }
+        private void sendPart(int session, FileReference ref, int partId, byte [] buf) {
+            Request request = new Request(FileReceiver.RECEIVE_PART_METHOD);
+            request.parameters().add(new StringValue(ref.value()));
+            request.parameters().add(new Int32Value(session));
+            request.parameters().add(new Int32Value(partId));
+            request.parameters().add(new DataValue(buf));
+            target.invokeSync(request, 600);
+            if (request.isError()) {
+                throw new IllegalArgumentException("Failed delivering reference '" + ref.value() + "' to " +
+                                                           target.toString() + " with error: '" + request.errorMessage() + "'.");
+            } else {
+                if (request.returnValues().get(0).asInt32() != 0) {
+                    throw new IllegalArgumentException("Unknown error from target '" + target.toString() + "' during rpc call " + request.methodName());
+                }
+            }
+        }
+        private void sendEof(int session, FileReferenceData fileData, FileServer.ReplayStatus status) {
+            Request request = new Request(FileReceiver.RECEIVE_EOF_METHOD);
+            request.parameters().add(new StringValue(fileData.fileReference().value()));
+            request.parameters().add(new Int32Value(session));
+            request.parameters().add(new Int64Value(fileData.xxhash()));
+            request.parameters().add(new Int32Value(status.getCode()));
+            request.parameters().add(new StringValue(status.getDescription()));
+            target.invokeSync(request, 600);
+            if (request.isError()) {
+                throw new IllegalArgumentException("Failed delivering reference '" + fileData.fileReference().value() + "' with file '" + fileData.filename() + "' to " +
+                                                           target.toString() + " with error: '" + request.errorMessage() + "'.");
+            } else {
+                if (request.returnValues().get(0).asInt32() != 0) {
+                    throw new IllegalArgumentException("Unknown error from target '" + target.toString() + "' during rpc call " + request.methodName());
+                }
+            }
+        }
+    }
+
+    @SuppressWarnings("UnusedDeclaration")
+    public final void serveFile(Request request) {
+        request.detach();
+        FileServer.Receiver receiver = useChunkedFileTransfer
+                                       ? new ChunkedFileReceiver(request.target())
+                                       : new WholeFileReceiver(request.target());
+        fileServer.serveFile(request, receiver);
+    }
+
+    @SuppressWarnings({"UnusedDeclaration"})
+    public final void setFileReferencesToDownload(Request req) {
+        String[] fileReferenceStrings = req.parameters().get(0).asStringArray();
+        List<FileReference> fileReferences = Stream.of(fileReferenceStrings)
+                .map(FileReference::new)
+                .collect(Collectors.toList());
+        downloader.queueForAsyncDownload(fileReferences);
+
+        req.returnValues().add(new Int32Value(0));
+    }
 }

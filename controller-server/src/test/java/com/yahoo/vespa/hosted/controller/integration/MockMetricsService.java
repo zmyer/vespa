@@ -2,9 +2,9 @@
 package com.yahoo.vespa.hosted.controller.integration;
 
 import com.yahoo.config.provision.ApplicationId;
-import com.yahoo.config.provision.Zone;
+import com.yahoo.vespa.hosted.controller.api.integration.zone.ZoneId;
 
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -18,13 +18,16 @@ public class MockMetricsService implements com.yahoo.vespa.hosted.controller.api
     }
 
     @Override
-    public DeploymentMetrics getDeploymentMetrics(ApplicationId application, Zone zone) {
+    public DeploymentMetrics getDeploymentMetrics(ApplicationId application, ZoneId zone) {
         return new DeploymentMetrics(1, 2, 3, 4, 5);
     }
 
     @Override
-    public Map<String, SystemMetrics> getSystemMetrics(ApplicationId application, Zone zone) {
-        return Collections.emptyMap();
+    public Map<String, SystemMetrics> getSystemMetrics(ApplicationId application, ZoneId zone) {
+        Map<String, SystemMetrics> result = new HashMap<>();
+        SystemMetrics system = new SystemMetrics(55.54, 69.90, 34.59);
+        result.put("default", system);
+        return result;
     }
 
 }

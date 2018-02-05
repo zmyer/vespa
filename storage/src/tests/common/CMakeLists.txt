@@ -2,9 +2,10 @@
 vespa_add_library(storage_testcommon TEST
     SOURCES
     dummystoragelink.cpp
-    testhelper.cpp
+    global_bucket_space_distribution_converter_test.cpp
     metricstest.cpp
     storagelinktest.cpp
+    testhelper.cpp
     testnodestateupdater.cpp
     teststorageapp.cpp
     DEPENDS

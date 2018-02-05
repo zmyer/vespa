@@ -3,12 +3,11 @@ package com.yahoo.tensor.functions;
 
 import com.google.common.annotations.Beta;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
-import com.yahoo.tensor.MappedTensor;
 import com.yahoo.tensor.Tensor;
 import com.yahoo.tensor.TensorAddress;
 import com.yahoo.tensor.TensorType;
 import com.yahoo.tensor.evaluation.EvaluationContext;
+import com.yahoo.tensor.evaluation.TypeContext;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -19,7 +18,7 @@ import java.util.Objects;
 
 /**
  * The <i>rename</i> tensor function returns a tensor where some dimensions are assigned new names.
- * 
+ *
  * @author bratseth
  */
 @Beta
@@ -28,6 +27,11 @@ public class Rename extends PrimitiveTensorFunction {
     private final TensorFunction argument;
     private final List<String> fromDimensions;
     private final List<String> toDimensions;
+    private final Map<String, String> fromToMap;
+
+    public Rename(TensorFunction argument, String fromDimension, String toDimension) {
+        this(argument, ImmutableList.of(fromDimension), ImmutableList.of(toDimension));
+    }
 
     public Rename(TensorFunction argument, List<String> fromDimensions, List<String> toDimensions) {
         Objects.requireNonNull(argument, "The argument tensor cannot be null");
@@ -41,13 +45,24 @@ public class Rename extends PrimitiveTensorFunction {
         this.argument = argument;
         this.fromDimensions = ImmutableList.copyOf(fromDimensions);
         this.toDimensions = ImmutableList.copyOf(toDimensions);
+        this.fromToMap = fromToMap(fromDimensions, toDimensions);
     }
-    
-    @Override
-    public List<TensorFunction> functionArguments() { return Collections.singletonList(argument); }
+
+    public List<String> fromDimensions() { return fromDimensions; }
+    public List<String> toDimensions() { return toDimensions; }
+
+    private static Map<String, String> fromToMap(List<String> fromDimensions, List<String> toDimensions) {
+        Map<String, String> map = new HashMap<>();
+        for (int i = 0; i < fromDimensions.size(); i++)
+            map.put(fromDimensions.get(i), toDimensions.get(i));
+        return map;
+    }
 
     @Override
-    public TensorFunction replaceArguments(List<TensorFunction> arguments) {
+    public List<TensorFunction> arguments() { return Collections.singletonList(argument); }
+
+    @Override
+    public TensorFunction withArguments(List<TensorFunction> arguments) {
         if ( arguments.size() != 1)
             throw new IllegalArgumentException("Rename must have 1 argument, got " + arguments.size());
         return new Rename(arguments.get(0), fromDimensions, toDimensions);
@@ -57,12 +72,23 @@ public class Rename extends PrimitiveTensorFunction {
     public PrimitiveTensorFunction toPrimitive() { return this; }
 
     @Override
+    public TensorType type(TypeContext context) {
+        return type(argument.type(context));
+    }
+
+    private TensorType type(TensorType type) {
+        TensorType.Builder builder = new TensorType.Builder();
+        for (TensorType.Dimension dimension : type.dimensions())
+            builder.dimension(dimension.withName(fromToMap.getOrDefault(dimension.name(), dimension.name())));
+        return builder.build();
+    }
+
+    @Override
     public Tensor evaluate(EvaluationContext context) {
         Tensor tensor = argument.evaluate(context);
 
-        Map<String, String> fromToMap = fromToMap();
-        TensorType renamedType = rename(tensor.type(), fromToMap);
-        
+        TensorType renamedType = type(tensor.type());
+
         // an array which lists the index of each label in the renamed type
         int[] toIndexes = new int[tensor.type().dimensions().size()];
         for (int i = 0; i < tensor.type().dimensions().size(); i++) {
@@ -70,7 +96,7 @@ public class Rename extends PrimitiveTensorFunction {
             String newDimensionName = fromToMap.getOrDefault(dimensionName, dimensionName);
             toIndexes[i] = renamedType.indexOfDimension(newDimensionName).get();
         }
-            
+
         Tensor.Builder builder = Tensor.Builder.of(renamedType);
         for (Iterator<Tensor.Cell> i = tensor.cellIterator(); i.hasNext(); ) {
             Map.Entry<TensorAddress, Double> cell = i.next();
@@ -80,13 +106,6 @@ public class Rename extends PrimitiveTensorFunction {
         return builder.build();
     }
 
-    private TensorType rename(TensorType type, Map<String, String> fromToMap) {
-        TensorType.Builder builder = new TensorType.Builder();
-        for (TensorType.Dimension dimension : type.dimensions())
-            builder.dimension(dimension.withName(fromToMap.getOrDefault(dimension.name(), dimension.name())));
-        return builder.build();
-    }
-    
     private TensorAddress rename(TensorAddress address, int[] toIndexes) {
         String[] reorderedLabels = new String[toIndexes.length];
         for (int i = 0; i < toIndexes.length; i++)
@@ -95,18 +114,11 @@ public class Rename extends PrimitiveTensorFunction {
     }
 
     @Override
-    public String toString(ToStringContext context) { 
-        return "rename(" + argument.toString(context) + ", " + 
+    public String toString(ToStringContext context) {
+        return "rename(" + argument.toString(context) + ", " +
                        toVectorString(fromDimensions) + ", " + toVectorString(toDimensions) + ")";
     }
-    
-    private Map<String, String> fromToMap() {
-        Map<String, String> map = new HashMap<>();
-        for (int i = 0; i < fromDimensions.size(); i++)
-            map.put(fromDimensions.get(i), toDimensions.get(i));
-        return map;
-    }
-    
+
     private String toVectorString(List<String> elements) {
         if (elements.size() == 1)
             return elements.get(0);

@@ -25,13 +25,16 @@ struct KeyGen : public NodeVisitor, public NodeTraverser {
     void visit(const Number   &node) override { add_byte( 1); add_double(node.value()); }
     void visit(const Symbol   &node) override { add_byte( 2); add_int(node.id()); }
     void visit(const String   &node) override { add_byte( 3); add_hash(node.hash()); }
-    void visit(const Array    &node) override { add_byte( 4); add_size(node.size()); }
+    void visit(const In       &node) override { add_byte( 4);
+        add_size(node.num_entries());
+        for (size_t i = 0; i < node.num_entries(); ++i) {
+            add_double(node.get_entry(i).get_const_value());
+        }
+    }
     void visit(const Neg          &) override { add_byte( 5); }
     void visit(const Not          &) override { add_byte( 6); }
     void visit(const If       &node) override { add_byte( 7); add_double(node.p_true()); }
-    void visit(const Let          &) override { add_byte( 8); }
     void visit(const Error        &) override { add_byte( 9); }
-    void visit(const TensorSum    &) override { add_byte(10); } // dimensions should be part of key
     void visit(const TensorMap    &) override { add_byte(11); } // lambda should be part of key
     void visit(const TensorJoin   &) override { add_byte(12); } // lambda should be part of key
     void visit(const TensorReduce &) override { add_byte(13); } // aggr/dimensions should be part of key
@@ -51,7 +54,6 @@ struct KeyGen : public NodeVisitor, public NodeTraverser {
     void visit(const LessEqual    &) override { add_byte(30); }
     void visit(const Greater      &) override { add_byte(31); }
     void visit(const GreaterEqual &) override { add_byte(32); }
-    void visit(const In           &) override { add_byte(33); }
     void visit(const And          &) override { add_byte(34); }
     void visit(const Or           &) override { add_byte(35); }
     void visit(const Cos          &) override { add_byte(36); }
@@ -79,6 +81,7 @@ struct KeyGen : public NodeVisitor, public NodeTraverser {
     void visit(const IsNan        &) override { add_byte(58); }
     void visit(const Relu         &) override { add_byte(59); }
     void visit(const Sigmoid      &) override { add_byte(60); }
+    void visit(const Elu          &) override { add_byte(61); }
 
     // traverse
     bool open(const Node &node) override { node.accept(*this); return true; }

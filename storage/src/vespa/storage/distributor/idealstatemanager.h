@@ -1,18 +1,14 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 #pragma once
 
-#include <deque>
-#include <map>
-#include <set>
-#include <vespa/storage/distributor/managed_bucket_space_component.h>
-#include <vespa/storage/distributor/statechecker.h>
+#include "distributorcomponent.h"
+#include "statechecker.h"
 #include <vespa/storage/distributor/maintenance/maintenanceprioritygenerator.h>
 #include <vespa/storage/distributor/maintenance/maintenanceoperationgenerator.h>
+#include <vespa/storageframework/generic/status/htmlstatusreporter.h>
 #include <vespa/vdslib/state/clusterstate.h>
-#include <vector>
 
-namespace storage {
-namespace distributor {
+namespace storage::distributor {
 
 class IdealStateMetricSet;
 class IdealStateOperation;
@@ -40,7 +36,7 @@ class IdealStateManager : public framework::HtmlStatusReporter,
 public:
 
     IdealStateManager(Distributor& owner,
-                      ManagedBucketSpace& bucketSpace,
+                      DistributorBucketSpaceRepo& bucketSpaceRepo,
                       DistributorComponentRegister& compReg,
                       bool manageActiveBucketCopies);
 
@@ -51,16 +47,15 @@ public:
 
     // MaintenancePriorityGenerator interface
     MaintenancePriorityAndType prioritize(
-            const document::BucketId& bucketId,
+            const document::Bucket &bucket,
             NodeMaintenanceStatsTracker& statsTracker) const override;
 
     // MaintenanceOperationGenerator
-    MaintenanceOperation::SP generate(
-            const document::BucketId& bucketId) const override;
+    MaintenanceOperation::SP generate(const document::Bucket &bucket) const override;
 
     // MaintenanceOperationGenerator
     std::vector<MaintenanceOperation::SP> generateAll(
-            const document::BucketId& bucketId,
+            const document::Bucket &bucket,
             NodeMaintenanceStatsTracker& statsTracker) const override;
 
     /**
@@ -68,6 +63,7 @@ public:
      * with higher priority than the given one.
      */
     IdealStateOperation::SP generateInterceptingSplit(
+            document::BucketSpace bucketSpace,
             const BucketDatabase::Entry& e,
             api::StorageMessage::Priority pri);
 
@@ -85,12 +81,14 @@ public:
         return _distributorComponent; }
     StorageComponent::LoadTypeSetSP getLoadTypes() {
         return _distributorComponent.getLoadTypes(); }
+    DistributorBucketSpaceRepo &getBucketSpaceRepo() { return _bucketSpaceRepo; }
+    const DistributorBucketSpaceRepo &getBucketSpaceRepo() const { return _bucketSpaceRepo; }
 
 private:
     void fillParentAndChildBuckets(StateChecker::Context& c) const;
     void fillSiblingBucket(StateChecker::Context& c) const;
     StateChecker::Result generateHighestPriority(
-            const document::BucketId& bucketId,
+            const document::Bucket &bucket,
             NodeMaintenanceStatsTracker& statsTracker) const;
     StateChecker::Result runStateCheckers(StateChecker::Context& c) const;
 
@@ -111,10 +109,10 @@ private:
     std::vector<StateChecker::SP> _stateCheckers;
     SplitBucketStateChecker* _splitBucketStateChecker;
 
-    ManagedBucketSpaceComponent _distributorComponent;
+    DistributorComponent            _distributorComponent;
+    DistributorBucketSpaceRepo     &_bucketSpaceRepo;
 
-    std::vector<IdealStateOperation::SP> generateOperationsForBucket(
-            StateChecker::Context& c) const;
+    std::vector<IdealStateOperation::SP> generateOperationsForBucket(StateChecker::Context& c) const;
 
     bool iAmUp() const;
 
@@ -122,24 +120,23 @@ private:
         // Stats tracker to use for all generateAll() calls to avoid having
         // to create a new hash map for each single bucket processed.
         NodeMaintenanceStatsTracker _statsTracker;
-        const IdealStateManager& _ism;
-        std::ostream& _out;
+        const IdealStateManager   & _ism;
+        document::BucketSpace       _bucketSpace;
+        std::ostream              & _out;
     public:
-        StatusBucketVisitor(const IdealStateManager& ism, std::ostream& out)
-            : _ism(ism), _out(out) {}
+        StatusBucketVisitor(const IdealStateManager& ism, document::BucketSpace bucketSpace, std::ostream& out)
+            : _statsTracker(), _ism(ism), _bucketSpace(bucketSpace), _out(out) {}
 
         bool process(const BucketDatabase::Entry& e) override {
-            _ism.getBucketStatus(e, _statsTracker, _out);
+            _ism.getBucketStatus(_bucketSpace, e, _statsTracker, _out);
             return true;
         }
     };
     friend class StatusBucketVisitor;
 
-    void getBucketStatus(const BucketDatabase::Entry& entry,
-                         NodeMaintenanceStatsTracker& statsTracker,
-                         std::ostream& out) const;
-
+    void getBucketStatus(document::BucketSpace bucketSpace, const BucketDatabase::Entry& entry,
+                         NodeMaintenanceStatsTracker& statsTracker, std::ostream& out) const;
+    void dump_bucket_space_db_status(document::BucketSpace bucket_space, std::ostream& out) const;
 };
 
-} // distributor
-} // storage
+}

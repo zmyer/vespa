@@ -12,6 +12,7 @@ import com.yahoo.jdisc.handler.OverloadException;
 import com.yahoo.jdisc.handler.RequestHandler;
 import com.yahoo.jdisc.http.HttpHeaders;
 import com.yahoo.jdisc.http.HttpRequest;
+import org.eclipse.jetty.io.EofException;
 import org.eclipse.jetty.server.HttpConnection;
 
 import javax.servlet.AsyncContext;
@@ -21,6 +22,7 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -33,6 +35,7 @@ import static com.yahoo.jdisc.http.server.jetty.Exceptions.throwUnchecked;
 
 /**
  * @author Simon Thoresen Hult
+ * @author bjorncs
  */
 class HttpRequestDispatch {
 
@@ -122,7 +125,11 @@ class HttpRequestDispatch {
             boolean reportedError = false;
 
             if (error != null) {
-                if (!(error instanceof OverloadException || error instanceof BindingNotFoundException)) {
+                if (error instanceof CompletionException && error.getCause() instanceof EofException) {
+                    log.log(Level.FINE,
+                            error,
+                            () -> "Network connection was unexpectedly terminated: " + parent.servletRequest.getRequestURI());
+                } else if (!(error instanceof OverloadException || error instanceof BindingNotFoundException)) {
                     log.log(Level.WARNING, "Request failed: " + parent.servletRequest.getRequestURI(), error);
                 }
                 reportedError = true;

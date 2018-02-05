@@ -12,8 +12,6 @@
 #include <vespa/vespalib/stllike/hash_map.hpp>
 #include <vespa/vespalib/stllike/hash_map_equal.hpp>
 #include <vespa/vespalib/util/array_equal.hpp>
-#include <sstream>
-#include <algorithm>
 
 using vespalib::eval::TensorSpec;
 
@@ -33,31 +31,9 @@ copyCells(Cells &cells, const Cells &cells_in, Stash &stash)
     }
 }
 
-void
-printAddress(std::ostream &out, const SparseTensorAddressRef &ref,
-             const eval::ValueType &type)
-{
-    out << "{";
-    bool first = true;
-    SparseTensorAddressDecoder addr(ref);
-    for (auto &dim : type.dimensions()) {
-        auto label = addr.decodeLabel();
-        if (label.size() != 0u) {
-            if (!first) {
-                out << ",";
-            }
-            out << dim.name << ":" << label;
-            first = false;
-        }
-    }
-    assert(!addr.valid());
-    out << "}";
 }
 
-}
-
-SparseTensor::SparseTensor(const eval::ValueType &type_in,
-                           const Cells &cells_in)
+SparseTensor::SparseTensor(const eval::ValueType &type_in, const Cells &cells_in)
     : _type(type_in),
       _cells(),
       _stash(STASH_CHUNK_SIZE)
@@ -66,14 +42,13 @@ SparseTensor::SparseTensor(const eval::ValueType &type_in,
 }
 
 
-SparseTensor::SparseTensor(eval::ValueType &&type_in,
-                           Cells &&cells_in, Stash &&stash_in)
+SparseTensor::SparseTensor(eval::ValueType &&type_in, Cells &&cells_in, Stash &&stash_in)
     : _type(std::move(type_in)),
       _cells(std::move(cells_in)),
       _stash(std::move(stash_in))
-{
-}
+{ }
 
+SparseTensor::~SparseTensor() = default;
 
 bool
 SparseTensor::operator==(const SparseTensor &rhs) const
@@ -98,98 +73,23 @@ SparseTensor::combineDimensionsWith(const SparseTensor &rhs) const
 }
 
 const eval::ValueType &
-SparseTensor::getType() const
+SparseTensor::type() const
 {
     return _type;
 }
 
 double
-SparseTensor::sum() const
+SparseTensor::as_double() const
 {
     double result = 0.0;
-    for (const auto &cell : _cells) {
-        result += cell.second;
-    }
+    _cells.for_each([&result](const auto & v) { result += v.second; });
     return result;
-}
-
-Tensor::UP
-SparseTensor::add(const Tensor &arg) const
-{
-    const SparseTensor *rhs = dynamic_cast<const SparseTensor *>(&arg);
-    if (!rhs) {
-        return Tensor::UP();
-    }
-    return sparse::apply(*this, *rhs, [](double lhsValue, double rhsValue)
-                         { return lhsValue + rhsValue; });
-}
-
-Tensor::UP
-SparseTensor::subtract(const Tensor &arg) const
-{
-    const SparseTensor *rhs = dynamic_cast<const SparseTensor *>(&arg);
-    if (!rhs) {
-        return Tensor::UP();
-    }
-    return sparse::apply(*this, *rhs, [](double lhsValue, double rhsValue)
-                         { return lhsValue - rhsValue; });
-}
-
-Tensor::UP
-SparseTensor::multiply(const Tensor &arg) const
-{
-    const SparseTensor *rhs = dynamic_cast<const SparseTensor *>(&arg);
-    if (!rhs) {
-        return Tensor::UP();
-    }
-    return sparse::apply(*this, *rhs, [](double lhsValue, double rhsValue)
-                         { return lhsValue * rhsValue; });
-}
-
-Tensor::UP
-SparseTensor::min(const Tensor &arg) const
-{
-    const SparseTensor *rhs = dynamic_cast<const SparseTensor *>(&arg);
-    if (!rhs) {
-        return Tensor::UP();
-    }
-    return sparse::apply(*this, *rhs, [](double lhsValue, double rhsValue)
-                         { return std::min(lhsValue, rhsValue); });
-}
-
-Tensor::UP
-SparseTensor::max(const Tensor &arg) const
-{
-    const SparseTensor *rhs = dynamic_cast<const SparseTensor *>(&arg);
-    if (!rhs) {
-        return Tensor::UP();
-    }
-    return sparse::apply(*this, *rhs, [](double lhsValue, double rhsValue)
-                         { return std::max(lhsValue, rhsValue); });
-}
-
-Tensor::UP
-SparseTensor::match(const Tensor &arg) const
-{
-    const SparseTensor *rhs = dynamic_cast<const SparseTensor *>(&arg);
-    if (!rhs) {
-        return Tensor::UP();
-    }
-    return SparseTensorMatch(*this, *rhs).result();
 }
 
 Tensor::UP
 SparseTensor::apply(const CellFunction &func) const
 {
     return TensorApply<SparseTensor>(*this, func).result();
-}
-
-Tensor::UP
-SparseTensor::sum(const vespalib::string &dimension) const
-{
-    return sparse::reduce(*this, { dimension },
-                          [](double lhsValue, double rhsValue)
-                          { return lhsValue + rhsValue; });
 }
 
 bool
@@ -200,14 +100,6 @@ SparseTensor::equals(const Tensor &arg) const
         return false;
     }
     return *this == *rhs;
-}
-
-vespalib::string
-SparseTensor::toString() const
-{
-    std::ostringstream stream;
-    stream << *this;
-    return stream.str();
 }
 
 Tensor::UP
@@ -235,7 +127,7 @@ buildAddress(const eval::ValueType &type,
 TensorSpec
 SparseTensor::toSpec() const
 {
-    TensorSpec result(getType().to_spec());
+    TensorSpec result(type().to_spec());
     TensorSpec::Address address;
     for (const auto &cell : _cells) {
         SparseTensorAddressDecoder decoder(cell.first);
@@ -247,22 +139,6 @@ SparseTensor::toSpec() const
         result.add(address, 0.0);
     }
     return result;
-}
-
-void
-SparseTensor::print(std::ostream &out) const
-{
-    out << "{ ";
-    bool first = true;
-    for (const auto &cell : cells()) {
-        if (!first) {
-            out << ", ";
-        }
-        printAddress(out, cell.first, _type);
-        out << ":" << cell.second;
-        first = false;
-    }
-    out << " }";
 }
 
 void
@@ -286,27 +162,31 @@ SparseTensor::accept(TensorVisitor &visitor) const
 }
 
 Tensor::UP
-SparseTensor::apply(const eval::BinaryOperation &op, const Tensor &arg) const
+SparseTensor::join(join_fun_t function, const Tensor &arg) const
 {
     const SparseTensor *rhs = dynamic_cast<const SparseTensor *>(&arg);
     if (!rhs) {
         return Tensor::UP();
     }
-    return sparse::apply(*this, *rhs,
-                         [&op](double lhsValue, double rhsValue)
-                         { return op.eval(lhsValue, rhsValue); });
+    if (function == eval::operation::Mul::f) {
+        if (fast_type() == rhs->fast_type()) {
+            return SparseTensorMatch(*this, *rhs).result();
+        } else {
+            return sparse::apply(*this, *rhs, [](double lhsValue, double rhsValue)
+                                 { return lhsValue * rhsValue; });
+        }
+    }
+    return sparse::apply(*this, *rhs, function);
 }
 
 Tensor::UP
-SparseTensor::reduce(const eval::BinaryOperation &op,
+SparseTensor::reduce(join_fun_t op,
                      const std::vector<vespalib::string> &dimensions) const
 {
-    return sparse::reduce(*this,
-                          dimensions,
-                          [&op](double lhsValue, double rhsValue)
-                          { return op.eval(lhsValue, rhsValue); });
+    return sparse::reduce(*this, dimensions, op);
 }
 
 }
 
-VESPALIB_HASH_MAP_INSTANTIATE(vespalib::tensor::SparseTensorAddressRef, double);
+VESPALIB_HASH_MAP_INSTANTIATE_H_E_M(vespalib::tensor::SparseTensorAddressRef, double, vespalib::hash<vespalib::tensor::SparseTensorAddressRef>,
+        std::equal_to<vespalib::tensor::SparseTensorAddressRef>, vespalib::hashtable_base::and_modulator);

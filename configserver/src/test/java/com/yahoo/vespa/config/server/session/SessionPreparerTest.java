@@ -126,7 +126,6 @@ public class SessionPreparerTest extends TestWithCurator {
                          new PrepareParams.Builder().dryRun(true).timeoutBudget(TimeoutBudgetTest.day()).build(),
                          Optional.empty(), tenantPath, Instant.now());
         assertThat(fileDistributionFactory.mockFileDistributionProvider.getMockFileDBHandler().sendDeployedFilesCalled, is(0));
-        assertThat(fileDistributionFactory.mockFileDistributionProvider.getMockFileDBHandler().limitSendingOfDeployedFilesToCalled, is(0));
         assertThat(fileDistributionFactory.mockFileDistributionProvider.getMockFileDBHandler().reloadDeployFileDistributorCalled, is(0));
     }
 
@@ -134,7 +133,6 @@ public class SessionPreparerTest extends TestWithCurator {
     public void require_that_application_is_prepared() throws Exception {
         preparer.prepare(getContext(getApplicationPackage(testApp)), getLogger(), new PrepareParams.Builder().build(), Optional.empty(), tenantPath, Instant.now());
         assertThat(fileDistributionFactory.mockFileDistributionProvider.getMockFileDBHandler().sendDeployedFilesCalled, is(2));
-        assertThat(fileDistributionFactory.mockFileDistributionProvider.getMockFileDBHandler().limitSendingOfDeployedFilesToCalled, is(2));
         // Should be called only once no matter how many model versions are built
         assertThat(fileDistributionFactory.mockFileDistributionProvider.getMockFileDBHandler().reloadDeployFileDistributorCalled, is(1));
         assertTrue(configCurator.exists(sessionsPath.append(ConfigCurator.USERAPP_ZK_SUBPATH).append("services.xml").getAbsolute()));

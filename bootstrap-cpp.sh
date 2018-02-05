@@ -5,9 +5,10 @@ usage() {
     echo "Usage: $0 <source-dir> <build-dir>" >&2
 }
 
+# Parse arguments
 if [ $# -eq 2 ]; then
-    SOURCE_DIR=$(realpath $1)
-    BUILD_DIR=$(realpath $2)
+    SOURCE_DIR="$1"
+    BUILD_DIR="$2"
 elif [[ $# -eq 1 && ( "$1" = "-h" || "$1" = "--help" )]]; then
     usage
     exit 0
@@ -17,16 +18,23 @@ else
     exit 1
 fi
 
-mkdir -p "${BUILD_DIR}"
+# Check the source directory
+if [ ! -d "$SOURCE_DIR" ] ; then
+    echo "Source dir $SOURCE_DIR not found" >&2
+    exit 1
+fi
+SOURCE_DIR=$(realpath "${SOURCE_DIR}")
 
-source /opt/rh/devtoolset-6/enable || true
+# Check (and possibly create) the build directory
+mkdir -p "${BUILD_DIR}" || {
+    echo "Failed to create build directory" >&2
+    exit 1
+}
+BUILD_DIR=$(realpath "${BUILD_DIR}")
+
+# Build it
+source /opt/rh/devtoolset-7/enable || true
 cd "${SOURCE_DIR}"
-sh ./bootstrap.sh full
+bash ./bootstrap.sh full
 cd "${BUILD_DIR}"
-cmake3 \
-    -DCMAKE_INSTALL_PREFIX=/opt/vespa \
-    -DJAVA_HOME=/usr/lib/jvm/java-openjdk \
-    -DEXTRA_LINK_DIRECTORY="/opt/vespa-boost/lib;/opt/vespa-libtorrent/lib;/opt/vespa-zookeeper-c-client/lib;/opt/vespa-cppunit/lib;/usr/lib64/llvm3.9/lib" \
-    -DEXTRA_INCLUDE_DIRECTORY="/opt/vespa-boost/include;/opt/vespa-libtorrent/include;/opt/vespa-zookeeper-c-client/include;/opt/vespa-cppunit/include;/usr/include/llvm3.9" \
-    -DCMAKE_INSTALL_RPATH="/opt/vespa/lib64;/opt/vespa-boost/lib;/opt/vespa-libtorrent/lib;/opt/vespa-zookeeper-c-client/lib;/opt/vespa-cppunit/lib;/usr/lib/jvm/java-1.8.0/jre/lib/amd64/server;/usr/include/llvm3.9" \
-    "${SOURCE_DIR}"
+bash ${SOURCE_DIR}/bootstrap-cmake.sh "${SOURCE_DIR}"

@@ -40,8 +40,7 @@ public class ApplicationPreprocessor {
         outputDir.ifPresent(applicationPackageBuilder::preprocessedDir);
         ApplicationPackage preprocessed = applicationPackageBuilder.build().preprocess(
                 new Zone(environment.orElse(Environment.defaultEnvironment()), region.orElse(RegionName.defaultName())),
-                (a, b) -> {
-                }, logger);
+                logger);
         preprocessed.validateXML();
     }
 
@@ -59,7 +58,8 @@ public class ApplicationPreprocessor {
         ApplicationPreprocessor preprocessor = new ApplicationPreprocessor(applicationDir, outputDir, environment, region);
         try {
             preprocessor.run();
-            System.out.println("Application preprocessed successfully. Preprocessed application stored in " + new File(applicationDir, ".preprocessed").getAbsolutePath());
+            System.out.println("Application preprocessed successfully. Preprocessed application stored in " +
+                               new File(applicationDir, FilesApplicationPackage.preprocessed).getAbsolutePath());
         } catch (Exception e) {
             System.err.println("Error validating application package: " + Exceptions.toMessageString(e));
             System.exit(1);

@@ -55,9 +55,20 @@ import static com.yahoo.text.Lowercase.toLowerCase;
  * Construct using {@link com.yahoo.config.model.application.provider.FilesApplicationPackage#fromFile(java.io.File)} or
  * {@link com.yahoo.config.model.application.provider.FilesApplicationPackage#fromFileWithDeployData(java.io.File, DeployData)}.
  *
- * @author vegardh
+ * @author Vegard Havdal
  */
 public class FilesApplicationPackage implements ApplicationPackage {
+
+    /**
+     * The name of the subdirectory (below the original application package root)
+     * where a preprocessed version of this application package is stored.
+     * As it happens, the config model is first created with an application package in this subdirectory,
+     * and later used backed by an application package which is not in this subdirectory.
+     * To enable model code to correct for this, this constant must be publicly known.
+     *
+     * All of this stuff is Very Unfortunate and should be fixed. -Jon
+     */
+    public static final String preprocessed = ".preprocessed";
 
     private static final Logger log = Logger.getLogger(FilesApplicationPackage.class.getName());
     private static final String META_FILE_NAME = ".applicationMetaData";
@@ -86,7 +97,7 @@ public class FilesApplicationPackage implements ApplicationPackage {
      * @return an Application package instance
      */
     public static FilesApplicationPackage fromFile(File appDir, boolean includeSourceFiles) {
-        return new Builder(appDir).preprocessedDir(new File(appDir, ".preprocessed"))
+        return new Builder(appDir).preprocessedDir(new File(appDir, preprocessed))
                                   .includeSourceFiles(includeSourceFiles)
                                   .build();
     }
@@ -97,21 +108,21 @@ public class FilesApplicationPackage implements ApplicationPackage {
     }
 
     /** Creates package from a local directory, typically deploy app   */
-    public static FilesApplicationPackage fromFileWithDeployData(File appDir, DeployData deployData, 
+    public static FilesApplicationPackage fromFileWithDeployData(File appDir, DeployData deployData,
                                                                  boolean includeSourceFiles) {
         return new Builder(appDir).includeSourceFiles(includeSourceFiles).deployData(deployData).build();
     }
 
     private static ApplicationMetaData metaDataFromDeployData(File appDir, DeployData deployData) {
-        return new ApplicationMetaData(deployData.getDeployedByUser(), deployData.getDeployedFromDir(), 
-                                       deployData.getDeployTimestamp(), deployData.getApplicationName(), 
-                                       computeCheckSum(appDir), deployData.getGeneration(), 
+        return new ApplicationMetaData(deployData.getDeployedByUser(), deployData.getDeployedFromDir(),
+                                       deployData.getDeployTimestamp(), deployData.getApplicationName(),
+                                       computeCheckSum(appDir), deployData.getGeneration(),
                                        deployData.getCurrentlyActiveGeneration());
     }
 
     /**
      * New package from given path on local file system. Retrieves config definition files from
-     * the default location 'serverdb/classes'.
+     * the default location '$VESPA_HOME/share/vespa/configdefinitions'.
      *
      * @param appDir application package directory
      * @param preprocessedDir preprocessed application package output directory
@@ -385,9 +396,9 @@ public class FilesApplicationPackage implements ApplicationPackage {
         }
 	}
 
-    /** 
+    /**
      * Creates a reader for a config definition
-     * 
+     *
      * @param defPath the path to the application package
      * @return the reader of this config definition
      */
@@ -456,10 +467,10 @@ public class FilesApplicationPackage implements ApplicationPackage {
 
             if (defs.containsKey(key)) {
                 if (nv[0].contains(".")) {
-                    log.log(LogLevel.INFO, "Two config definitions found for the same name and namespace: " + key + 
+                    log.log(LogLevel.INFO, "Two config definitions found for the same name and namespace: " + key +
                                            ". The file '" + def + "' will take precedence");
                 } else {
-                    log.log(LogLevel.INFO, "Two config definitions found for the same name and namespace: " + key + 
+                    log.log(LogLevel.INFO, "Two config definitions found for the same name and namespace: " + key +
                                            ". Skipping '" + def + "', as it does not contain namespace in filename");
                     continue; // skip
                 }
@@ -659,11 +670,16 @@ public class FilesApplicationPackage implements ApplicationPackage {
 
     @Override
     public ApplicationPackage preprocess(Zone zone, RuleConfigDeriver ignored, DeployLogger logger) throws IOException, TransformerException, ParserConfigurationException, SAXException {
+        return preprocess(zone, logger);
+    }
+
+    @Override
+    public ApplicationPackage preprocess(Zone zone, DeployLogger logger) throws IOException, TransformerException, ParserConfigurationException, SAXException {
         IOUtils.recursiveDeleteDir(preprocessedDir);
-        IOUtils.copyDirectory(appDir, preprocessedDir, -1, (dir, name) -> ! name.equals(".preprocessed") &&
-                                                                          ! name.equals(SERVICES) &&
-                                                                          ! name.equals(HOSTS) &&
-                                                                          ! name.equals(CONFIG_DEFINITIONS_DIR));
+        IOUtils.copyDirectory(appDir, preprocessedDir, -1, (dir, name) -> ! name.equals(preprocessed) &&
+                                                                                         ! name.equals(SERVICES) &&
+                                                                                         ! name.equals(HOSTS) &&
+                                                                                         ! name.equals(CONFIG_DEFINITIONS_DIR));
         preprocessXML(new File(preprocessedDir, SERVICES), getServicesFile(), zone);
         if (getHostsFile().exists()) {
             preprocessXML(new File(preprocessedDir, HOSTS), getHostsFile(), zone);
@@ -704,7 +720,7 @@ public class FilesApplicationPackage implements ApplicationPackage {
         }
 
     }
-    
+
     /**
      * Adds the given path to the digest, or does nothing if path is neither file nor dir
      * @param path path to add to message digest
@@ -781,7 +797,7 @@ public class FilesApplicationPackage implements ApplicationPackage {
         }
 
         public FilesApplicationPackage build() {
-            return new FilesApplicationPackage(appDir, preprocessedDir.orElse(new File(appDir, ".preprocessed")),
+            return new FilesApplicationPackage(appDir, preprocessedDir.orElse(new File(appDir, preprocessed)),
                                                metaData.orElse(readMetaData(appDir)), includeSourceFiles);
         }
 

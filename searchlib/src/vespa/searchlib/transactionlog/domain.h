@@ -1,9 +1,10 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 #pragma once
 
-#include <vespa/searchlib/transactionlog/domainpart.h>
-#include <vespa/searchlib/transactionlog/session.h>
-#include <vespa/vespalib/util/threadstackexecutor.h>
+#include "domainpart.h"
+#include "session.h"
+#include <vespa/vespalib/util/threadexecutor.h>
+#include <chrono>
 
 namespace search::transactionlog {
 
@@ -20,14 +21,16 @@ struct PartInfo {
 };
 
 struct DomainInfo {
+    using DurationSeconds = std::chrono::duration<double>;
     SerialNumRange range;
     size_t numEntries;
     size_t byteSize;
+    DurationSeconds maxSessionRunTime;
     std::vector<PartInfo> parts;
-    DomainInfo(SerialNumRange range_in, size_t numEntries_in, size_t byteSize_in)
-        : range(range_in), numEntries(numEntries_in), byteSize(byteSize_in), parts() {}
+    DomainInfo(SerialNumRange range_in, size_t numEntries_in, size_t byteSize_in, DurationSeconds maxSessionRunTime_in)
+        : range(range_in), numEntries(numEntries_in), byteSize(byteSize_in), maxSessionRunTime(maxSessionRunTime_in), parts() {}
     DomainInfo()
-        : range(), numEntries(0), byteSize(0), parts() {}
+        : range(), numEntries(0), byteSize(0), maxSessionRunTime(), parts() {}
 };
 
 typedef std::map<vespalib::string, DomainInfo> DomainStats;
@@ -35,31 +38,20 @@ typedef std::map<vespalib::string, DomainInfo> DomainStats;
 class Domain
 {
 public:
-    typedef std::shared_ptr<Domain> SP;
-    Domain(const vespalib::string &name,
-           const vespalib::string &baseDir,
-           vespalib::ThreadStackExecutor & executor,
-           uint64_t domainPartSize,
-           bool useFsync,
-           DomainPart::Crc defaultCrcType,
+    using SP = std::shared_ptr<Domain>;
+    using Executor = vespalib::ThreadExecutor;
+    Domain(const vespalib::string &name, const vespalib::string &baseDir, Executor & commitExecutor,
+           Executor & sessionExecutor, uint64_t domainPartSize, DomainPart::Crc defaultCrcType,
            const common::FileHeaderContext &fileHeaderContext);
 
     virtual ~Domain();
 
     DomainInfo getDomainInfo() const;
-
     const vespalib::string & name() const { return _name; }
-    bool erase(const SerialNum & to);
+    bool erase(SerialNum to);
 
     void commit(const Packet & packet);
-    int
-    visit(const Domain::SP & self,
-          const SerialNum & from,
-          const SerialNum & to,
-          FRT_Supervisor & supervisor,
-          FNET_Connection *conn);
-
-    int subscribe(const Domain::SP & self, const SerialNum & from, FRT_Supervisor & supervisor, FNET_Connection *conn);
+    int visit(const Domain::SP & self, SerialNum from, SerialNum to, FRT_Supervisor & supervisor, FNET_Connection *conn);
 
     SerialNum begin() const;
     SerialNum end() const;
@@ -82,9 +74,10 @@ public:
         return base + "/" + domain;
     }
     vespalib::Executor::Task::UP execute(vespalib::Executor::Task::UP task) {
-        return _executor.execute(std::move(task));
+        return _sessionExecutor.execute(std::move(task));
     }
     uint64_t size() const;
+
 private:
     SerialNum begin(const vespalib::LockGuard & guard) const;
     SerialNum end(const vespalib::LockGuard & guard) const;
@@ -94,18 +87,18 @@ private:
     vespalib::string dir() const { return getDir(_baseDir, _name); }
     void addPart(int64_t partId, bool isLastPart);
 
-    typedef std::vector<SerialNum> SerialNumList;
+    using SerialNumList = std::vector<SerialNum>;
 
     SerialNumList scanDir();
 
-    typedef std::map<int, Session::SP > SessionList;
-    typedef std::map<int64_t, DomainPart::SP > DomainPartList;
-    typedef vespalib::ThreadStackExecutor Executor;
+    using SessionList = std::map<int, Session::SP>;
+    using DomainPartList = std::map<int64_t, DomainPart::SP>;
+    using DurationSeconds = std::chrono::duration<double>;
 
     DomainPart::Crc     _defaultCrcType;
-    Executor          & _executor;
+    Executor          & _commitExecutor;
+    Executor          & _sessionExecutor;
     std::atomic<int>    _sessionId;
-    const bool          _useFsync;
     vespalib::Monitor   _syncMonitor;
     bool                _pendingSync;
     vespalib::string    _name;
@@ -114,10 +107,10 @@ private:
     vespalib::Lock      _lock;
     vespalib::Lock      _sessionLock;
     SessionList         _sessions;
+    DurationSeconds     _maxSessionRunTime;
     vespalib::string    _baseDir;
     const common::FileHeaderContext &_fileHeaderContext;
     bool                _markedDeleted;
-    bool                _urgentSync;
 };
 
 }

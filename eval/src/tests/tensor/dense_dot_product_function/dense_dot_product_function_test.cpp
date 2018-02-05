@@ -1,10 +1,8 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
-#include <vespa/log/log.h>
-LOG_SETUP("dense_dot_product_function_test");
-
 #include <vespa/vespalib/testkit/test_kit.h>
 #include <vespa/eval/eval/tensor_function.h>
+#include <vespa/eval/tensor/default_tensor_engine.h>
 #include <vespa/eval/tensor/dense/dense_dot_product_function.h>
 #include <vespa/eval/tensor/dense/dense_tensor.h>
 #include <vespa/eval/tensor/dense/dense_tensor_builder.h>
@@ -12,15 +10,12 @@ LOG_SETUP("dense_dot_product_function_test");
 #include <vespa/vespalib/util/stringfmt.h>
 #include <vespa/vespalib/util/stash.h>
 
+#include <vespa/log/log.h>
+LOG_SETUP("dense_dot_product_function_test");
+
 using namespace vespalib;
 using namespace vespalib::eval;
 using namespace vespalib::tensor;
-
-ValueType
-makeType(size_t numCells)
-{
-    return ValueType::tensor_type({{"x", numCells}});
-}
 
 tensor::Tensor::UP
 makeTensor(size_t numCells, double cellBias)
@@ -36,10 +31,10 @@ makeTensor(size_t numCells, double cellBias)
 double
 calcDotProduct(const DenseTensor &lhs, const DenseTensor &rhs)
 {
-    size_t numCells = std::min(lhs.cells().size(), rhs.cells().size());
+    size_t numCells = std::min(lhs.cellsRef().size(), rhs.cellsRef().size());
     double result = 0;
     for (size_t i = 0; i < numCells; ++i) {
-        result += (lhs.cells()[i] * rhs.cells()[i]);
+        result += (lhs.cellsRef()[i] * rhs.cellsRef()[i]);
     }
     return result;
 }
@@ -50,37 +45,27 @@ asDenseTensor(const tensor::Tensor &tensor)
     return dynamic_cast<const DenseTensor &>(tensor);
 }
 
-class FunctionInput : public TensorFunction::Input
+class FunctionInput
 {
 private:
     tensor::Tensor::UP _lhsTensor;
     tensor::Tensor::UP _rhsTensor;
     const DenseTensor &_lhsDenseTensor;
     const DenseTensor &_rhsDenseTensor;
-    TensorValue _lhsValue;
-    TensorValue _rhsValue;
+    std::vector<Value::CREF> _params;
 
 public:
     FunctionInput(size_t lhsNumCells, size_t rhsNumCells)
         : _lhsTensor(makeTensor(lhsNumCells, 3.0)),
           _rhsTensor(makeTensor(rhsNumCells, 5.0)),
           _lhsDenseTensor(asDenseTensor(*_lhsTensor)),
-          _rhsDenseTensor(asDenseTensor(*_rhsTensor)),
-          _lhsValue(std::make_unique<DenseTensor>(_lhsDenseTensor.type(),
-                                                  _lhsDenseTensor.cells())),
-          _rhsValue(std::make_unique<DenseTensor>(_rhsDenseTensor.type(),
-                                                  _rhsDenseTensor.cells()))
-    {}
-    virtual const Value &get_tensor(size_t id) const override {
-        if (id == 0) {
-            return _lhsValue;
-        } else {
-            return _rhsValue;
-        }
+          _rhsDenseTensor(asDenseTensor(*_rhsTensor))
+    {
+        _params.emplace_back(_lhsDenseTensor);
+        _params.emplace_back(_rhsDenseTensor);
     }
-    virtual const UnaryOperation &get_map_operation(size_t) const override {
-        abort();
-    }
+    SimpleObjectParams get() const { return SimpleObjectParams(_params); }
+    const Value &param(size_t idx) const { return _params[idx]; }
     double expectedDotProduct() const {
         return calcDotProduct(_lhsDenseTensor, _rhsDenseTensor);
     }
@@ -88,25 +73,30 @@ public:
 
 struct Fixture
 {
-    DenseDotProductFunction function;
     FunctionInput input;
+    tensor_function::Inject a;
+    tensor_function::Inject b;
+    DenseDotProductFunction function;
     Fixture(size_t lhsNumCells, size_t rhsNumCells);
     ~Fixture();
     double eval() const {
-        Stash stash;
-        const Value &result = function.eval(input, stash);
+        InterpretedFunction ifun(DefaultTensorEngine::ref(), function);
+        InterpretedFunction::Context ictx(ifun);
+        const Value &result = ifun.eval(ictx, input.get());
         ASSERT_TRUE(result.is_double());
         LOG(info, "eval(): (%s) * (%s) = %f",
-            input.get_tensor(0).type().to_spec().c_str(),
-            input.get_tensor(1).type().to_spec().c_str(),
+            input.param(0).type().to_spec().c_str(),
+            input.param(1).type().to_spec().c_str(),
             result.as_double());
         return result.as_double();
     }
 };
 
 Fixture::Fixture(size_t lhsNumCells, size_t rhsNumCells)
-    : function(0, 1),
-      input(lhsNumCells, rhsNumCells)
+    : input(lhsNumCells, rhsNumCells),
+      a(input.param(0).type(), 0),
+      b(input.param(1).type(), 1),
+      function(a, b)
 { }
 
 Fixture::~Fixture() { }

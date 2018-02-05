@@ -4,10 +4,13 @@
 
 start = element deployment {
    attribute version { "1.0" } &
+   attribute athenz-domain { xsd:string }? &
+   attribute athenz-service { xsd:string }? &
    Upgrade? &
-   BlockUpgrade* &
+   BlockChange* &
    Test? &
    Staging? &
+   BlockUpgrade* &
    Prod*
 }
 
@@ -15,22 +18,33 @@ Upgrade = element upgrade {
     attribute policy { xsd:string }
 }
 
-BlockUpgrade = element block-upgrade {
+BlockChange = element block-change {
+    attribute revision { xsd:boolean }? &
+    attribute version { xsd:boolean }? &
+    attribute days { xsd:string } &
+    attribute hours { xsd:string } &
+    attribute time-zone { xsd:string }?
+}
+
+BlockUpgrade = element block-upgrade { # Legacy name - remove on Vespa 7
     attribute days { xsd:string } &
     attribute hours { xsd:string } &
     attribute time-zone { xsd:string }?
 }
 
 Test = element test {
-    text
+   attribute athenz-service { xsd:string }? &
+   text
 }
 
 Staging = element staging {
-    text
+   attribute athenz-service { xsd:string }? &
+   text
 }
 
 Prod = element prod {
    attribute global-service-id { text }? &
+   attribute athenz-service { xsd:string }? &
    Region* &
    Delay* &
    Parallel*

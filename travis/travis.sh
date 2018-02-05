@@ -5,16 +5,14 @@ set -e
 # Workaround for Travis log output timeout (jobs without output over 10 minutes are killed)
 function bell() {
   while true; do
-    echo -e "\a"
+    echo "."
     sleep 300
   done
 }
 
-PLATFORM_LANGUAGE=$1
 DOCKER_IMAGE=vespaengine/vespa-dev:latest
 
 bell &
 docker run --rm -v ${HOME}/.m2:/root/.m2 -v ${HOME}/.ccache:/root/.ccache -v $(pwd):/source \
-           --entrypoint /source/travis/travis-build-${PLATFORM_LANGUAGE}.sh ${DOCKER_IMAGE}
+           --entrypoint /source/travis/travis-build-full.sh ${DOCKER_IMAGE}
 exit $?
-

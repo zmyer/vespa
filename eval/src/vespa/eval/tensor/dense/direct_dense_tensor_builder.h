@@ -4,8 +4,7 @@
 
 #include "dense_tensor.h"
 
-namespace vespalib {
-namespace tensor {
+namespace vespalib::tensor {
 
 /**
  * Class for building a dense tensor by inserting cell values directly into underlying array of cells.
@@ -14,18 +13,31 @@ class DirectDenseTensorBuilder
 {
 public:
     using Cells = DenseTensor::Cells;
-    using Address = std::vector<size_t>;
+    using Address = DenseTensor::Address;
 
 private:
     eval::ValueType _type;
     Cells _cells;
 
+    static size_t calculateCellAddress(const Address &address, const eval::ValueType &type) {
+        size_t result = 0;
+        for (size_t i = 0; i < address.size(); ++i) {
+            result *= type.dimensions()[i].size;
+            result += address[i];
+        }
+        return result;
+    }
 public:
     DirectDenseTensorBuilder(const eval::ValueType &type_in);
     ~DirectDenseTensorBuilder();
-    void insertCell(const Address &address, double cellValue);
+    void insertCell(const Address &address, double cellValue) {
+        insertCell(calculateCellAddress(address, _type), cellValue);
+    }
+    void insertCell(size_t index, double cellValue) {
+        _cells[index] = cellValue;
+    }
     Tensor::UP build();
 };
 
-} // namespace tensor
-} // namespace vespalib
+}
+

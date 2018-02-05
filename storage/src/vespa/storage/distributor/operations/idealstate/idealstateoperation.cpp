@@ -3,14 +3,15 @@
 #include <vespa/storage/distributor/idealstatemanager.h>
 #include <vespa/storage/distributor/pendingmessagetracker.h>
 #include <vespa/storage/distributor/idealstatemetricsset.h>
-#include <vespa/storage/distributor/pendingmessagetracker.h>
-#include <vespa/storageapi/messageapi/maintenancecommand.h>
+#include <vespa/storage/distributor/distributor_bucket_space_repo.h>
+#include <vespa/documentapi/loadtypes/loadtypeset.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".distributor.operation");
 
 using namespace storage;
 using namespace storage::distributor;
+using document::BucketSpace;
 
 const uint32_t IdealStateOperation::MAINTENANCE_MESSAGE_TYPES[] =
 {
@@ -24,30 +25,36 @@ const uint32_t IdealStateOperation::MAINTENANCE_MESSAGE_TYPES[] =
 };
 
 IdealStateOperation::IdealStateOperation(const BucketAndNodes& bucketAndNodes)
-        : _manager(NULL),
-          _bucketAndNodes(bucketAndNodes),
-          _ok(true),
-          _priority(255)
+    : _manager(nullptr),
+      _bucketSpace(nullptr),
+      _bucketAndNodes(bucketAndNodes),
+      _ok(true),
+      _priority(255)
 {
 }
 
-IdealStateOperation::~IdealStateOperation()
-{
-}
+IdealStateOperation::~IdealStateOperation() = default;
 
-BucketAndNodes::BucketAndNodes(const document::BucketId& id, uint16_t node)
-    : _id(id)
+BucketAndNodes::BucketAndNodes(const document::Bucket &bucket, uint16_t node)
+    : _bucket(bucket)
 {
     _nodes.push_back(node);
 }
 
-BucketAndNodes::BucketAndNodes(const document::BucketId& id,
+BucketAndNodes::BucketAndNodes(const document::Bucket &bucket,
                                const std::vector<uint16_t>& nodes)
-    : _id(id),
+    : _bucket(bucket),
       _nodes(nodes)
 {
     assert(!nodes.empty());
     std::sort(_nodes.begin(), _nodes.end());
+}
+
+void
+BucketAndNodes::setBucketId(const document::BucketId &id)
+{
+    document::Bucket newBucket(_bucket.getBucketSpace(), id);
+    _bucket = newBucket;
 }
 
 std::string
@@ -65,9 +72,15 @@ BucketAndNodes::toString() const
     }
 
     ost <<  "] ";
-    ost <<  _id;
+    ost <<  _bucket.toString();
     return ost.str();
 }
+
+void
+IdealStateOperation::setIdealStateManager(IdealStateManager* manager) {
+    _manager = manager;
+    _bucketSpace = &_manager->getBucketSpaceRepo().get(getBucket().getBucketSpace());
+};
 
 void
 IdealStateOperation::done()
@@ -92,8 +105,7 @@ IdealStateOperation::setCommandMeta(api::MaintenanceCommand& cmd) const
 {
     cmd.setPriority(_priority);
     cmd.setReason(_detailedReason);
-    cmd.setLoadType(
-            (*_manager->getLoadTypes())["maintenance"]);
+    cmd.setLoadType((*_manager->getLoadTypes())["maintenance"]);
 }
 
 std::string
@@ -174,23 +186,32 @@ public:
     }
 };
 
+bool
+checkNullBucketRequestBucketInfoMessage(uint16_t node,
+                                        document::BucketSpace bucketSpace,
+                                        const PendingMessageTracker& tracker)
+{
+    RequestBucketInfoChecker rchk;
+    // Check messages sent to null-bucket (i.e. any bucket) for the node.
+    document::Bucket nullBucket(bucketSpace, document::BucketId());
+    tracker.checkPendingMessages(node, nullBucket, rchk);
+    return rchk.blocked;
+}
+
 }
 
 bool
-IdealStateOperation::checkBlock(const document::BucketId& bId,
+IdealStateOperation::checkBlock(const document::Bucket &bucket,
                                 const PendingMessageTracker& tracker) const
 {
     IdealStateOpChecker ichk(*this);
-    RequestBucketInfoChecker rchk;
     const std::vector<uint16_t>& nodes(getNodes());
-    for (size_t i = 0; i < nodes.size(); ++i) {
-        tracker.checkPendingMessages(nodes[i], bId, ichk);
+    for (auto node : nodes) {
+        tracker.checkPendingMessages(node, bucket, ichk);
         if (ichk.blocked) {
             return true;
         }
-        // Check messages sent to null-bucket (i.e. any bucket) for the node.
-        tracker.checkPendingMessages(nodes[i], document::BucketId(), rchk);
-        if (rchk.blocked) {
+        if (checkNullBucketRequestBucketInfoMessage(node, bucket.getBucketSpace(), tracker)) {
             return true;
         }
     }
@@ -199,21 +220,18 @@ IdealStateOperation::checkBlock(const document::BucketId& bId,
 
 bool
 IdealStateOperation::checkBlockForAllNodes(
-        const document::BucketId& bid,
+        const document::Bucket &bucket,
         const PendingMessageTracker& tracker) const
 {
     IdealStateOpChecker ichk(*this);
     // Check messages sent to _any node_ for _this_ particular bucket.
-    tracker.checkPendingMessages(bid, ichk);
+    tracker.checkPendingMessages(bucket, ichk);
     if (ichk.blocked) {
         return true;
     }
-    RequestBucketInfoChecker rchk;
-    // Check messages sent to null-bucket (i.e. _any bucket_) for the node.
     const std::vector<uint16_t>& nodes(getNodes());
-    for (size_t i = 0; i < nodes.size(); ++i) {
-        tracker.checkPendingMessages(nodes[i], document::BucketId(), rchk);
-        if (rchk.blocked) {
+    for (auto node : nodes) {
+        if (checkNullBucketRequestBucketInfoMessage(node, bucket.getBucketSpace(), tracker)) {
             return true;
         }
     }
@@ -224,7 +242,7 @@ IdealStateOperation::checkBlockForAllNodes(
 bool
 IdealStateOperation::isBlocked(const PendingMessageTracker& tracker) const
 {
-    return checkBlock(getBucketId(), tracker);
+    return checkBlock(getBucket(), tracker);
 }
 
 std::string

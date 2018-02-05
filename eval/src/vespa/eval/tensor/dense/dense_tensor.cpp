@@ -4,12 +4,10 @@
 #include <vespa/vespalib/util/stringfmt.h>
 #include <vespa/vespalib/util/exceptions.h>
 #include <vespa/eval/eval/operation.h>
-#include <sstream>
 
 using vespalib::eval::TensorSpec;
 
-namespace vespalib {
-namespace tensor {
+namespace vespalib::tensor {
 
 namespace {
 
@@ -26,13 +24,13 @@ calcCellsSize(const eval::ValueType &type)
 void
 checkCellsSize(const DenseTensor &arg)
 {
-    auto cellsSize = calcCellsSize(arg.type());
-    if (arg.cells().size() != cellsSize) {
+    auto cellsSize = calcCellsSize(arg.fast_type());
+    if (arg.cellsRef().size() != cellsSize) {
         throw IllegalStateException(make_string("Wrong cell size, "
                                                 "expected=%zu, "
                                                 "actual=%zu",
                                                 cellsSize,
-                                                arg.cells().size()));
+                                                arg.cellsRef().size()));
     }
 }
 
@@ -84,5 +82,5 @@ DenseTensor::operator==(const DenseTensor &rhs) const
             (_cells == rhs._cells);
 }
 
-} // namespace vespalib::tensor
-} // namespace vespalib
+}
+

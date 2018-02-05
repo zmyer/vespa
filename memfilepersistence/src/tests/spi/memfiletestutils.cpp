@@ -5,13 +5,16 @@
 #include <tests/spi/memfiletestutils.h>
 #include <tests/spi/simulatedfailurefile.h>
 #include <vespa/memfilepersistence/memfile/memfilecache.h>
-#include <vespa/storageframework/defaultimplementation/memory/simplememorylogic.h>
 #include <vespa/document/update/assignvalueupdate.h>
+#include <vespa/document/test/make_bucket_space.h>
+#include <vespa/persistence/spi/test.h>
 #include <vespa/vespalib/objects/nbostream.h>
 #include <vespa/vespalib/util/exceptions.h>
 #include <sys/time.h>
 
 using document::DocumentType;
+using document::test::makeBucketSpace;
+using storage::spi::test::makeSpiBucket;
 
 namespace storage {
 namespace memfile {
@@ -68,12 +71,6 @@ MemFileTestUtils::setupDisks(uint32_t numDisks) {
             new framework::defaultimplementation::ComponentRegisterImpl);
     _clock.reset(new FakeClock);
     _componentRegister->setClock(*_clock);
-    _memoryManager.reset(
-            new framework::defaultimplementation::MemoryManager(
-                framework::defaultimplementation::AllocationLogic::UP(
-                    new framework::defaultimplementation::SimpleMemoryLogic(
-                        *_clock, 1024 * 1024 * 1024))));
-    _componentRegister->setMemoryManager(*_memoryManager);
     _env.reset(new MemFileTestEnvironment(numDisks,
                                           *_componentRegister,
                                           *getTypeRepo()));
@@ -112,7 +109,7 @@ std::string
 MemFileTestUtils::getModifiedBuckets()
 {
     spi::BucketIdListResult result(
-            getPersistenceProvider().getModifiedBuckets());
+            getPersistenceProvider().getModifiedBuckets(makeBucketSpace()));
     const spi::BucketIdListResult::List& list(result.getList());
     std::ostringstream ss;
     for (size_t i = 0; i < list.size(); ++i) {
@@ -136,7 +133,7 @@ MemFileTestUtils::flush(const document::BucketId& id, uint16_t disk)
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
     return getPersistenceProvider().flush(
-            spi::Bucket(id, spi::PartitionId(disk)), context);
+            makeSpiBucket(id, spi::PartitionId(disk)), context);
 }
 
 document::Document::SP
@@ -152,7 +149,7 @@ MemFileTestUtils::doPutOnDisk(
     document::Document::SP doc(createRandomDocumentAtLocation(
                              location, timestamp.getTime(), minSize, maxSize));
     getPersistenceProvider().put(
-            spi::Bucket(document::BucketId(16, location), spi::PartitionId(disk)),
+            makeSpiBucket(document::BucketId(16, location), spi::PartitionId(disk)),
             spi::Timestamp(timestamp.getTime()),
             doc,
             context);
@@ -171,14 +168,14 @@ MemFileTestUtils::doRemoveOnDisk(
                          spi::Trace::TraceLevel(0));
     if (persistRemove == OperationHandler::PERSIST_REMOVE_IF_FOUND) {
         spi::RemoveResult result = getPersistenceProvider().removeIfFound(
-            spi::Bucket(bucketId, spi::PartitionId(disk)),
+            makeSpiBucket(bucketId, spi::PartitionId(disk)),
             spi::Timestamp(timestamp.getTime()),
             docId,
             context);
         return result.wasFound();
     }
     spi::RemoveResult result = getPersistenceProvider().remove(
-            spi::Bucket(bucketId, spi::PartitionId(disk)),
+            makeSpiBucket(bucketId, spi::PartitionId(disk)),
             spi::Timestamp(timestamp.getTime()),
             docId,
             context);
@@ -197,7 +194,7 @@ MemFileTestUtils::doUnrevertableRemoveOnDisk(
                          spi::Trace::TraceLevel(0));
     spi::RemoveResult result =
         getPersistenceProvider().remove(
-                spi::Bucket(bucketId, spi::PartitionId(disk)),
+                makeSpiBucket(bucketId, spi::PartitionId(disk)),
                 spi::Timestamp(timestamp.getTime()),
                 docId, context);
 
@@ -214,7 +211,7 @@ MemFileTestUtils::doGetOnDisk(
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
     return getPersistenceProvider().get(
-            spi::Bucket(bucketId, spi::PartitionId(disk)),
+            makeSpiBucket(bucketId, spi::PartitionId(disk)),
             fields, docId, context);
 }
 
@@ -272,7 +269,7 @@ MemFileTestUtils::doPut(const document::Document::SP& doc,
 {
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
-    getPersistenceProvider().put(spi::Bucket(bid, spi::PartitionId(disk)),
+    getPersistenceProvider().put(makeSpiBucket(bid, spi::PartitionId(disk)),
                                  spi::Timestamp(time.getTime()), doc, context);
 }
 
@@ -285,7 +282,7 @@ MemFileTestUtils::doUpdate(document::BucketId bid,
     spi::Context context(defaultLoadType, spi::Priority(0),
                          spi::Trace::TraceLevel(0));
     return getPersistenceProvider().update(
-            spi::Bucket(bid, spi::PartitionId(disk)),
+            makeSpiBucket(bid, spi::PartitionId(disk)),
             spi::Timestamp(time.getTime()), update, context);
 }
 
@@ -301,12 +298,12 @@ MemFileTestUtils::doRemove(const document::DocumentId& id, Timestamp time,
 
     if (unrevertableRemove) {
         getPersistenceProvider().remove(
-                spi::Bucket(bucket, spi::PartitionId(disk)),
+                makeSpiBucket(bucket, spi::PartitionId(disk)),
                 spi::Timestamp(time.getTime()),
                 id, context);
     } else {
         spi::RemoveResult result = getPersistenceProvider().removeIfFound(
-                spi::Bucket(bucket, spi::PartitionId(disk)),
+                makeSpiBucket(bucket, spi::PartitionId(disk)),
                 spi::Timestamp(time.getTime()),
                 id, context);
 

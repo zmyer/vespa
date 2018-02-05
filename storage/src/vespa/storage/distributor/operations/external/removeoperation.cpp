@@ -1,6 +1,7 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 #include "removeoperation.h"
 #include <vespa/storageapi/message/persistence.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".distributor.operation.external.remove");
@@ -8,8 +9,10 @@ LOG_SETUP(".distributor.operation.external.remove");
 
 using namespace storage::distributor;
 using namespace storage;
+using document::BucketSpace;
 
 RemoveOperation::RemoveOperation(DistributorComponent& manager,
+                                 DistributorBucketSpace &bucketSpace,
                                  const std::shared_ptr<api::RemoveCommand> & msg,
                                  PersistenceOperationMetricSet& metric,
                                  SequencingHandle sequencingHandle)
@@ -19,7 +22,8 @@ RemoveOperation::RemoveOperation(DistributorComponent& manager,
                manager, msg->getTimestamp()),
       _tracker(_trackerInstance),
       _msg(msg),
-      _manager(manager)
+      _manager(manager),
+      _bucketSpace(bucketSpace)
 {
 }
 
@@ -35,7 +39,7 @@ RemoveOperation::onStart(DistributorMessageSender& sender)
                     _msg->getDocumentId()));
 
     std::vector<BucketDatabase::Entry> entries;
-    _manager.getBucketDatabase().getParents(bucketId, entries);
+    _bucketSpace.getBucketDatabase().getParents(bucketId, entries);
 
     bool sent = false;
 
@@ -45,7 +49,7 @@ RemoveOperation::onStart(DistributorMessageSender& sender)
 
         for (uint32_t i = 0; i < e->getNodeCount(); i++) {
             std::shared_ptr<api::RemoveCommand> command(new api::RemoveCommand(
-                                                                  e.getBucketId(),
+                                                                  document::Bucket(_msg->getBucket().getBucketSpace(), e.getBucketId()),
                                                                   _msg->getDocumentId(),
                                                                   _msg->getTimestamp()));
 

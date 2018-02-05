@@ -7,16 +7,16 @@ import com.yahoo.vespa.config.content.core.StorServerConfig;
 import com.yahoo.config.model.test.MockRoot;
 import com.yahoo.vespa.model.content.cluster.ContentCluster;
 import com.yahoo.vespa.model.content.utils.ContentClusterUtils;
+import com.yahoo.vespa.model.content.utils.DocType;
 import com.yahoo.vespa.model.test.utils.ApplicationPackageUtils;
 import org.junit.Test;
 
-import java.util.Arrays;
 import java.util.List;
-import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
 import static org.hamcrest.Matchers.*;
+
 /**
  * Test for content DistributorCluster.
  */
@@ -302,73 +302,48 @@ public class DistributorTest {
         return new StorDistributormanagerConfig(builder);
     }
 
-    private static class DocDef {
-        public final String type;
-        public final String mode;
-
-        private DocDef(String type, String mode) {
-            this.type = type;
-            this.mode = mode;
-        }
-
-        public static DocDef storeOnly(String type) {
-            return new DocDef(type, "store-only");
-        }
-
-        public static DocDef index(String type) {
-            return new DocDef(type, "index");
-        }
-
-        public static DocDef streaming(String type) {
-            return new DocDef(type, "streaming");
-        }
-    }
-
-    private String generateXmlForDocDefs(DocDef... defs) {
+    private String generateXmlForDocTypes(DocType... docTypes) {
         return "<content id='storage'>\n" +
-               "  <documents>\n" +
-               Arrays.stream(defs)
-                  .map(def -> String.format("    <document type='%s' mode='%s'/>", def.type, def.mode))
-                  .collect(Collectors.joining("\n")) +
-               "\n  </documents>\n" +
-               "</content>";
+                DocType.listToXml(docTypes) +
+               "\n</content>";
     }
 
     @Test
     public void bucket_activation_disabled_if_no_documents_in_indexed_mode() {
         StorDistributormanagerConfig config = clusterXmlToConfig(
-                generateXmlForDocDefs(DocDef.storeOnly("music")));
+                generateXmlForDocTypes(DocType.storeOnly("music")));
         assertThat(config.disable_bucket_activation(), is(true));
     }
 
     @Test
     public void bucket_activation_enabled_with_single_indexed_document() {
         StorDistributormanagerConfig config = clusterXmlToConfig(
-                generateXmlForDocDefs(DocDef.index("music")));
+                generateXmlForDocTypes(DocType.index("music")));
         assertThat(config.disable_bucket_activation(), is(false));
     }
 
     @Test
     public void bucket_activation_enabled_with_multiple_indexed_documents() {
         StorDistributormanagerConfig config = clusterXmlToConfig(
-                generateXmlForDocDefs(DocDef.index("music"),
-                                      DocDef.index("movies")));
+                generateXmlForDocTypes(DocType.index("music"),
+                                       DocType.index("movies")));
         assertThat(config.disable_bucket_activation(), is(false));
     }
 
     @Test
     public void bucket_activation_enabled_if_at_least_one_document_indexed() {
         StorDistributormanagerConfig config = clusterXmlToConfig(
-                generateXmlForDocDefs(DocDef.storeOnly("music"),
-                                      DocDef.streaming("bunnies"),
-                                      DocDef.index("movies")));
+                generateXmlForDocTypes(DocType.storeOnly("music"),
+                                       DocType.streaming("bunnies"),
+                                       DocType.index("movies")));
         assertThat(config.disable_bucket_activation(), is(false));
     }
 
     @Test
     public void bucket_activation_disabled_for_single_streaming_type() {
         StorDistributormanagerConfig config = clusterXmlToConfig(
-                generateXmlForDocDefs(DocDef.streaming("music")));
+                generateXmlForDocTypes(DocType.streaming("music")));
         assertThat(config.disable_bucket_activation(), is(true));
     }
+
 }

@@ -5,6 +5,7 @@
 #include "minimumusedbitstracker.h"
 #include "lockablemap.hpp"
 #include <iomanip>
+#include <vespa/storage/common/content_bucket_space_repo.h>
 #include <vespa/storage/common/nodestateupdater.h>
 #include <vespa/storage/storageutil/distributorstatecache.h>
 #include <vespa/storageframework/generic/status/htmlstatusreporter.h>
@@ -15,13 +16,17 @@
 #include <vespa/storageapi/message/state.h>
 #include <vespa/storageapi/message/bucketsplitting.h>
 #include <vespa/storageapi/message/stat.h>
+#include <vespa/document/bucket/fixed_bucket_spaces.h>
 #include <vespa/vespalib/util/stringfmt.h>
 #include <vespa/vespalib/stllike/hash_map.hpp>
 #include <vespa/config/config.h>
-#include <unordered_map>
+#include <chrono>
 
 #include <vespa/log/bufferedlogger.h>
 LOG_SETUP(".storage.bucketdb.manager");
+
+using document::BucketSpace;
+using namespace std::chrono_literals;
 
 namespace storage {
 
@@ -30,9 +35,8 @@ BucketManager::BucketManager(const config::ConfigUri & configUri,
     : StorageLinkQueued("Bucket manager", compReg),
       framework::StatusReporter("bucketdb", "Bucket database"),
       _configUri(configUri),
-      _stateAccess(),
-      _bucketDBMemoryToken(),
-      _workerMonitor(),
+      _workerLock(),
+      _workerCond(),
       _clusterStateLock(),
       _queueProcessingLock(),
       _queuedReplies(),
@@ -44,12 +48,6 @@ BucketManager::BucketManager(const config::ConfigUri & configUri,
       _requestsCurrentlyProcessing(0),
       _component(compReg, "bucketmanager")
 {
-    const framework::MemoryAllocationType& allocType(
-            _component.getMemoryManager().registerAllocationType(
-                framework::MemoryAllocationType("DATABASE")));
-    _bucketDBMemoryToken = _component.getMemoryManager().allocate(
-            allocType, 0, 0, api::StorageMessage::HIGH);
-    assert(_bucketDBMemoryToken.get() != 0);
     _metrics->setDisks(_component.getDiskCount());
     _component.registerStatusPage(*this);
     _component.registerMetric(*_metrics);
@@ -78,7 +76,7 @@ void BucketManager::onClose()
 {
     // Stop internal thread such that we don't send any more messages down.
     if (_thread.get() != 0) {
-        _thread->interruptAndJoin(&_workerMonitor);
+        _thread->interruptAndJoin(_workerLock, _workerCond);
         _thread.reset(0);
     }
     StorageLinkQueued::onClose();
@@ -101,14 +99,14 @@ namespace {
         DistributorStateCache _state;
         std::unordered_map<uint16_t, ResultArray>& _result;
         const document::BucketIdFactory& _factory;
-        std::shared_ptr<lib::Distribution> _storageDistribution;
+        std::shared_ptr<const lib::Distribution> _storageDistribution;
 
     public:
         DistributorInfoGatherer(
                 const lib::ClusterState& systemState,
                 std::unordered_map<uint16_t, ResultArray>& result,
                 const document::BucketIdFactory& factory,
-                std::shared_ptr<lib::Distribution> distribution)
+                std::shared_ptr<const lib::Distribution> distribution)
             : _state(*distribution, systemState),
               _result(result),
               _factory(factory),
@@ -205,10 +203,10 @@ namespace {
 }   // End of anonymous namespace
 
 StorBucketDatabase::Entry
-BucketManager::getBucketInfo(const document::BucketId& id) const
+BucketManager::getBucketInfo(const document::Bucket &bucket) const
 {
     StorBucketDatabase::WrappedEntry entry(
-            _component.getBucketDatabase().get(id, "BucketManager::getBucketInfo"));
+            _component.getBucketDatabase(bucket.getBucketSpace()).get(bucket.getBucketId(), "BucketManager::getBucketInfo"));
     return *entry;
 }
 
@@ -218,13 +216,11 @@ BucketManager::updateMetrics(bool updateDocCount)
     LOG(debug, "Iterating bucket database to update metrics%s%s",
         updateDocCount ? "" : ", minusedbits only",
         _doneInitialized ? "" : ", server is not done initializing");
-    uint64_t dbMemSize = _component.getBucketDatabase().getMemoryUsage();
-    _bucketDBMemoryToken->resize(dbMemSize, dbMemSize);
 
     uint32_t diskCount = _component.getDiskCount();
     if (!updateDocCount || _doneInitialized) {
         MetricsUpdater m(diskCount);
-        _component.getBucketDatabase().chunkedAll(
+        _component.getBucketSpaceRepo().forEachBucketChunked(
                 m, "BucketManager::updateMetrics");
         if (updateDocCount) {
             for (uint16_t i = 0; i< diskCount; i++) {
@@ -241,7 +237,7 @@ BucketManager::updateMetrics(bool updateDocCount)
 void BucketManager::updateMinUsedBits()
 {
     MetricsUpdater m(_component.getDiskCount());
-    _component.getBucketDatabase().chunkedAll(
+    _component.getBucketSpaceRepo().forEachBucketChunked(
             m, "BucketManager::updateMetrics");
     // When going through to get sizes, we also record min bits
     MinimumUsedBitsTracker& bitTracker(_component.getMinUsedBitsTracker());
@@ -263,23 +259,23 @@ void BucketManager::run(framework::ThreadHandle& thread)
     framework::MilliSecTime timeToCheckMinUsedBits(0);
     while (!thread.interrupted()) {
         bool didWork = false;
-        BIList infoReqs;
+        BucketInfoRequestMap infoReqs;
         {
-            vespalib::MonitorGuard monitor(_workerMonitor);
+            std::lock_guard<std::mutex> guard(_workerLock);
             infoReqs.swap(_bucketInfoRequests);
         }
 
-        didWork |= processRequestBucketInfoCommands(infoReqs);
+        for (auto &req : infoReqs) {
+            didWork |= processRequestBucketInfoCommands(req.first, req.second);
+        }
 
         {
-            vespalib::MonitorGuard monitor(_workerMonitor);
-            if (!infoReqs.empty()) {
-                infoReqs.insert(infoReqs.end(),
-                        _bucketInfoRequests.begin(), _bucketInfoRequests.end());
-                _bucketInfoRequests.swap(infoReqs);
+            std::unique_lock<std::mutex> guard(_workerLock);
+            for (const auto &req : infoReqs) {
+                assert(req.second.empty());
             }
             if (!didWork) {
-                monitor.wait(1000);
+                _workerCond.wait_for(guard, 1s);
                 thread.registerTick(framework::WAIT_CYCLE);
             } else {
                 thread.registerTick(framework::PROCESS_CYCLE);
@@ -338,11 +334,21 @@ BucketManager::reportStatus(std::ostream& out,
     bool showAll = path.hasAttribute("showall");
     if (showAll) {
         framework::PartlyXmlStatusReporter xmlReporter(*this, out, path);
+
+        using vespalib::xml::XmlTag;
+        using vespalib::xml::XmlEndTag;
+        using vespalib::xml::XmlAttribute;
+
         xmlReporter << vespalib::xml::XmlTag("buckets");
-        BucketDBDumper dumper(xmlReporter.getStream());
-        _component.getBucketDatabase().chunkedAll(
-                dumper, "BucketManager::getStatus");
-        xmlReporter << vespalib::xml::XmlEndTag();
+        for (auto& space : _component.getBucketSpaceRepo()) {
+            xmlReporter << XmlTag("bucket-space")
+                        << XmlAttribute("name", document::FixedBucketSpaces::to_string(space.first));
+            BucketDBDumper dumper(xmlReporter.getStream());
+            _component.getBucketSpaceRepo().get(space.first).bucketDatabase().chunkedAll(
+                    dumper, "BucketManager::reportStatus");
+            xmlReporter << XmlEndTag();
+        }
+        xmlReporter << XmlEndTag();
     } else {
         framework::PartlyHtmlStatusReporter htmlReporter(*this);
         htmlReporter.reportHtmlHeader(out, path);
@@ -359,7 +365,7 @@ BucketManager::dump(std::ostream& out) const
 {
     vespalib::XmlOutputStream xos(out);
     BucketDBDumper dumper(xos);
-    _component.getBucketDatabase().chunkedAll(dumper, 0);
+    _component.getBucketSpaceRepo().forEachBucketChunked(dumper, "BucketManager::dump");
 }
 
 
@@ -390,21 +396,22 @@ bool BucketManager::onRequestBucketInfo(
     LOG(debug, "Got request bucket info command");
     if (cmd->getBuckets().size() == 0 && cmd->hasSystemState()) {
 
-        vespalib::MonitorGuard monitor(_workerMonitor);
-        _bucketInfoRequests.push_back(cmd);
-        monitor.signal();
+        std::lock_guard<std::mutex> guard(_workerLock);
+        _bucketInfoRequests[cmd->getBucketSpace()].push_back(cmd);
+        _workerCond.notify_all();
         LOG(spam, "Scheduled request bucket info request for retrieval");
         return true;
     }
 
     ScopedQueueDispatchGuard queueGuard(*this);
 
+    BucketSpace bucketSpace(cmd->getBucketSpace());
     api::RequestBucketInfoReply::EntryVector info;
     if (cmd->getBuckets().size()) {
         typedef std::map<document::BucketId,
                          StorBucketDatabase::WrappedEntry> BucketMap;
         for (uint32_t i = 0; i < cmd->getBuckets().size(); i++) {
-            BucketMap entries(_component.getBucketDatabase().getAll(
+            BucketMap entries(_component.getBucketDatabase(bucketSpace).getAll(
                                     cmd->getBuckets()[i],
                                     "BucketManager::onRequestBucketInfo"));
             for (BucketMap::iterator it = entries.begin();
@@ -468,7 +475,7 @@ BucketManager::ScopedQueueDispatchGuard::~ScopedQueueDispatchGuard()
 void
 BucketManager::enterQueueProtectedSection()
 {
-    vespalib::LockGuard guard(_queueProcessingLock);
+    std::lock_guard<std::mutex> guard(_queueProcessingLock);
     ++_requestsCurrentlyProcessing;
 }
 
@@ -476,7 +483,7 @@ void
 BucketManager::leaveQueueProtectedSection(ScopedQueueDispatchGuard& queueGuard)
 {
     (void) queueGuard; // Only used to enforce guard is held while calling.
-    vespalib::LockGuard guard(_queueProcessingLock);
+    std::lock_guard<std::mutex> guard(_queueProcessingLock);
     assert(_requestsCurrentlyProcessing > 0);
     // Full bucket info fetches may be concurrently interleaved with bucket-
     // specific fetches outside of the processing thread. We only allow queued
@@ -494,7 +501,8 @@ BucketManager::leaveQueueProtectedSection(ScopedQueueDispatchGuard& queueGuard)
 }
 
 bool
-BucketManager::processRequestBucketInfoCommands(BIList& reqs)
+BucketManager::processRequestBucketInfoCommands(document::BucketSpace bucketSpace,
+                                                BucketInfoRequestList &reqs)
 {
     if (reqs.empty()) return false;
 
@@ -508,7 +516,7 @@ BucketManager::processRequestBucketInfoCommands(BIList& reqs)
     typedef std::shared_ptr<api::RequestBucketInfoCommand> RBISP;
     std::map<uint16_t, RBISP> requests;
 
-    lib::Distribution::SP distribution(_component.getDistribution());
+    auto distribution(_component.getBucketSpaceRepo().get(bucketSpace).getDistribution());
     lib::ClusterState::CSP clusterState(
             _component.getStateUpdater().getSystemState());
     assert(clusterState.get());
@@ -524,8 +532,8 @@ BucketManager::processRequestBucketInfoCommands(BIList& reqs)
         clusterState->toString().c_str(),
         our_hash.c_str());
 
-    vespalib::LockGuard lock(_clusterStateLock);
-    for (BIList::reverse_iterator it = reqs.rbegin(); it != reqs.rend(); ++it) {
+    std::lock_guard<std::mutex> clusterStateGuard(_clusterStateLock);
+    for (auto it = reqs.rbegin(); it != reqs.rend(); ++it) {
         // Currently small requests should not be forwarded to worker thread
         assert((*it)->hasSystemState());
         const auto their_hash = normalizer.normalize(
@@ -598,12 +606,12 @@ BucketManager::processRequestBucketInfoCommands(BIList& reqs)
     if (LOG_WOULD_LOG(spam)) {
         DistributorInfoGatherer<true> builder(
                 *clusterState, result, idFac, distribution);
-        _component.getBucketDatabase().chunkedAll(builder,
+        _component.getBucketDatabase(bucketSpace).chunkedAll(builder,
                         "BucketManager::processRequestBucketInfoCommands-1");
     } else {
         DistributorInfoGatherer<false> builder(
                 *clusterState, result, idFac, distribution);
-        _component.getBucketDatabase().chunkedAll(builder,
+        _component.getBucketDatabase(bucketSpace).chunkedAll(builder,
                         "BucketManager::processRequestBucketInfoCommands-2");
     }
     _metrics->fullBucketInfoLatency.addValue(
@@ -624,7 +632,7 @@ BucketManager::processRequestBucketInfoCommands(BIList& reqs)
 size_t
 BucketManager::bucketInfoRequestsCurrentlyProcessing() const noexcept
 {
-    vespalib::LockGuard guard(_queueProcessingLock);
+    std::lock_guard<std::mutex> guard(_queueProcessingLock);
     return _requestsCurrentlyProcessing;
 }
 
@@ -639,7 +647,7 @@ BucketManager::onUp(const std::shared_ptr<api::StorageMessage>& msg)
 
 bool
 BucketManager::verifyAndUpdateLastModified(api::StorageCommand& cmd,
-                                           const document::BucketId& bucketId,
+                                           const document::Bucket &bucket,
                                            uint64_t lastModified)
 {
     LOG(spam, "Received operation %s with modification timestamp %zu",
@@ -650,7 +658,7 @@ BucketManager::verifyAndUpdateLastModified(api::StorageCommand& cmd,
 
     {
         StorBucketDatabase::WrappedEntry entry(
-                _component.getBucketDatabase().get(bucketId, "BucketManager::verify"));
+                _component.getBucketDatabase(bucket.getBucketSpace()).get(bucket.getBucketId(), "BucketManager::verify"));
 
         if (entry.exist()) {
             prevLastModified = entry->info.getLastModified();
@@ -674,7 +682,7 @@ BucketManager::verifyAndUpdateLastModified(api::StorageCommand& cmd,
                                      "bucket %s, with timestamp %zu",
                                      cmd.toString().c_str(),
                                      lastModified,
-                                     bucketId.toString().c_str(),
+                                     bucket.toString().c_str(),
                                      prevLastModified)));
 
 
@@ -689,7 +697,7 @@ BucketManager::onSetSystemState(
     LOG(debug, "onSetSystemState(%s)", cmd->toString().c_str());
     const lib::ClusterState& state(cmd->getSystemState());
     std::string unified(unifyState(state));
-    vespalib::LockGuard lock(_clusterStateLock);
+    std::lock_guard<std::mutex> lock(_clusterStateLock);
     if (unified != _lastUnifiedClusterState
         || state.getVersion() != _lastClusterStateSeen + 1)
     {
@@ -735,7 +743,7 @@ bool
 BucketManager::onRemove(const api::RemoveCommand::SP& cmd)
 {
     if (!verifyAndUpdateLastModified(*cmd,
-                                     cmd->getBucketId(),
+                                     cmd->getBucket(),
                                      cmd->getTimestamp())) {
         return true;
     }
@@ -753,7 +761,7 @@ bool
 BucketManager::onPut(const api::PutCommand::SP& cmd)
 {
     if (!verifyAndUpdateLastModified(*cmd,
-                                     cmd->getBucketId(),
+                                     cmd->getBucket(),
                                      cmd->getTimestamp())) {
         return true;
     }
@@ -771,7 +779,7 @@ bool
 BucketManager::onUpdate(const api::UpdateCommand::SP& cmd)
 {
     if (!verifyAndUpdateLastModified(*cmd,
-                                     cmd->getBucketId(),
+                                     cmd->getBucket(),
                                      cmd->getTimestamp())) {
         return true;
     }
@@ -799,7 +807,7 @@ BucketManager::enqueueIfBucketHasConflicts(const api::BucketReply::SP& reply)
 {
     // Should very rarely contend, since persistence replies are all sent up
     // via a single dispatcher thread.
-    vespalib::LockGuard guard(_queueProcessingLock);
+    std::lock_guard<std::mutex> guard(_queueProcessingLock);
     if (_requestsCurrentlyProcessing == 0) {
         return false; // Nothing to do here; pass through reply.
     }
@@ -836,7 +844,7 @@ bool
 BucketManager::enqueueAsConflictIfProcessingRequest(
         const api::StorageReply::SP& reply)
 {
-    vespalib::LockGuard guard(_queueProcessingLock);
+    std::lock_guard<std::mutex> guard(_queueProcessingLock);
     if (_requestsCurrentlyProcessing != 0) {
         LOG(debug, "Enqueued %s due to concurrent RequestBucketInfo",
             reply->toString().c_str());

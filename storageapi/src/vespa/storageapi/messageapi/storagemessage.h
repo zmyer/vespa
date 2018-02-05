@@ -12,12 +12,11 @@
 #pragma once
 
 #include "messagehandler.h"
-#include <vespa/storageframework/generic/memory/memorytoken.h>
 #include <vespa/documentapi/loadtypes/loadtype.h>
 #include <vespa/messagebus/routing/route.h>
 #include <vespa/messagebus/trace.h>
 #include <vespa/vdslib/state/nodetype.h>
-#include <vespa/document/bucket/bucketid.h>
+#include <vespa/document/bucket/bucket.h>
 #include <vespa/vespalib/util/printable.h>
 #include <map>
 
@@ -335,7 +334,6 @@ private:
     StorageMessage(const StorageMessage&);
 
     mutable std::unique_ptr<TransportContext> _transportContext;
-    std::unique_ptr<framework::MemoryToken> _memoryToken;
 
 protected:
     static Id generateMsgId();
@@ -350,6 +348,7 @@ protected:
     StorageMessage(const MessageType& code, Id id);
     StorageMessage(const StorageMessage&, Id id);
 
+    static document::Bucket getDummyBucket() { return document::Bucket(document::BucketSpace::invalid(), document::BucketId()); }
 public:
     virtual ~StorageMessage();
 
@@ -373,10 +372,6 @@ public:
 
     void setAddress(const StorageMessageAddress& address)
         { _address.reset(new StorageMessageAddress(address)); }
-
-    void setMemoryToken(std::unique_ptr<framework::MemoryToken> token) {
-        _memoryToken = std::move(token);
-    }
 
     /**
        Returns the approximate memory footprint of a storage message.
@@ -420,7 +415,8 @@ public:
      */
     virtual vespalib::string getSummary() const;
 
-    virtual document::BucketId getBucketId() const { return document::BucketId(); }
+    virtual document::Bucket getBucket() const { return getDummyBucket(); }
+    document::BucketId getBucketId() const { return getBucket().getBucketId(); }
     virtual bool hasSingleBucketId() const { return false; }
 };
 

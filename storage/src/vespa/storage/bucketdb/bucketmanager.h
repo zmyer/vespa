@@ -12,20 +12,22 @@
 
 #pragma once
 
-#include <vespa/storage/bucketdb/config-stor-bucketdb.h>
-#include "storbucketdb.h"
 #include "bucketmanagermetrics.h"
+#include "storbucketdb.h"
+#include <vespa/config/subscription/configuri.h>
+#include <vespa/storage/bucketdb/config-stor-bucketdb.h>
 #include <vespa/storage/common/bucketmessages.h>
 #include <vespa/storage/common/servicelayercomponent.h>
 #include <vespa/storage/common/storagelinkqueued.h>
-#include <vespa/storageframework/generic/memory/memorymanagerinterface.h>
-#include <vespa/storageframework/generic/status/statusreporter.h>
-#include <vespa/storageframework/generic/metric/metricupdatehook.h>
-
 #include <vespa/storageapi/message/bucket.h>
-#include <vespa/config/subscription/configuri.h>
-#include <unordered_set>
+#include <vespa/storageframework/generic/metric/metricupdatehook.h>
+#include <vespa/storageframework/generic/status/statusreporter.h>
+
 #include <list>
+#include <unordered_map>
+#include <unordered_set>
+#include <mutex>
+#include <condition_variable>
 
 namespace storage {
 
@@ -34,28 +36,30 @@ class BucketManager : public StorageLinkQueued,
                       private framework::Runnable,
                       private framework::MetricUpdateHook
 {
+public:
     /** Type used for message queues */
-    typedef std::list<std::shared_ptr<api::StorageCommand> > CommandList;
-    typedef std::list<std::shared_ptr<api::RequestBucketInfoCommand> > BIList;
+    using CommandList = std::list<std::shared_ptr<api::StorageCommand>>;
+    using BucketInfoRequestList = std::list<std::shared_ptr<api::RequestBucketInfoCommand>>;
+    using BucketInfoRequestMap = std::unordered_map<document::BucketSpace, BucketInfoRequestList, document::BucketSpace::hash>;
 
+private:
     config::ConfigUri _configUri;
 
     uint32_t _chunkLevel;
-    mutable vespalib::Lock _stateAccess;
-    framework::MemoryToken::UP _bucketDBMemoryToken;
-    BIList _bucketInfoRequests;
+    BucketInfoRequestMap _bucketInfoRequests;
 
     /**
      * We have our own thread running, which we use to send messages down.
-     * Take worker monitor, add to list and signal for messages to be sent.
+     * Take worker lock, add to list and signal for messages to be sent.
      */
-    mutable vespalib::Monitor _workerMonitor;
+    mutable std::mutex      _workerLock;
+    std::condition_variable _workerCond;
     /**
      * Lock kept for access to 3 values below concerning cluster state.
      */
-    vespalib::Lock _clusterStateLock;
+    std::mutex         _clusterStateLock;
 
-    vespalib::Lock _queueProcessingLock;
+    mutable std::mutex _queueProcessingLock;
     using ReplyQueue = std::vector<api::StorageReply::SP>;
     using ConflictingBuckets = std::unordered_set<document::BucketId,
                                                   document::BucketId::hash>;
@@ -106,7 +110,7 @@ public:
     void dump(std::ostream& out) const;
 
     /** Get info for given bucket (Used for whitebox testing) */
-    StorBucketDatabase::Entry getBucketInfo(const document::BucketId& id) const;
+    StorBucketDatabase::Entry getBucketInfo(const document::Bucket &id) const;
 
 private:
     friend class BucketManagerTest;
@@ -128,7 +132,8 @@ private:
     void updateMinUsedBits();
 
     bool onRequestBucketInfo(const std::shared_ptr<api::RequestBucketInfoCommand>&) override;
-    bool processRequestBucketInfoCommands(BIList&);
+    bool processRequestBucketInfoCommands(document::BucketSpace bucketSpace,
+                                          BucketInfoRequestList &reqs);
 
     /**
      * Enqueue reply and add its bucket to the set of conflicting buckets iff
@@ -227,7 +232,7 @@ private:
            const std::shared_ptr<api::NotifyBucketChangeReply>&) override;
 
     bool verifyAndUpdateLastModified(api::StorageCommand& cmd,
-                                     const document::BucketId& bucketId,
+                                     const document::Bucket& bucket,
                                      uint64_t lastModified);
     bool onSplitBucketReply(
             const std::shared_ptr<api::SplitBucketReply>&) override;

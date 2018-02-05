@@ -18,16 +18,10 @@ using namespace vespalib::tensor;
 
 //-----------------------------------------------------------------------------
 
-const vespalib::string dot_product_match_expr    = "sum(query*document)";
-const vespalib::string dot_product_multiply_expr = "sum(query*document)";
-const vespalib::string model_match_expr          = "sum((query*document)*model)";
-const vespalib::string matrix_product_expr       = "sum(sum((query+document)*model,x))";
-
-//-----------------------------------------------------------------------------
-
-Value::UP wrap(std::unique_ptr<eval::Tensor> tensor) {
-    return Value::UP(new TensorValue(std::move(tensor)));
-}
+const vespalib::string dot_product_match_expr    = "reduce(query*document,sum)";
+const vespalib::string dot_product_multiply_expr = "reduce(query*document,sum)";
+const vespalib::string model_match_expr          = "reduce((query*document)*model,sum)";
+const vespalib::string matrix_product_expr       = "reduce(reduce((query+document)*model,sum,x),sum)";
 
 //-----------------------------------------------------------------------------
 
@@ -37,19 +31,16 @@ struct Params {
         map.emplace(name, std::move(value));
         return *this;
     }
-    Params &add(const vespalib::string &name, std::unique_ptr<eval::Tensor> value) {
-        return add(name, wrap(std::move(value)));
-    }
 };
 
-InterpretedFunction::SimpleObjectParams make_params(const Function &function, const Params &params)
+SimpleObjectParams make_params(const Function &function, const Params &params)
 {
-    InterpretedFunction::SimpleObjectParams fun_params({});
+    SimpleObjectParams fun_params({});
     EXPECT_EQUAL(params.map.size(), function.num_params());
     for (size_t i = 0; i < function.num_params(); ++i) {
         auto param = params.map.find(function.param_name(i));
         ASSERT_TRUE(param != params.map.end());
-        fun_params.params.push_back(*(param->second));
+        fun_params.params.push_back(*param->second);
     }
     return fun_params;
 }
@@ -77,7 +68,7 @@ double calculate_expression(const vespalib::string &expression, const Params &pa
 }
 
 DoubleValue dummy_result(0.0);
-const Value &dummy_ranking(InterpretedFunction::Context &, InterpretedFunction::LazyParams &) { return dummy_result; }
+const Value &dummy_ranking(InterpretedFunction::Context &, LazyParams &) { return dummy_result; }
 
 double benchmark_expression_us(const vespalib::string &expression, const Params &params) {
     const Function function = Function::parse(expression);
@@ -92,9 +83,8 @@ double benchmark_expression_us(const vespalib::string &expression, const Params 
 
 //-----------------------------------------------------------------------------
 
-tensor::Tensor::UP make_tensor(const TensorSpec &spec) {
-    auto tensor = DefaultTensorEngine::ref().create(spec);
-    return tensor::Tensor::UP(dynamic_cast<tensor::Tensor*>(tensor.release()));
+Value::UP make_tensor(TensorSpec spec) {
+    return DefaultTensorEngine::ref().from_spec(spec);
 }
 
 //-----------------------------------------------------------------------------

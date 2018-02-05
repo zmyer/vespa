@@ -1,20 +1,26 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.vespa.model.admin;
 
-import com.yahoo.cloud.config.log.LogdConfig;
+import com.yahoo.cloud.config.SlobroksConfig;
 import com.yahoo.cloud.config.ZookeepersConfig;
+import com.yahoo.cloud.config.log.LogdConfig;
 import com.yahoo.config.model.api.ConfigServerSpec;
 import com.yahoo.config.model.deploy.DeployProperties;
 import com.yahoo.config.model.producer.AbstractConfigProducer;
-import com.yahoo.cloud.config.SlobroksConfig;
 import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.config.provision.Zone;
-import com.yahoo.vespa.model.*;
+import com.yahoo.vespa.model.AbstractService;
+import com.yahoo.vespa.model.ConfigProxy;
+import com.yahoo.vespa.model.ConfigSentinel;
+import com.yahoo.vespa.model.HostResource;
+import com.yahoo.vespa.model.Logd;
 import com.yahoo.vespa.model.admin.monitoring.MetricsConsumer;
 import com.yahoo.vespa.model.admin.monitoring.Monitoring;
 import com.yahoo.vespa.model.admin.monitoring.builder.Metrics;
 import com.yahoo.vespa.model.container.ContainerCluster;
+import com.yahoo.vespa.model.filedistribution.DummyFileDistributionConfigProducer;
 import com.yahoo.vespa.model.filedistribution.FileDistributionConfigProducer;
+import com.yahoo.vespa.model.filedistribution.FileDistributionConfigProvider;
 import com.yahoo.vespa.model.filedistribution.FileDistributor;
 import com.yahoo.vespa.model.filedistribution.FileDistributorService;
 
@@ -23,8 +29,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-
-import com.yahoo.vespa.model.HostResource;
 
 /**
  * This is the admin pseudo-plugin of the Vespa model, responsible for
@@ -44,6 +48,11 @@ public class Admin extends AbstractConfigProducer implements Serializable {
     private final List<Slobrok> slobroks = new ArrayList<>();
     private Configserver defaultConfigserver;
     private Logserver logserver;
+    private LogForwarder.Config logForwarderConfig = null;
+
+    public void setLogForwarderConfig(LogForwarder.Config cfg) {
+        this.logForwarderConfig = cfg;
+    }
 
     /**
      * The single cluster controller cluster shared by all content clusters by default when not multitenant.
@@ -59,17 +68,17 @@ public class Admin extends AbstractConfigProducer implements Serializable {
                  Monitoring monitoring,
                  Metrics metrics,
                  Map<String, MetricsConsumer> legacyMetricsConsumers,
-                 boolean multitenant) {
+                 boolean multitenant,
+                 FileDistributionConfigProducer fileDistributionConfigProducer) {
         super(parent, "admin");
         this.monitoring = monitoring;
         this.metrics = metrics;
         this.legacyMetricsConsumers = legacyMetricsConsumers;
         this.multitenant = multitenant;
+        this.fileDistribution = fileDistributionConfigProducer;
     }
 
-    public Configserver getConfigserver() {
-        return defaultConfigserver;
-    }
+    public Configserver getConfigserver() { return defaultConfigserver; }
 
     /** Returns the configured monitoring endpoint, or null if not configured */
     public Monitoring getMonitoring() {
@@ -131,6 +140,7 @@ public class Admin extends AbstractConfigProducer implements Serializable {
     public void getConfig(LogdConfig.Builder builder) {
         builder.
             logserver(new LogdConfig.Logserver.Builder().
+                    use(!isHostedVespa()).
                     host(logserver.getHostName()).
                     port(logserver.getRelativePort(1)));
     }
@@ -145,10 +155,6 @@ public class Admin extends AbstractConfigProducer implements Serializable {
 
     public void getConfig(ZookeepersConfig.Builder builder) {
         zooKeepersConfigProvider.getConfig(builder);
-    }
-
-    public void setFileDistribution(FileDistributionConfigProducer fileDistribution) {
-        this.fileDistribution = fileDistribution;
     }
 
     public FileDistributionConfigProducer getFileDistributionConfigProducer() {
@@ -185,12 +191,19 @@ public class Admin extends AbstractConfigProducer implements Serializable {
         addLogd(host);
         addConfigProxy(host);
         addFileDistribution(host);
+        if (logForwarderConfig != null) {
+            addLogForwarder(host);
+        }
     }
 
     private void addConfigSentinel(HostResource host, ApplicationId applicationId, Zone zone) {
         ConfigSentinel configSentinel = new ConfigSentinel(host.getHost(), applicationId, zone);
         addAndInitializeService(host, configSentinel);
         host.getHost().setConfigSentinel(configSentinel);
+    }
+
+    private void addLogForwarder(HostResource host) {
+        addAndInitializeService(host, new LogForwarder(host.getHost(), logForwarderConfig));
     }
 
     private void addLogd(HostResource host) {
@@ -214,11 +227,25 @@ public class Admin extends AbstractConfigProducer implements Serializable {
                                        fileDistributor.fileSourceHost() + "'. Hostsystem=" + getHostSystem());
         }
 
-        FileDistributorService fds = new FileDistributorService(fileDistribution, host.getHost().getHostName(),
-            fileDistribution.getFileDistributor(), fileDistribution.getOptions(), host == deployHost);
-        fds.setHostResource(host);
-        fds.initService();
-        fileDistribution.addFileDistributionService(host.getHost(), fds);
+        FileDistributionConfigProvider configProvider =
+                new FileDistributionConfigProvider(fileDistributor,
+                                                   fileDistribution.getOptions(),
+                                                   host == deployHost,
+                                                   host.getHost());
+        if (fileDistribution.getOptions().disableFiledistributor()) {
+            DummyFileDistributionConfigProducer dummyFileDistributionConfigProducer =
+                    new DummyFileDistributionConfigProducer(fileDistribution,
+                                                            host.getHost().getHostname(),
+                                                            configProvider);
+            fileDistribution.addFileDistributionConfigProducer(host.getHost(), dummyFileDistributionConfigProducer);
+        } else {
+            FileDistributorService fds = new FileDistributorService(fileDistribution,
+                                                                    host.getHost().getHostname(),
+                                                                    configProvider);
+            fds.setHostResource(host);
+            fds.initService();
+            fileDistribution.addFileDistributionConfigProducer(host.getHost(), fds);
+        }
     }
 
     private boolean deployHostIsMissing(HostResource deployHost) {

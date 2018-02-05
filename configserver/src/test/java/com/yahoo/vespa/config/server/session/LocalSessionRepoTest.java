@@ -2,10 +2,11 @@
 package com.yahoo.vespa.config.server.session;
 
 import com.yahoo.config.model.application.provider.FilesApplicationPackage;
-import com.yahoo.path.Path;
 import com.yahoo.test.ManualClock;
-import com.yahoo.vespa.config.server.*;
 import com.yahoo.config.provision.TenantName;
+import com.yahoo.vespa.config.server.GlobalComponentRegistry;
+import com.yahoo.vespa.config.server.TestComponentRegistry;
+import com.yahoo.vespa.config.server.TestWithCurator;
 import com.yahoo.vespa.config.server.application.MemoryTenantApplications;
 import com.yahoo.vespa.config.server.deploy.TenantFileSystemDirs;
 import com.yahoo.io.IOUtils;
@@ -25,8 +26,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.fail;
 
 /**
- * @author lulf
- * @since 5.1
+ * @author Ulf Lilleengen
  */
 public class LocalSessionRepoTest extends TestWithCurator {
 
@@ -44,20 +44,17 @@ public class LocalSessionRepoTest extends TestWithCurator {
         GlobalComponentRegistry globalComponentRegistry = new TestComponentRegistry.Builder().curator(curator).build();
         TenantFileSystemDirs tenantFileSystemDirs = TenantFileSystemDirs.createTestDirs(tenantName);
         if (createInitialSessions) {
-            IOUtils.copyDirectory(testApp, new File(tenantFileSystemDirs.path(), "1"));
-            IOUtils.copyDirectory(testApp, new File(tenantFileSystemDirs.path(), "2"));
-            IOUtils.copyDirectory(testApp, new File(tenantFileSystemDirs.path(), "3"));
+            IOUtils.copyDirectory(testApp, new File(tenantFileSystemDirs.sessionsPath(), "1"));
+            IOUtils.copyDirectory(testApp, new File(tenantFileSystemDirs.sessionsPath(), "2"));
+            IOUtils.copyDirectory(testApp, new File(tenantFileSystemDirs.sessionsPath(), "3"));
         }
         clock = new ManualClock(Instant.ofEpochSecond(1));
         LocalSessionLoader loader = new SessionFactoryImpl(globalComponentRegistry,
-                new SessionCounter(globalComponentRegistry.getCurator(),
-                        Path.fromString("counter"),
-                        Path.fromString("sessions")),
-                Path.createRoot(),
+                new SessionCounter(globalComponentRegistry.getCurator(), tenantName),
                 new MemoryTenantApplications(),
                 tenantFileSystemDirs, new HostRegistry<>(),
                 tenantName);
-        repo = new LocalSessionRepo(tenantFileSystemDirs, loader, new MemoryTenantApplications(), clock, 5);
+        repo = new LocalSessionRepo(tenantFileSystemDirs, loader, clock, 5);
     }
 
     @Test
@@ -86,6 +83,7 @@ public class LocalSessionRepoTest extends TestWithCurator {
         assertNotNull(repo.getSession(4l));
         clock.advance(Duration.ofSeconds(1));
         addSession(5l, 10);
+        repo.purgeOldSessions();
         assertNull(repo.getSession(1l));
         assertNull(repo.getSession(2l));
         assertNull(repo.getSession(3l));

@@ -1,37 +1,38 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
+#include <tests/proton/common/dummydbowner.h>
+#include <vespa/config/helper/configgetter.hpp>
+#include <vespa/eval/tensor/default_tensor.h>
+#include <vespa/eval/tensor/serialization/typed_binary_format.h>
+#include <vespa/eval/tensor/tensor_factory.h>
+#include <vespa/document/test/make_bucket_space.h>
 #include <vespa/searchcore/proton/attribute/attribute_writer.h>
-#include <vespa/searchcore/proton/common/bucketfactory.h>
-#include <vespa/searchcore/proton/documentmetastore/documentmetastore.h>
+#include <vespa/searchcore/proton/test/bucketfactory.h>
 #include <vespa/searchcore/proton/docsummary/docsumcontext.h>
 #include <vespa/searchcore/proton/docsummary/documentstoreadapter.h>
 #include <vespa/searchcore/proton/docsummary/summarymanager.h>
+#include <vespa/searchcore/proton/documentmetastore/documentmetastore.h>
 #include <vespa/searchcore/proton/feedoperation/putoperation.h>
 #include <vespa/searchcore/proton/metrics/metricswireservice.h>
-#include <vespa/searchcore/proton/server/documentdb.h>
 #include <vespa/searchcore/proton/server/bootstrapconfig.h>
+#include <vespa/searchcore/proton/server/documentdb.h>
 #include <vespa/searchcore/proton/server/documentdbconfigmanager.h>
 #include <vespa/searchcore/proton/server/idocumentsubdb.h>
 #include <vespa/searchcore/proton/server/memoryconfigstore.h>
 #include <vespa/searchcore/proton/server/searchview.h>
 #include <vespa/searchcore/proton/server/summaryadapter.h>
-#include <vespa/searchlib/common/idestructorcallback.h>
+#include <vespa/searchlib/common/gatecallback.h>
 #include <vespa/searchlib/common/transport.h>
-#include <vespa/searchlib/docstore/logdocumentstore.h>
 #include <vespa/searchlib/engine/docsumapi.h>
 #include <vespa/searchlib/index/docbuilder.h>
 #include <vespa/searchlib/index/dummyfileheadercontext.h>
-#include <vespa/searchlib/transactionlog/translogserver.h>
-#include <tests/proton/common/dummydbowner.h>
-#include <vespa/vespalib/testkit/testapp.h>
-#include <vespa/searchlib/transactionlog/nosyncproxy.h>
-#include <vespa/eval/tensor/tensor_factory.h>
-#include <vespa/eval/tensor/default_tensor.h>
 #include <vespa/searchlib/tensor/tensor_attribute.h>
+#include <vespa/searchlib/transactionlog/nosyncproxy.h>
+#include <vespa/searchlib/transactionlog/translogserver.h>
 #include <vespa/vespalib/data/slime/slime.h>
-#include <vespa/config/helper/configgetter.hpp>
-#include <vespa/eval/tensor/serialization/typed_binary_format.h>
 #include <vespa/vespalib/encoding/base64.h>
+#include <vespa/config-bucketspaces.h>
+#include <vespa/vespalib/testkit/testapp.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP("docsummary_test");
@@ -45,15 +46,18 @@ using namespace search::transactionlog;
 using namespace search;
 
 using document::DocumenttypesConfig;
+using document::test::makeBucketSpace;
 using search::TuneFileDocumentDB;
 using search::index::DummyFileHeaderContext;
 using search::index::schema::CollectionType;
 using storage::spi::Timestamp;
 using vespa::config::search::core::ProtonConfig;
+using vespa::config::content::core::BucketspacesConfig;
 using vespalib::tensor::Tensor;
 using vespalib::tensor::TensorCells;
 using vespalib::tensor::TensorDimensions;
 using vespalib::tensor::TensorFactory;
+using namespace vespalib::slime;
 
 typedef std::unique_ptr<GeneralResult> GeneralResultPtr;
 
@@ -140,18 +144,18 @@ Tensor::UP createTensor(const TensorCells &cells,
 vespalib::string asVstring(vespalib::Memory str) {
     return vespalib::string(str.data, str.size);
 }
-vespalib::string asVstring(const vespalib::slime::Inspector &value) {
+vespalib::string asVstring(const Inspector &value) {
     return asVstring(value.asString());
 }
 
 void decode(const ResEntry *entry, vespalib::Slime &slime) {
     vespalib::Memory mem(entry->_dataval,
                          entry->_datalen);
-    size_t decodeRes = vespalib::slime::BinaryFormat::decode(mem, slime);
+    size_t decodeRes = BinaryFormat::decode(mem, slime);
     ASSERT_EQUAL(decodeRes, mem.size);
 }
 
-std::string b64encode(const vespalib::slime::Inspector &value) {
+std::string b64encode(const Inspector &value) {
     vespalib::Memory mem = value.asData();
     std::string str(mem.data, mem.size);
     return vespalib::Base64::encode(str);
@@ -201,38 +205,22 @@ public:
           _sa()
     {
         assert(_mkdirOk);
-        auto b = std::make_shared<BootstrapConfig>(1,
-                                                   _documenttypesConfig,
-                                                   _repo,
+        auto b = std::make_shared<BootstrapConfig>(1, _documenttypesConfig, _repo,
                                                    std::make_shared<ProtonConfig>(),
                                                    std::make_shared<FiledistributorrpcConfig>(),
-                                                   _tuneFileDocumentDB);
+                                                   std::make_shared<BucketspacesConfig>(),
+                                                   _tuneFileDocumentDB, _hwInfo);
         _configMgr.forwardConfig(b);
         _configMgr.nextGeneration(0);
         if (! FastOS_File::MakeDirectory((std::string("tmpdb/") + docTypeName).c_str())) { abort(); }
-        _ddb.reset(new DocumentDB("tmpdb",
-                                  _configMgr.getConfig(),
-                                  "tcp/localhost:9013",
-                                  _queryLimiter,
-                                  _clock,
-                                  DocTypeName(docTypeName),
-                                  ProtonConfig(),
-                                  *this,
-                                  _summaryExecutor,
-                                  _summaryExecutor,
-                                  NULL,
-                                  _dummy,
-                                  _fileHeaderContext,
-                                  ConfigStore::UP(new MemoryConfigStore),
-                                  std::make_shared<vespalib::
-                                                   ThreadStackExecutor>
-                                  (16, 128 * 1024),
-                                  _hwInfo)),
+        _ddb.reset(new DocumentDB("tmpdb", _configMgr.getConfig(), "tcp/localhost:9013", _queryLimiter, _clock,
+                                  DocTypeName(docTypeName), makeBucketSpace(),
+				  *b->getProtonConfigSP(), *this, _summaryExecutor, _summaryExecutor,
+                                  _tls, _dummy, _fileHeaderContext, ConfigStore::UP(new MemoryConfigStore),
+                                  std::make_shared<vespalib::ThreadStackExecutor>(16, 128 * 1024), _hwInfo)),
         _ddb->start();
         _ddb->waitForOnlineState();
-        _aw = AttributeWriter::UP(new AttributeWriter(_ddb->
-                                            getReadySubDB()->
-                                            getAttributeManager()));
+        _aw = AttributeWriter::UP(new AttributeWriter(_ddb->getReadySubDB()->getAttributeManager()));
         _sa = _ddb->getReadySubDB()->getSummaryAdapter();
     }
     ~DBContext()
@@ -251,11 +239,8 @@ public:
         typedef DocumentMetaStore::Result PutRes;
         IDocumentMetaStore &dms = _ddb->getReadySubDB()->getDocumentMetaStoreContext().get();
         uint32_t docSize = 1;
-        PutRes putRes(dms.put(docId.getGlobalId(),
-                              BucketFactory::getBucketId(docId),
-                              Timestamp(0u),
-                              docSize,
-                              lid));
+        PutRes putRes(dms.put(docId.getGlobalId(), BucketFactory::getBucketId(docId),
+                              Timestamp(0u), docSize, lid));
         LOG_ASSERT(putRes.ok());
         uint64_t serialNum = _ddb->getFeedHandler().incSerialNum();
         _aw->put(serialNum, doc, lid, true, std::shared_ptr<IDestructorCallback>());
@@ -272,9 +257,8 @@ public:
         op.setSerialNum(serialNum);
         op.setDbDocumentId(dbdId);
         op.setPrevDbDocumentId(prevDbdId);
-        _ddb->getFeedHandler().storeOperation(op);
-        SearchView *sv(dynamic_cast<SearchView *>
-                       (_ddb->getReadySubDB()->getSearchView().get()));
+        _ddb->getFeedHandler().storeOperation(op, std::make_shared<search::IgnoreCallback>());
+        SearchView *sv(dynamic_cast<SearchView *>(_ddb->getReadySubDB()->getSearchView().get()));
         if (sv != NULL) {
             // cf. FeedView::putAttributes()
             DocIdLimit &docIdLimit = sv->getDocIdLimit();
@@ -290,12 +274,6 @@ private:
     std::unique_ptr<vespa::config::search::SummaryConfig> _summaryCfg;
     ResultConfig          _resultCfg;
     std::set<vespalib::string> _markupFields;
-
-    const vespa::config::search::SummaryConfig &
-    getSummaryConfig() const
-    {
-        return *_summaryCfg;
-    }
 
     const ResultConfig &getResultConfig() const
     {
@@ -352,6 +330,7 @@ private:
     void requireThatPositionsAreUsed();
     void requireThatRawFieldsWorks();
     void requireThatFieldCacheRepoCanReturnDefaultFieldCache();
+    void requireThatSummariesTimeout();
 
 public:
     Test();
@@ -426,7 +405,7 @@ Test::assertTensor(const Tensor::UP & exp, const std::string & fieldName,
     vespalib::Slime slime;
     vespalib::Memory serialized(docsum.data.c_str() + sizeof(classId),
                                 docsum.data.size() - sizeof(classId));
-    size_t decodeRes = vespalib::slime::BinaryFormat::decode(serialized,
+    size_t decodeRes = BinaryFormat::decode(serialized,
                                                              slime);
     ASSERT_EQUAL(decodeRes, serialized.size);
 
@@ -441,9 +420,8 @@ Test::assertTensor(const Tensor::UP & exp, const std::string & fieldName,
     }
 }
 
-
-bool
-Test::assertSlime(const std::string &exp, const DocsumReply &reply, uint32_t id, bool relaxed)
+vespalib::Slime
+getSlime(const DocsumReply &reply, uint32_t id, bool relaxed)
 {
     const DocsumReply::Docsum & docsum = reply.docsums[id];
     uint32_t classId;
@@ -452,21 +430,27 @@ Test::assertSlime(const std::string &exp, const DocsumReply &reply, uint32_t id,
     ASSERT_EQUAL(::search::fs4transport::SLIME_MAGIC_ID, classId);
     vespalib::Slime slime;
     vespalib::Memory serialized(docsum.data.c_str() + sizeof(classId),
-                                       docsum.data.size() - sizeof(classId));
-    size_t decodeRes = vespalib::slime::BinaryFormat::decode(serialized,
-                                                             slime);
+                                docsum.data.size() - sizeof(classId));
+    size_t decodeRes = BinaryFormat::decode(serialized, slime);
     ASSERT_EQUAL(decodeRes, serialized.size);
     if (relaxed) {
         vespalib::SimpleBuffer buf;
-        vespalib::slime::JsonFormat::encode(slime, buf, false);
+        JsonFormat::encode(slime, buf, false);
         vespalib::Slime tmpSlime;
-        size_t used = vespalib::slime::JsonFormat::decode(buf.get(), tmpSlime);
-        EXPECT_EQUAL(buf.get().size, used);
+        size_t used = JsonFormat::decode(buf.get(), tmpSlime);
+        EXPECT_TRUE(used > 0);
         slime = std::move(tmpSlime);
     }
+    return slime;
+}
+
+bool
+Test::assertSlime(const std::string &exp, const DocsumReply &reply, uint32_t id, bool relaxed)
+{
+    vespalib::Slime slime = getSlime(reply, id, relaxed);
     vespalib::Slime expSlime;
-    size_t used = vespalib::slime::JsonFormat::decode(exp, expSlime);
-    EXPECT_EQUAL(exp.size(), used);
+    size_t used = JsonFormat::decode(exp, expSlime);
+    EXPECT_TRUE(used > 0);
     return EXPECT_EQUAL(expSlime, slime);
 }
 
@@ -684,6 +668,37 @@ Test::requireThatRewritersAreUsed()
     EXPECT_TRUE(assertSlime("{aa:20}", *rep, 0, false));
 }
 
+void
+Test::requireThatSummariesTimeout()
+{
+    Schema s;
+    s.addSummaryField(Schema::SummaryField("aa", schema::DataType::INT32));
+    s.addSummaryField(Schema::SummaryField("ab", schema::DataType::INT32));
+
+    BuildContext bc(s);
+    DBContext dc(bc._repo, getDocTypeName());
+    dc.put(*bc._bld.startDocument("doc::1").
+                   startSummaryField("aa").
+                   addInt(10).
+                   endField().
+                   startSummaryField("ab").
+                   addInt(20).
+                   endField().
+                   endDocument(),
+           1);
+
+    DocsumRequest req;
+    req.setTimeout(0);
+    EXPECT_TRUE(req.expired());
+    req.resultClassName = "class2";
+    req.hits.push_back(DocsumRequest::Hit(gid1));
+    DocsumReply::UP rep = dc._ddb->getDocsums(req);
+    EXPECT_EQUAL(1u, rep->docsums.size());
+    vespalib::SimpleBuffer buf;
+    vespalib::Slime summary = getSlime(*rep, 0, false);
+    JsonFormat::encode(summary, buf, false);
+    EXPECT_TRUE(vespalib::Regexp("Timed out with -[0-9]+us left.").match(buf.get().make_stringref()));
+}
 
 void
 addField(Schema & s,
@@ -1305,6 +1320,7 @@ Test::Main()
     TEST_DO(requireThatPositionsAreUsed());
     TEST_DO(requireThatRawFieldsWorks());
     TEST_DO(requireThatFieldCacheRepoCanReturnDefaultFieldCache());
+    TEST_DO(requireThatSummariesTimeout());
 
     TEST_DONE();
 }

@@ -3,7 +3,6 @@ package com.yahoo.vespa.config.server.http;
 
 import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.container.jdisc.HttpRequest;
-import com.yahoo.container.logging.AccessLog;
 import com.yahoo.jdisc.application.BindingMatch;
 import com.yahoo.slime.Slime;
 import com.yahoo.vespa.config.server.ApplicationRepository;
@@ -12,8 +11,6 @@ import com.yahoo.vespa.config.server.TimeoutBudget;
 
 import java.time.Clock;
 import java.time.Duration;
-import java.util.concurrent.Executor;
-
 
 /**
  * Super class for session handlers, that takes care of checking valid
@@ -21,14 +18,14 @@ import java.util.concurrent.Executor;
  * implement the handleMETHOD methods that it supports.
  *
  * @author hmusum
- * @since 5.1.14
  */
 public class SessionHandler extends HttpHandler {
 
     protected final ApplicationRepository applicationRepository;
 
-    public SessionHandler(Executor executor, AccessLog accessLog, ApplicationRepository applicationRepository) {
-        super(executor, accessLog);
+    public SessionHandler(HttpHandler.Context ctx, ApplicationRepository applicationRepository)
+    {
+        super(ctx);
         this.applicationRepository = applicationRepository;
     }
 
@@ -71,18 +68,6 @@ public class SessionHandler extends HttpHandler {
         return new TimeoutBudget(Clock.systemUTC(), getRequestTimeout(request, defaultTimeout));
     }
 
-
-    protected static Duration getRequestTimeout(HttpRequest request, Duration defaultTimeout) {
-        if (!request.hasProperty("timeout")) {
-            return defaultTimeout;
-        }
-        try {
-            return Duration.ofSeconds((long) Double.parseDouble(request.getProperty("timeout")));
-        } catch (Exception e) {
-            return defaultTimeout;
-        }
-    }
-
     public static DeployHandlerLogger createLogger(Slime deployLog, HttpRequest request, ApplicationId app) {
         return createLogger(deployLog, request.getBooleanProperty("verbose"), app);
     }
@@ -91,10 +76,24 @@ public class SessionHandler extends HttpHandler {
         return new DeployHandlerLogger(deployLog.get().setArray("log"), verbose, app);
     }
 
+    // TODO: Refactor to use the one in ApplicationRepository and remove
     protected Slime createDeployLog() {
         Slime deployLog = new Slime();
         deployLog.setObject();
         return deployLog;
+    }
+
+    protected static boolean shouldIgnoreLockFailure(HttpRequest request) {
+        return request.getBooleanProperty("force");
+    }
+
+    /**
+     * True if this request should ignore activation failure because the session was made from an active session that is not active now
+     * @param request a {@link com.yahoo.container.jdisc.HttpRequest}
+     * @return true if ignore failure
+     */
+    protected static boolean shouldIgnoreSessionStaleFailure(HttpRequest request) {
+        return request.getBooleanProperty("force");
     }
 
 }

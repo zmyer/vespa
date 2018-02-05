@@ -9,6 +9,7 @@
     <groupId>com.yahoo.vespa</groupId>
     <artifactId>parent</artifactId>
     <version>6-SNAPSHOT</version>
+    <relativePath>../parent/pom.xml</relativePath>
   </parent>
   <artifactId>container-accesslogging</artifactId>
   <version>6-SNAPSHOT</version>
@@ -89,6 +90,14 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <compilerArgs>
+            <arg>-Xlint:all</arg>
+            <arg>-Xlint:-serial</arg>
+            <arg>-Xlint:-deprecation</arg>
+            <arg>-Werror</arg>
+          </compilerArgs>
+        </configuration>
       </plugin>
     </plugins>
     <outputDirectory>${buildOutputDirectory}</outputDirectory>

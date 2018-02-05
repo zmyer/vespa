@@ -3,6 +3,7 @@
 #include "removebucketoperation.h"
 #include <vespa/storage/distributor/idealstatemanager.h>
 #include <vespa/storage/distributor/distributor.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
 
 #include <vespa/log/log.h>
 
@@ -15,7 +16,7 @@ RemoveBucketOperation::onStartInternal(DistributorMessageSender& sender)
 {
     std::vector<std::pair<uint16_t, std::shared_ptr<api::DeleteBucketCommand> > > msgs;
 
-    BucketDatabase::Entry entry = _manager->getDistributorComponent().getBucketDatabase().get(getBucketId());
+    BucketDatabase::Entry entry = _bucketSpace->getBucketDatabase().get(getBucketId());
 
     for (uint32_t i = 0; i < getNodes().size(); ++i) {
         uint16_t node = getNodes()[i];
@@ -30,7 +31,7 @@ RemoveBucketOperation::onStartInternal(DistributorMessageSender& sender)
             getBucketId().toString().c_str(),
             node);
         std::shared_ptr<api::DeleteBucketCommand> msg(
-                new api::DeleteBucketCommand(getBucketId()));
+                new api::DeleteBucketCommand(getBucket()));
         setCommandMeta(*msg);
         msg->setBucketInfo(copy->getBucketInfo());
         msgs.push_back(std::make_pair(node, msg));
@@ -38,7 +39,7 @@ RemoveBucketOperation::onStartInternal(DistributorMessageSender& sender)
 
     _ok = true;
     if (!getNodes().empty()) {
-        _manager->getDistributorComponent().removeNodesFromDB(getBucketId(), getNodes());
+        _manager->getDistributorComponent().removeNodesFromDB(getBucket(), getNodes());
         for (uint32_t i = 0; i < msgs.size(); ++i) {
             _tracker.queueCommand(msgs[i].second, msgs[i].first);
         }
@@ -81,7 +82,7 @@ RemoveBucketOperation::onReceiveInternal(const std::shared_ptr<api::StorageReply
                 rep->getBucketInfo().toString().c_str());
 
             _manager->getDistributorComponent().updateBucketDatabase(
-                    getBucketId(),
+                    getBucket(),
                     BucketCopy(_manager->getDistributorComponent().getUniqueTimestamp(),
                                node,
                                rep->getBucketInfo()),

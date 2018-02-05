@@ -3,6 +3,7 @@ package com.yahoo.vespa.hosted.node.admin.integrationTests;
 
 import com.yahoo.vespa.hosted.dockerapi.Container;
 import com.yahoo.vespa.hosted.dockerapi.ContainerName;
+import com.yahoo.vespa.hosted.dockerapi.ContainerResources;
 import com.yahoo.vespa.hosted.dockerapi.Docker;
 import com.yahoo.vespa.hosted.dockerapi.DockerImage;
 import com.yahoo.vespa.hosted.dockerapi.ProcessResult;
@@ -32,15 +33,19 @@ public class DockerMock implements Docker {
     }
 
     @Override
+    public void start() { }
+
+    @Override
     public CreateContainerCommand createContainerCommand(
             DockerImage dockerImage,
+            ContainerResources containerResources,
             ContainerName containerName,
             String hostName) {
         synchronized (monitor) {
             callOrderVerifier.add("createContainerCommand with " + dockerImage +
                     ", HostName: " + hostName + ", " + containerName);
             containersByContainerName.put(
-                    containerName, new Container(hostName, dockerImage, containerName, Container.State.RUNNING, 2));
+                    containerName, new Container(hostName, dockerImage, containerResources, containerName, Container.State.RUNNING, 2));
         }
 
         return new StartContainerCommandMock();
@@ -90,7 +95,7 @@ public class DockerMock implements Docker {
             callOrderVerifier.add("stopContainer with " + containerName);
             Container container = containersByContainerName.get(containerName);
             containersByContainerName.put(containerName,
-                            new Container(container.hostname, container.image, container.name, Container.State.EXITED, 0));
+                            new Container(container.hostname, container.image, container.resources, container.name, Container.State.EXITED, 0));
         }
     }
 
@@ -157,6 +162,11 @@ public class DockerMock implements Docker {
     }
 
 
+    @Override
+    public String getGlobalIPv6Address(ContainerName name) {
+        return "2001:db8:1:2:0:242:ac13:2";
+    }
+
     public static class StartContainerCommandMock implements CreateContainerCommand {
         @Override
         public CreateContainerCommand withLabel(String name, String value) {
@@ -170,16 +180,6 @@ public class DockerMock implements Docker {
 
         @Override
         public CreateContainerCommand withVolume(String path, String volumePath) {
-            return this;
-        }
-
-        @Override
-        public CreateContainerCommand withMemoryInMb(long megaBytes) {
-            return this;
-        }
-
-        @Override
-        public CreateContainerCommand withCpuShares(int shares) {
             return this;
         }
 

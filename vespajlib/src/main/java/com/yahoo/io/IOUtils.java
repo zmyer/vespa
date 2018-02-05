@@ -3,6 +3,7 @@ package com.yahoo.io;
 
 
 import java.io.*;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.util.List;
@@ -14,9 +15,10 @@ import java.nio.ByteBuffer;
  * <p>Some static io convenience methods.</p>
  *
  * @author  bratseth
- * @author  <a href="mailto:borud@yahoo-inc.com">Bjorn Borud</a>
+ * @author  Bjorn Borud
  */
 public abstract class IOUtils {
+
     static private final Charset utf8Charset = Charset.forName("utf-8");
 
     /** Closes a writer, or does nothing if the writer is null */
@@ -154,33 +156,22 @@ public abstract class IOUtils {
     /**
      * Copies a file to another file.
      * If the out file exists it will be overwritten.
-     * NOTE: Not an optimal implementation currently.
      *
      * @throws IOException if copying fails
      */
     public static void copy(String inFile, String outFile) throws IOException {
-        BufferedReader reader=null;
-        BufferedWriter writer=null;
-
-        try {
-            reader = createReader(inFile);
-            writer = createWriter(outFile, false);
-            int c;
-            while (-1 != (c = reader.read()) )
-                writer.write(c);
-        } finally {
-            closeReader(reader);
-            closeWriter(writer);
-        }
+        copy(new File(inFile), new File(outFile));
     }
 
     /**
      * Copies a file to another file.
      * If the out file exists it will be overwritten.
-     * NOTE: Not an optimal implementation currently.
      */
     public static void copy(File inFile, File outFile) throws IOException {
-        copy(inFile.toString(),outFile.toString());
+        try (FileChannel sourceChannel = new FileInputStream(inFile).getChannel();
+             FileChannel destChannel = new FileOutputStream(outFile).getChannel()) {
+            destChannel.transferFrom(sourceChannel, 0, sourceChannel.size());
+        }
     }
 
     /**
@@ -274,8 +265,8 @@ public abstract class IOUtils {
     }
 
     /**
-     * Returns the number of line in a file.
-     * If the files does not exists, 0 is returned
+     * Returns the number of lines in a file.
+     * If the file does not exists, 0 is returned
      */
     public static int countLines(String file) {
         BufferedReader reader = null;
@@ -291,7 +282,6 @@ public abstract class IOUtils {
         } finally {
             closeReader(reader);
         }
-
     }
 
     /**
@@ -410,6 +400,11 @@ public abstract class IOUtils {
         return ret.toString();
     }
 
+    /** Read an input stream completely into a string */
+    public static String readAll(InputStream stream, Charset charset) throws IOException {
+        return readAll(new InputStreamReader(stream, charset));
+    }
+
     /** Convenience method for closing a list of readers. Does nothing if the given reader list is null. */
     public static void closeAll(List<Reader> readers) {
         if (readers==null) return;
@@ -429,6 +424,16 @@ public abstract class IOUtils {
        finally {
            closeWriter(out);
        }
+    }
+
+    /** Writes the given content to the file (replacing any existing content) */
+    public static void writeFile(File file, byte[] content) throws UncheckedIOException {
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            out.write(content);
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     /**

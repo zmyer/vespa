@@ -3,6 +3,7 @@
 #include "garbagecollectionoperation.h"
 #include <vespa/storage/distributor/idealstatemanager.h>
 #include <vespa/storage/distributor/distributor.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
 #include <vespa/storageapi/message/removelocation.h>
 
 #include <vespa/log/log.h>
@@ -21,14 +22,14 @@ GarbageCollectionOperation::~GarbageCollectionOperation() { }
 void
 GarbageCollectionOperation::onStart(DistributorMessageSender& sender)
 {
-    BucketDatabase::Entry entry = _manager->getDistributorComponent().getBucketDatabase().get(getBucketId());
+    BucketDatabase::Entry entry = _bucketSpace->getBucketDatabase().get(getBucketId());
     std::vector<uint16_t> nodes = entry->getNodes();
 
     for (uint32_t i = 0; i < nodes.size(); i++) {
         std::shared_ptr<api::RemoveLocationCommand> command(
                 new api::RemoveLocationCommand(
                         _manager->getDistributorComponent().getDistributor().getConfig().getGarbageCollectionSelection(),
-                        getBucketId()));
+                        getBucket()));
 
         command->setPriority(_priority);
         _tracker.queueCommand(command, nodes[i]);
@@ -52,7 +53,7 @@ GarbageCollectionOperation::onReceive(DistributorMessageSender&,
 
     if (!rep->getResult().failed()) {
         _manager->getDistributorComponent().updateBucketDatabase(
-                getBucketId(),
+                getBucket(),
                 BucketCopy(_manager->getDistributorComponent().getUniqueTimestamp(),
                            node,
                            rep->getBucketInfo()));
@@ -62,11 +63,11 @@ GarbageCollectionOperation::onReceive(DistributorMessageSender&,
 
     if (_tracker.finished()) {
         if (_ok) {
-            BucketDatabase::Entry dbentry = _manager->getDistributorComponent().getBucketDatabase().get(getBucketId());
+            BucketDatabase::Entry dbentry = _bucketSpace->getBucketDatabase().get(getBucketId());
             if (dbentry.valid()) {
                 dbentry->setLastGarbageCollectionTime(
                         _manager->getDistributorComponent().getClock().getTimeInSeconds().getTime());
-                _manager->getDistributorComponent().getBucketDatabase().update(dbentry);
+                _bucketSpace->getBucketDatabase().update(dbentry);
             }
         }
 

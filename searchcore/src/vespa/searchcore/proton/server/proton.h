@@ -12,7 +12,6 @@
 #include "proton_configurer.h"
 #include "rpc_hooks.h"
 #include "bootstrapconfig.h"
-#include <vespa/searchcore/proton/common/hw_info.h>
 #include <vespa/searchcore/proton/flushengine/flushengine.h>
 #include <vespa/searchcore/proton/matchengine/matchengine.h>
 #include <vespa/searchcore/proton/matching/querylimiter.h>
@@ -38,7 +37,6 @@
 namespace proton {
 
 class DiskMemUsageSampler;
-class HwInfoSampler;
 class IDocumentDBReferenceRegistry;
 
 class Proton : public IProtonConfigurerOwner,
@@ -57,10 +55,9 @@ private:
     typedef search::engine::MonitorClient                 MonitorClient;
     typedef std::map<DocTypeName, DocumentDB::SP>         DocumentDBMap;
     typedef BootstrapConfig::ProtonConfigSP               ProtonConfigSP;
-    typedef std::shared_ptr<FastOS_DynamicLibrary>      DynamicLibrarySP;
-    typedef std::map<vespalib::string, DynamicLibrarySP>  LibraryMap;
     using InitializeThreads = std::shared_ptr<vespalib::ThreadStackExecutorBase>;
     using lock_guard = std::lock_guard<std::mutex>;
+    using BucketSpace = document::BucketSpace;
 
     struct MetricsUpdateHook : metrics::UpdateHook
     {
@@ -81,21 +78,14 @@ private:
         pid_t _pid;
 
     public:
-        ProtonFileHeaderContext(const Proton &proton_,
-                                const vespalib::string &creator);
-        ~ProtonFileHeaderContext();
+        ProtonFileHeaderContext(const Proton &proton_, const vespalib::string &creator);
+        ~ProtonFileHeaderContext() override;
 
-        virtual void
-        addTags(vespalib::GenericHeader &header,
-                const vespalib::string &name) const override;
-
-        void
-        setClusterName(const vespalib::string &clusterName,
-                       const vespalib::string &baseDir);
+        void addTags(vespalib::GenericHeader &header, const vespalib::string &name) const override;
+        void setClusterName(const vespalib::string &clusterName, const vespalib::string &baseDir);
     };
 
     const config::ConfigUri         _configUri;
-    vespalib::string                _dbFile;
     mutable std::shared_timed_mutex _mutex;
     MetricsUpdateHook               _metricsHook;
     MetricsEngine::UP               _metricsEngine;
@@ -103,7 +93,7 @@ private:
     TLS::UP                         _tls;
     std::unique_ptr<DiskMemUsageSampler> _diskMemUsageSampler;
     PersistenceEngine::UP           _persistenceEngine;
-     DocumentDBMap                   _documentDBMap;
+    DocumentDBMap                   _documentDBMap;
     MatchEngine::UP                 _matchEngine;
     SummaryEngine::UP               _summaryEngine;
     DocsumBySlime::UP               _docsumBySlime;
@@ -124,7 +114,6 @@ private:
     matching::QueryLimiter          _queryLimiter;
     vespalib::Clock                 _clock;
     FastOS_ThreadPool               _threadPool;
-    vespalib::Monitor               _configGenMonitor;
     int64_t                         _configGen;
     uint32_t                        _distributionKey;
     bool                            _isInitializing;
@@ -133,20 +122,17 @@ private:
     bool                            _initStarted;
     bool                            _initComplete;
     bool                            _initDocumentDbsInSequence;
-    HwInfo                          _hwInfo;
-    std::unique_ptr<HwInfoSampler>  _hwInfoSampler;
     std::shared_ptr<IDocumentDBReferenceRegistry> _documentDBReferenceRegistry;
 
-    virtual IDocumentDBConfigOwner *addDocumentDB(const DocTypeName & docTypeName,
-                                                  const vespalib::string & configid,
-                                                  const BootstrapConfig::SP & bootstrapConfig,
-                                                  const std::shared_ptr<DocumentDBConfig> &documentDBConfig,
-                                                  InitializeThreads initializeThreads) override;
+    IDocumentDBConfigOwner *
+    addDocumentDB(const DocTypeName & docTypeName, BucketSpace bucketSpace, const vespalib::string & configid,
+                  const BootstrapConfig::SP & bootstrapConfig, const std::shared_ptr<DocumentDBConfig> &documentDBConfig,
+                  InitializeThreads initializeThreads) override;
 
-    virtual void removeDocumentDB(const DocTypeName &docTypeName) override;
+    void removeDocumentDB(const DocTypeName &docTypeName) override;
 
-    virtual void applyConfig(const BootstrapConfig::SP & configSnapshot) override;
-    virtual MonitorReply::UP ping(MonitorRequest::UP request, MonitorClient &client) override;
+    void applyConfig(const BootstrapConfig::SP & configSnapshot) override;
+    MonitorReply::UP ping(MonitorRequest::UP request, MonitorClient &client) override;
 
     /**
      * Called by the metrics update hook (typically in the context of
@@ -154,14 +140,11 @@ private:
      * threads at once.
      **/
     void updateMetrics(const vespalib::MonitorGuard &guard);
-
     void waitForInitDone();
     void waitForOnlineState();
     uint32_t getDistributionKey() const override { return _distributionKey; }
     BootstrapConfig::SP getActiveConfigSnapshot() const;
-    virtual std::shared_ptr<IDocumentDBReferenceRegistry> getDocumentDBReferenceRegistry() const override;
-
-
+    std::shared_ptr<IDocumentDBReferenceRegistry> getDocumentDBReferenceRegistry() const override;
 public:
     typedef std::unique_ptr<Proton> UP;
     typedef std::shared_ptr<Proton> SP;
@@ -169,7 +152,7 @@ public:
     Proton(const config::ConfigUri & configUri,
            const vespalib::string &progName,
            uint64_t subscribeTimeout);
-    virtual ~Proton();
+    ~Proton() override;
 
     /**
      * This method must be called after the constructor and before the destructor.
@@ -180,19 +163,12 @@ public:
      */
     BootstrapConfig::SP init();
 
-    /*
-     * 2nd phase init: setup data structures.
-     */
+    // 2nd phase init: setup data structures.
     void init(const BootstrapConfig::SP & configSnapshot);
 
-
-    DocumentDB::SP getDocumentDB(const document::DocumentType &docType);
-
     DocumentDB::SP
-    addDocumentDB(const document::DocumentType &docType,
-                  const BootstrapConfig::SP &configSnapshot,
-                  const std::shared_ptr<DocumentDBConfig> &documentDBConfig,
-                  InitializeThreads initializeThreads);
+    addDocumentDB(const document::DocumentType &docType, BucketSpace bucketSpace, const BootstrapConfig::SP &configSnapshot,
+                  const std::shared_ptr<DocumentDBConfig> &documentDBConfig, InitializeThreads initializeThreads);
 
     metrics::MetricManager & getMetricManager() { return _metricsEngine->getManager(); }
     FastOS_ThreadPool & getThreadPool() { return _threadPool; }
@@ -200,15 +176,10 @@ public:
     bool triggerFlush();
     bool prepareRestart();
 
-    // implements ComponentConfigProducer interface
-    virtual void getComponentConfig(Consumer &consumer) override;
+    void getComponentConfig(Consumer &consumer) override;
+    void setClusterState(const storage::spi::ClusterState &calc) override;
 
-    // implements IPersistenceEngineOwner interface
-    virtual void setClusterState(const storage::spi::ClusterState &calc) override;
-
-    /**
-     * Return the oldest active config generation used by proton.
-     */
+    // Return the oldest active config generation used by proton.
     int64_t getConfigGeneration();
 
     size_t getNumDocs() const;
@@ -217,24 +188,19 @@ public:
 
     vespalib::string getDelayedConfigs() const;
 
-    virtual StatusReport::List getStatusReports() const override;
+    StatusReport::List getStatusReports() const override;
 
     MatchEngine & getMatchEngine() { return *_matchEngine; }
     vespalib::ThreadStackExecutorBase & getExecutor() { return _executor; }
 
-    bool isReplayDone() const { return _isReplayDone; }
-
-    virtual bool isInitializing() const override {
-        return _isInitializing;
-    }
+    bool isInitializing() const override { return _isInitializing; }
 
     bool hasAbortedInit() const { return _abortInit; }
     storage::spi::PersistenceProvider & getPersistence() { return *_persistenceEngine; }
 
-    // Implements vespalib::StateExplorer
-    virtual void get_state(const vespalib::slime::Inserter &inserter, bool full) const override;
-    virtual std::vector<vespalib::string> get_children_names() const override;
-    virtual std::unique_ptr<vespalib::StateExplorer> get_child(vespalib::stringref name) const override;
+    void get_state(const vespalib::slime::Inserter &inserter, bool full) const override;
+    std::vector<vespalib::string> get_children_names() const override;
+    std::unique_ptr<vespalib::StateExplorer> get_child(vespalib::stringref name) const override;
 };
 
 } // namespace proton

@@ -3,6 +3,8 @@
 #pragma once
 
 #include <vespa/searchlib/transactionlog/translogclient.h>
+#include <mutex>
+#include <condition_variable>
 
 namespace proton {
 
@@ -14,7 +16,8 @@ class TransactionLogManagerBase {
     search::transactionlog::TransLogClient _tlc;
     search::transactionlog::TransLogClient::Session::UP _tlcSession;
     vespalib::string            _domainName;
-    vespalib::Monitor           _replayMonitor;
+    mutable std::mutex          _replayLock;
+    mutable std::condition_variable _replayCond;
     volatile bool               _replayDone;
     bool                        _replayStarted;
     double                      _replayStartTime;
@@ -51,10 +54,7 @@ public:
 
     void changeReplayDone();
     void close();
-    TransLogClient::Subscriber::UP createTlcSubscriber(
-            TransLogClient::Session::Callback &callback);
-    TransLogClient::Visitor::UP createTlcVisitor(
-            TransLogClient::Session::Callback &callback);
+    TransLogClient::Visitor::UP createTlcVisitor(TransLogClient::Session::Callback &callback);
 
     void waitForReplayDone() const;
 
@@ -64,8 +64,7 @@ public:
     bool getReplayDone() const;
     bool isDoingReplay() const;
     void logReplayComplete() const;
-    const vespalib::string &getRpcTarget() const
-    { return _tlc.getRPCTarget(); }
+    const vespalib::string &getRpcTarget() const { return _tlc.getRPCTarget(); }
 
     void
     markReplayStarted();

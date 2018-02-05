@@ -3,8 +3,8 @@
 #pragma once
 
 #include "function.h"
-#include "simple_tensor_engine.h"
 #include "node_types.h"
+#include "lazy_params.h"
 #include <vespa/vespalib/util/stash.h>
 
 namespace vespalib {
@@ -12,6 +12,8 @@ namespace eval {
 
 namespace nodes { class Node; }
 class TensorEngine;
+class TensorFunction;
+class TensorSpec;
 
 /**
  * A Function that has been prepared for execution. This will
@@ -26,39 +28,11 @@ class TensorEngine;
 class InterpretedFunction
 {
 public:
-    /**
-     * Interface used to lazy-resolve parameters when needed.
-     **/
-    struct LazyParams {
-        virtual const Value &resolve(size_t idx, Stash &stash) const = 0;
-        virtual ~LazyParams();
-    };
-    /**
-     * Simple wrapper for number-only parameters that are known up
-     * front. Intended for convenience (testing), not performance.
-     **/
-    struct SimpleParams : LazyParams {
-        std::vector<double> params;
-        explicit SimpleParams(const std::vector<double> &params_in);
-        ~SimpleParams();
-        const Value &resolve(size_t idx, Stash &stash) const override;
-    };
-    /**
-     * Simple wrapper for object parameters that are known up
-     * front. Intended for convenience (testing), not performance.
-     **/
-    struct SimpleObjectParams : LazyParams {
-        std::vector<Value::CREF> params;
-        explicit SimpleObjectParams(const std::vector<Value::CREF> &params_in) : params(params_in) {}
-        ~SimpleObjectParams();
-        const Value &resolve(size_t idx, Stash &stash) const override;
-    };
     struct State {
         const TensorEngine      &engine;
         const LazyParams        *params;
         Stash                    stash;
         std::vector<Value::CREF> stack;
-        std::vector<Value::CREF> let_values;
         uint32_t                 program_offset;
         uint32_t                 if_cnt;
 
@@ -69,7 +43,13 @@ public:
         const Value &peek(size_t ridx) const {
             return stack[stack.size() - 1 - ridx];
         }
-        void replace(size_t prune_cnt, const Value &value);
+        void pop_push(const Value &value) {
+            stack.back() = value;
+        }
+        void pop_pop_push(const Value &value) {
+            stack.pop_back();
+            stack.back() = value;
+        }
     };
     class Context {
         friend class InterpretedFunction;
@@ -89,8 +69,16 @@ public:
             : function(function_in), param(0) {}
         Instruction(op_function function_in, uint64_t param_in)
             : function(function_in), param(param_in) {}
-        void update_param(uint64_t param_in) { param = param_in; }
-        void perform(State &state) const { function(state, param); }
+        void perform(State &state) const {
+            if (function == nullptr) {
+                state.stack.push_back(state.params->resolve(param, state.stash));
+            } else {
+                function(state, param);
+            }
+        }
+        static Instruction fetch_param(size_t param_idx) {
+            return Instruction(nullptr, param_idx);
+        }
     };
 
 private:
@@ -101,6 +89,8 @@ private:
 
 public:
     typedef std::unique_ptr<InterpretedFunction> UP;
+    // for testing; use with care; the tensor function must be kept alive
+    InterpretedFunction(const TensorEngine &engine, const TensorFunction &function);
     InterpretedFunction(const TensorEngine &engine, const nodes::Node &root, size_t num_params_in, const NodeTypes &types);
     InterpretedFunction(const TensorEngine &engine, const Function &function, const NodeTypes &types)
         : InterpretedFunction(engine, function.root(), function.num_params(), types) {}

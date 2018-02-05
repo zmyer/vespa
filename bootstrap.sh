@@ -26,7 +26,7 @@ else
 fi
 
 mvn_install() {
-    mvn --quiet --batch-mode --threads 1.5C --no-snapshot-updates install -Dmaven.test.skip=true -Dmaven.javadoc.skip=true "$@"
+    mvn -e -X --quiet --batch-mode --threads 1.5C --no-snapshot-updates install -Dmaven.test.skip=true -Dmaven.javadoc.skip=true "$@"
 }
 
 # Generate vtag map
@@ -44,8 +44,16 @@ $top/dist/getversion.pl -M $top > $top/dist/vtag.map
 # The 'default' mode also builds some modules needed by C++ code.
 # The 'full' mode also builds modules needed by C++ tests.
 
-# must install parent pom first:
+# must install parent poms first:
 echo "Downloading all dependencies. This may take a few minutes with an empty Maven cache."
+(
+  cd container-dependency-versions
+  mvn_install
+)
+(
+  cd parent
+  mvn_install
+)
 mvn_install -N
 
 # and build plugins first:

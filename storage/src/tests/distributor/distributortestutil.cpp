@@ -1,8 +1,14 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 #include "distributortestutil.h"
 #include <vespa/storage/distributor/distributor.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
 #include <vespa/config-stor-distribution.h>
 #include <vespa/vespalib/text/stringtokenizer.h>
+#include <vespa/document/test/make_document_bucket.h>
+#include <vespa/document/test/make_bucket_space.h>
+
+using document::test::makeBucketSpace;
+using document::test::makeDocumentBucket;
 
 namespace storage::distributor {
 
@@ -127,7 +133,7 @@ DistributorTestUtil::getNodes(document::BucketId id)
 std::string
 DistributorTestUtil::getIdealStr(document::BucketId id, const lib::ClusterState& state)
 {
-    if (!getExternalOperationHandler().ownsBucketInState(state, id)) {
+    if (!getExternalOperationHandler().ownsBucketInState(state, makeDocumentBucket(id))) {
         return id.toString();
     }
 
@@ -340,18 +346,34 @@ DistributorTestUtil::getConfig() {
     return const_cast<DistributorConfiguration&>(_distributor->getConfig());
 }
 
+DistributorBucketSpace &
+DistributorTestUtil::getDistributorBucketSpace()
+{
+    return getBucketSpaceRepo().get(makeBucketSpace());
+}
+
 BucketDatabase&
 DistributorTestUtil::getBucketDatabase() {
-    return _distributor->getDefaultBucketSpace().getBucketDatabase();
+    return getDistributorBucketSpace().getBucketDatabase();
 }
 const BucketDatabase&
 DistributorTestUtil::getBucketDatabase() const {
-    return _distributor->getDefaultBucketSpace().getBucketDatabase();
+    return getBucketSpaceRepo().get(makeBucketSpace()).getBucketDatabase();
+}
+
+DistributorBucketSpaceRepo &
+DistributorTestUtil::getBucketSpaceRepo() {
+    return _distributor->getBucketSpaceRepo();
+}
+
+const DistributorBucketSpaceRepo &
+DistributorTestUtil::getBucketSpaceRepo() const {
+    return _distributor->getBucketSpaceRepo();
 }
 
 const lib::Distribution&
 DistributorTestUtil::getDistribution() const {
-    return _distributor->getDefaultBucketSpace().getDistribution();
+    return getBucketSpaceRepo().get(makeBucketSpace()).getDistribution();
 }
 
 }

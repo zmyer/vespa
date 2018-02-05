@@ -14,6 +14,7 @@ vespa_add_library(searchcore_server STATIC
     disk_mem_usage_forwarder.cpp
     docstorevalidator.cpp
     document_db_explorer.cpp
+    document_db_flush_config.cpp
     document_db_maintenance_config.cpp
     document_meta_store_read_guards.cpp
     document_scan_iterator.cpp
@@ -64,11 +65,9 @@ vespa_add_library(searchcore_server STATIC
     memoryflush.cpp
     minimal_document_retriever.cpp
     move_operation_limiter.cpp
-    ooscli.cpp
     operationdonecontext.cpp
     pendinglidtracker.cpp
     persistencehandlerproxy.cpp
-    persistenceproviderproxy.cpp
     proton.cpp
     proton_config_fetcher.cpp
     proton_config_snapshot.cpp
@@ -94,6 +93,7 @@ vespa_add_library(searchcore_server STATIC
     storeonlydocsubdb.cpp
     storeonlyfeedview.cpp
     summaryadapter.cpp
+    threading_service_config.cpp
     tlcproxy.cpp
     tlssyncer.cpp
     transactionlogmanager.cpp

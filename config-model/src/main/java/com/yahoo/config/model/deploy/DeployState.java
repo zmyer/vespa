@@ -47,8 +47,7 @@ import java.util.Set;
 /**
  * Contains various state during deploy that should be available in all builders of a {@link com.yahoo.config.model.ConfigModel}
  *
- * @author lulf
- * @since 5.8
+ * @author Ulf Lilleengen
  */
 public class DeployState implements ConfigDefinitionStore {
 
@@ -68,8 +67,8 @@ public class DeployState implements ConfigDefinitionStore {
     private final ValidationOverrides validationOverrides;
     private final Version wantedNodeVespaVersion;
     private final Instant now;
-
     private final HostProvisioner provisioner;
+    private final boolean disableFiledistributor;
 
     public static DeployState createTestState() {
         return new Builder().build();
@@ -82,8 +81,8 @@ public class DeployState implements ConfigDefinitionStore {
     private DeployState(ApplicationPackage applicationPackage, SearchDocumentModel searchDocumentModel, RankProfileRegistry rankProfileRegistry,
                         FileRegistry fileRegistry, DeployLogger deployLogger, Optional<HostProvisioner> hostProvisioner, DeployProperties properties,
                         Optional<ApplicationPackage> permanentApplicationPackage, Optional<ConfigDefinitionRepo> configDefinitionRepo,
-                        java.util.Optional<Model> previousModel, Set<Rotation> rotations, Zone zone, QueryProfiles queryProfiles, 
-                        SemanticRules semanticRules, Instant now, Version wantedNodeVespaVersion) {
+                        java.util.Optional<Model> previousModel, Set<Rotation> rotations, Zone zone, QueryProfiles queryProfiles,
+                        SemanticRules semanticRules, Instant now, Version wantedNodeVespaVersion, boolean disableFiledistributor) {
         this.logger = deployLogger;
         this.fileRegistry = fileRegistry;
         this.rankProfileRegistry = rankProfileRegistry;
@@ -102,6 +101,7 @@ public class DeployState implements ConfigDefinitionStore {
         this.validationOverrides = applicationPackage.getValidationOverrides().map(ValidationOverrides::fromXml).orElse(ValidationOverrides.empty);
         this.wantedNodeVespaVersion = wantedNodeVespaVersion;
         this.now = now;
+        this.disableFiledistributor = disableFiledistributor;
     }
 
     public static HostProvisioner getDefaultModelHostProvisioner(ApplicationPackage applicationPackage) {
@@ -169,6 +169,7 @@ public class DeployState implements ConfigDefinitionStore {
     public ApplicationPackage getApplicationPackage() {
         return applicationPackage;
     }
+
     public List<SearchDefinition> getSearchDefinitions() {
         return searchDefinitions;
     }
@@ -209,10 +210,12 @@ public class DeployState implements ConfigDefinitionStore {
     public QueryProfiles getQueryProfiles() { return queryProfiles; }
 
     public SemanticRules getSemanticRules() { return semanticRules; }
-    
+
     public Version getWantedNodeVespaVersion() { return wantedNodeVespaVersion; }
-    
+
     public Instant now() { return now; }
+
+    public boolean disableFiledistributor() { return disableFiledistributor; }
 
     public static class Builder {
 
@@ -228,6 +231,7 @@ public class DeployState implements ConfigDefinitionStore {
         private Zone zone = Zone.defaultZone();
         private Instant now = Instant.now();
         private Version wantedNodeVespaVersion = Vtag.currentVersion;
+        private boolean disableFiledistributor = false;
 
         public Builder applicationPackage(ApplicationPackage applicationPackage) {
             this.applicationPackage = applicationPackage;
@@ -283,9 +287,14 @@ public class DeployState implements ConfigDefinitionStore {
             this.now = now;
             return this;
         }
-        
+
         public Builder wantedNodeVespaVersion(Version version) {
             this.wantedNodeVespaVersion = version;
+            return this;
+        }
+
+        public Builder disableFiledistributor(boolean disableFiledistributor) {
+            this.disableFiledistributor = disableFiledistributor;
             return this;
         }
 
@@ -295,13 +304,16 @@ public class DeployState implements ConfigDefinitionStore {
             SemanticRules semanticRules = new SemanticRuleBuilder().build(applicationPackage);
             SearchDocumentModel searchDocumentModel = createSearchDocumentModel(rankProfileRegistry, logger, queryProfiles);
             return new DeployState(applicationPackage, searchDocumentModel, rankProfileRegistry, fileRegistry, logger, hostProvisioner,
-                                   properties, permanentApplicationPackage, configDefinitionRepo, previousModel, rotations, zone, queryProfiles, semanticRules, now, wantedNodeVespaVersion);
+                                   properties, permanentApplicationPackage, configDefinitionRepo, previousModel, rotations,
+                                   zone, queryProfiles, semanticRules, now, wantedNodeVespaVersion, disableFiledistributor);
         }
 
-        private SearchDocumentModel createSearchDocumentModel(RankProfileRegistry rankProfileRegistry, DeployLogger logger, QueryProfiles queryProfiles) {
+        private SearchDocumentModel createSearchDocumentModel(RankProfileRegistry rankProfileRegistry,
+                                                              DeployLogger logger,
+                                                              QueryProfiles queryProfiles) {
             Collection<NamedReader> readers = applicationPackage.getSearchDefinitions();
             Map<String, String> names = new LinkedHashMap<>();
-            SearchBuilder builder = new SearchBuilder(applicationPackage, rankProfileRegistry);
+            SearchBuilder builder = new SearchBuilder(applicationPackage, rankProfileRegistry, queryProfiles.getRegistry());
             for (NamedReader reader : readers) {
                 try {
                     String readerName = reader.getName();
@@ -310,7 +322,8 @@ public class DeployState implements ConfigDefinitionStore {
                     names.put(searchName, sdName);
                     if (!sdName.equals(searchName)) {
                         throw new IllegalArgumentException("Search definition file name ('" + sdName + "') and name of " +
-                                "search element ('" + searchName + "') are not equal for file '" + readerName + "'");
+                                                           "search element ('" + searchName +
+                                                           "') are not equal for file '" + readerName + "'");
                     }
                 } catch (ParseException e) {
                     throw new IllegalArgumentException("Could not parse search definition file '" + getSearchDefinitionRelativePath(reader.getName()) + "': " + e.getMessage(), e);

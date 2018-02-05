@@ -317,7 +317,12 @@ public class FastSearcher extends VespaBackEndSearcher {
 
             int skippedHits;
             try {
-                skippedHits = fillHits(result, 0, receivedPackets, summaryClass);
+                FillHitsResult fillHitsResult = fillHits(result, 0, receivedPackets, summaryClass);
+                skippedHits = fillHitsResult.skippedHits;
+                if (fillHitsResult.error != null) {
+                    result.hits().addError(ErrorMessage.createTimeout(fillHitsResult.error));
+                    return;
+                }
             } catch (TimeoutException e) {
                 result.hits().addError(ErrorMessage.createTimeout(e.getMessage()));
                 return;
@@ -391,7 +396,7 @@ public class FastSearcher extends VespaBackEndSearcher {
         BasicPacket[] basicPackets;
 
         try {
-            basicPackets = channel.receivePackets(Math.max(50, query.getTimeLeft()), 1);
+            basicPackets = channel.receivePackets(query.getTimeLeft(), 1);
         } catch (ChannelTimeoutException e) {
             return new Result(query,ErrorMessage.createTimeout("Timeout while waiting for " + getName()));
         } catch (InvalidChannelException e) {
@@ -472,7 +477,7 @@ public class FastSearcher extends VespaBackEndSearcher {
         if (isLoggingFine())
             getLogger().finest("Sent " + docsumsPacket + " on " + channel);
         if ( ! couldSend) throw new IOException("Could not successfully send GetDocSumsPacket.");
-        receivedPackets = channel.receivePackets(Math.max(50, result.getQuery().getTimeLeft()), docsumsPacket.getNumDocsums() + 1);
+        receivedPackets = channel.receivePackets(result.getQuery().getTimeLeft(), docsumsPacket.getNumDocsums() + 1);
 
         if (isLoggingFine())
             getLogger().finest("got " + receivedPackets.length + "docsumPackets");

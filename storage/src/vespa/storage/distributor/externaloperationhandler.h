@@ -6,7 +6,6 @@
 #include <vespa/document/bucket/bucketidfactory.h>
 #include <vespa/vdslib/state/clusterstate.h>
 #include <vespa/storage/distributor/distributorcomponent.h>
-#include <vespa/storage/distributor/managed_bucket_space_component.h>
 #include <vespa/storageapi/messageapi/messagehandler.h>
 #include <chrono>
 
@@ -20,7 +19,7 @@ namespace distributor {
 class Distributor;
 class MaintenanceOperationGenerator;
 
-class ExternalOperationHandler : public ManagedBucketSpaceComponent,
+class ExternalOperationHandler : public DistributorComponent,
                                  public api::MessageHandler
 {
 public:
@@ -38,7 +37,7 @@ public:
     DEF_MSG_COMMAND_H(GetBucketList);
 
     ExternalOperationHandler(Distributor& owner,
-                             ManagedBucketSpace& bucketSpace,
+                             DistributorBucketSpaceRepo& bucketSpaceRepo,
                              const MaintenanceOperationGenerator&,
                              DistributorComponentRegister& compReg);
 
@@ -61,11 +60,12 @@ private:
     api::ReturnCode makeSafeTimeRejectionResult(TimePoint unsafeTime);
     bool checkTimestampMutationPreconditions(
             api::StorageCommand& cmd,
-            const document::BucketId& bucket,
+            const document::BucketId &bucketId,
             PersistenceOperationMetricSet& persistenceMetrics);
     std::shared_ptr<api::StorageMessage> makeConcurrentMutationRejectionReply(
             api::StorageCommand& cmd,
-            const document::DocumentId& docId) const;
+            const document::DocumentId& docId,
+            PersistenceOperationMetricSet& persistenceMetrics) const;
     bool allowMutation(const SequencingHandle& handle) const;
 
     DistributorMetricSet& getMetrics() { return getDistributor().getMetrics(); }

@@ -4,9 +4,13 @@
 #include <vespa/storageapi/message/stat.h>
 #include <vespa/vdstestlib/cppunit/macros.h>
 #include <tests/distributor/distributortestutil.h>
+#include <vespa/document/test/make_document_bucket.h>
 #include <vespa/storage/distributor/operations/external/statbucketoperation.h>
 #include <vespa/storage/distributor/operations/external/statbucketlistoperation.h>
 #include <vespa/storage/distributor/distributor.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
+
+using document::test::makeDocumentBucket;
 
 namespace storage {
 namespace distributor {
@@ -43,8 +47,9 @@ StatOperationTest::testBucketInfo()
 
     StatBucketOperation op(
             getExternalOperationHandler(),
+            getDistributorBucketSpace(),
             std::shared_ptr<api::StatBucketCommand>(
-                    new api::StatBucketCommand(document::BucketId(16, 5), "")));
+                    new api::StatBucketCommand(makeDocumentBucket(document::BucketId(16, 5)), "")));
 
     op.start(_sender, framework::MilliSecTime(0));
 
@@ -84,10 +89,10 @@ StatOperationTest::testBucketList() {
     }
 
     std::shared_ptr<api::GetBucketListCommand> msg(
-            new api::GetBucketListCommand(document::BucketId(16, 5)));
+            new api::GetBucketListCommand(makeDocumentBucket(document::BucketId(16, 5))));
 
     StatBucketListOperation op(
-            getExternalOperationHandler().getBucketDatabase(),
+            getDistributorBucketSpace().getBucketDatabase(),
             getIdealStateManager(),
             getExternalOperationHandler().getIndex(),
             msg);

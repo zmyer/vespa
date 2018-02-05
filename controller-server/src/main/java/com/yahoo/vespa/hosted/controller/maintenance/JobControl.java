@@ -5,6 +5,7 @@ import com.yahoo.vespa.curator.Lock;
 import com.yahoo.vespa.hosted.controller.persistence.CuratorDb;
 
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.logging.Logger;
@@ -13,14 +14,12 @@ import java.util.logging.Logger;
  * Provides status and control over running maintenance jobs.
  * This is multithread safe.
  * 
- * Job deactivation is stored in a local file.
+ * Job deactivation is stored in zookeeper.
  * 
  * @author bratseth
  */
 public class JobControl {
     
-    private static final Logger log = Logger.getLogger(JobControl.class.getName());
-
     private final CuratorDb curator;
 
     /** This is not stored in ZooKeeper as all nodes start all jobs */
@@ -42,7 +41,7 @@ public class JobControl {
      * Returns a snapshot of the set of jobs started on this system (whether deactivated or not).
      * Each job is represented by its simple (omitting package) class name.
      */
-    public Set<String> jobs() { return new HashSet<>(startedJobs); }
+    public Set<String> jobs() { return new LinkedHashSet<>(startedJobs); }
 
     /** Returns an unmodifiable set containing the currently inactive jobs in this */
     public Set<String> inactiveJobs() { return curator.readInactiveJobs(); }

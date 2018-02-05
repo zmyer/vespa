@@ -1,16 +1,17 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.vespa.orchestrator.model;
 
+import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.vespa.applicationmodel.ApplicationInstance;
 import com.yahoo.vespa.applicationmodel.HostName;
 import com.yahoo.vespa.applicationmodel.ServiceCluster;
 import com.yahoo.vespa.applicationmodel.ServiceInstance;
+import com.yahoo.vespa.orchestrator.OrchestratorUtil;
 import com.yahoo.vespa.orchestrator.controller.ClusterControllerClientFactory;
 import com.yahoo.vespa.orchestrator.status.ApplicationInstanceStatus;
 import com.yahoo.vespa.orchestrator.status.HostStatus;
 import com.yahoo.vespa.orchestrator.status.MutableStatusRegistry;
 import com.yahoo.vespa.orchestrator.status.ReadOnlyStatusRegistry;
-import com.yahoo.vespa.service.monitor.ServiceMonitorStatus;
 
 import java.util.Collection;
 import java.util.Comparator;
@@ -24,7 +25,7 @@ import java.util.stream.Collectors;
 import static com.yahoo.vespa.orchestrator.OrchestratorUtil.getHostsUsedByApplicationInstance;
 
 public class ApplicationApiImpl implements ApplicationApi {
-    private final ApplicationInstance<ServiceMonitorStatus> applicationInstance;
+    private final ApplicationInstance applicationInstance;
     private final NodeGroup nodeGroup;
     private final MutableStatusRegistry hostStatusService;
     private final List<ClusterApi> clusterInOrder;
@@ -45,8 +46,8 @@ public class ApplicationApiImpl implements ApplicationApi {
     }
 
     @Override
-    public String applicationInfo() {
-        return applicationInstance.reference().toString();
+    public ApplicationId applicationId() {
+        return OrchestratorUtil.toApplicationId(applicationInstance.reference());
     }
 
     private static Map<HostName, HostStatus> createHostStatusMap(Collection<HostName> hosts,
@@ -114,13 +115,14 @@ public class ApplicationApiImpl implements ApplicationApi {
                 .collect(Collectors.toList());
     }
 
-    private static List<ClusterApi> makeClustersInOrder
+    private List<ClusterApi> makeClustersInOrder
             (NodeGroup nodeGroup,
              Map<HostName, HostStatus> hostStatusMap,
              ClusterControllerClientFactory clusterControllerClientFactory) {
-        Set<ServiceCluster<ServiceMonitorStatus>> clustersInGroup = getServiceClustersInGroup(nodeGroup);
+        Set<ServiceCluster> clustersInGroup = getServiceClustersInGroup(nodeGroup);
         return clustersInGroup.stream()
                 .map(serviceCluster -> new ClusterApiImpl(
+                        this,
                         serviceCluster,
                         nodeGroup,
                         hostStatusMap,
@@ -138,12 +140,12 @@ public class ApplicationApiImpl implements ApplicationApi {
         return lhs.clusterId().toString().compareTo(rhs.clusterId().toString());
     }
 
-    private static Set<ServiceCluster<ServiceMonitorStatus>> getServiceClustersInGroup(NodeGroup nodeGroup) {
-        ApplicationInstance<ServiceMonitorStatus> applicationInstance = nodeGroup.getApplication();
+    private static Set<ServiceCluster> getServiceClustersInGroup(NodeGroup nodeGroup) {
+        ApplicationInstance applicationInstance = nodeGroup.getApplication();
 
-        Set<ServiceCluster<ServiceMonitorStatus>> serviceClustersInGroup = new HashSet<>();
-        for (ServiceCluster<ServiceMonitorStatus> cluster : applicationInstance.serviceClusters()) {
-            for (ServiceInstance<ServiceMonitorStatus> instance : cluster.serviceInstances()) {
+        Set<ServiceCluster> serviceClustersInGroup = new HashSet<>();
+        for (ServiceCluster cluster : applicationInstance.serviceClusters()) {
+            for (ServiceInstance instance : cluster.serviceInstances()) {
                 if (nodeGroup.contains(instance.hostName())) {
                     serviceClustersInGroup.add(cluster);
                     break;

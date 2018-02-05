@@ -2,7 +2,7 @@
 #pragma once
 
 #include "bucketgctimecalculator.h"
-#include "maintenancebucket.h"
+#include <vespa/storage/distributor/maintenance/maintenancepriority.h>
 #include <vespa/storage/distributor/operations/idealstate/idealstateoperation.h>
 #include <vespa/storage/common/storagecomponent.h>
 #include <vespa/storage/bucketdb/bucketdatabase.h>
@@ -19,6 +19,7 @@ class DistributorConfiguration;
 namespace distributor {
 
 class DistributorComponent;
+class DistributorBucketSpace;
 class NodeMaintenanceStatsTracker;
 
 /**
@@ -45,15 +46,16 @@ public:
     struct Context
     {
         Context(const DistributorComponent&,
+                const DistributorBucketSpace &distributorBucketSpace,
                 NodeMaintenanceStatsTracker&,
-                const document::BucketId& bid);
+                const document::Bucket &bucket_);
         ~Context();
         Context(const Context &) = delete;
         Context & operator =(const Context &) = delete;
 
 
         // Per bucket
-        document::BucketId bucketId;
+        document::Bucket   bucket;
         document::BucketId siblingBucket;
 
         BucketDatabase::Entry entry;
@@ -81,6 +83,9 @@ public:
         const BucketDatabase::Entry& getSiblingEntry() const {
             return siblingEntry;
         }
+
+        document::Bucket getBucket() const { return bucket; }
+        document::BucketId getBucketId() const { return bucket.getBucketId(); }
 
         std::string toString() const;
     };

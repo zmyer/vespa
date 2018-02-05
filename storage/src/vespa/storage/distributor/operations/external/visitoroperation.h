@@ -11,13 +11,13 @@
 
 namespace document { class Document; }
 
-namespace storage {
+namespace storage { class VisitorMetricSet; }
+namespace storage::lib { class ClusterState; }
 
-class VisitorMetricSet;
-
-namespace distributor {
+namespace storage::distributor {
 
 class DistributorComponent;
+class DistributorBucketSpace;
 
 class VisitorOperation  : public Operation
 {
@@ -33,6 +33,7 @@ public:
     };
 
     VisitorOperation(DistributorComponent& manager,
+                     DistributorBucketSpace &bucketSpace,
                      const std::shared_ptr<api::CreateVisitorCommand> & msg,
                      const Config& config,
                      VisitorMetricSet& metrics);
@@ -147,6 +148,7 @@ private:
     std::unique_ptr<document::OrderingSpecification> _ordering;
 
     DistributorComponent& _owner;
+    DistributorBucketSpace &_bucketSpace;
     SentMessagesMap _sentMessages;
 
     api::CreateVisitorCommand::SP _msg;
@@ -176,7 +178,5 @@ private:
     mbus::TraceNode trace;
     framework::MilliSecTimer _operationTimer;
 };
-
-}
 
 }

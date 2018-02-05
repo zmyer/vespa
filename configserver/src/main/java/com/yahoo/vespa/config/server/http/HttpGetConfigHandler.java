@@ -2,37 +2,37 @@
 package com.yahoo.vespa.config.server.http;
 
 import com.google.inject.Inject;
+import com.yahoo.config.provision.ApplicationId;
 import com.yahoo.container.jdisc.HttpRequest;
 import com.yahoo.container.jdisc.HttpResponse;
-import com.yahoo.container.logging.AccessLog;
 import com.yahoo.log.LogLevel;
 import com.yahoo.vespa.config.protocol.ConfigResponse;
 import com.yahoo.vespa.config.server.RequestHandler;
 import com.yahoo.vespa.config.server.tenant.Tenants;
-import com.yahoo.config.provision.ApplicationId;
 
 import java.util.Optional;
-import java.util.concurrent.Executor;
 
 /**
  * HTTP handler for a v2 getConfig operation
  *
- * @author lulf
- * @since 5.1
+ * @author Ulf Lilleengen
  */
+// TODO: Make this API discoverable
 public class HttpGetConfigHandler extends HttpHandler {
+
     private final RequestHandler requestHandler;
 
-    public HttpGetConfigHandler(Executor executor, RequestHandler requestHandler, AccessLog accessLog) {
-        super(executor, accessLog);
+    public HttpGetConfigHandler(HttpHandler.Context ctx, RequestHandler requestHandler) {
+        super(ctx);
         this.requestHandler = requestHandler;
     }
 
+    @SuppressWarnings("unused") // injected
     @Inject
-    public HttpGetConfigHandler(Executor executor, Tenants tenants, AccessLog accesslog) {
-        this(executor, tenants.defaultTenant().getRequestHandler(), accesslog);
+    public HttpGetConfigHandler(HttpHandler.Context ctx, Tenants tenants) {
+        this(ctx, tenants.defaultTenant().getRequestHandler());
     }
-    
+
     @Override
     public HttpResponse handleGET(HttpRequest req) {
         HttpConfigRequest request = HttpConfigRequest.createFromRequestV1(req);

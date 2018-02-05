@@ -3,6 +3,7 @@
 #include "service.h"
 #include "output-connection.h"
 #include <vespa/vespalib/util/stringfmt.h>
+#include <vespa/vespalib/util/signalhandler.h>
 
 #include <csignal>
 #include <unistd.h>
@@ -13,7 +14,11 @@
 LOG_SETUP(".service");
 #include <vespa/log/llparser.h>
 
-extern sig_atomic_t stop;
+static bool stop()
+{
+    return (vespalib::SignalHandler::INT.check() ||
+            vespalib::SignalHandler::TERM.check());
+}
 
 using vespalib::make_string;
 
@@ -108,8 +113,7 @@ Service::terminate(bool catchable, bool dumpState)
                 ret == 0 ? "OK" : strerror(errno));
             return ret;
         } else {
-            setState(KILLING);
-            if (dumpState) {
+            if (dumpState && _state != KILLING) {
                 vespalib::string pstackCmd = make_string("pstack %d > %s/%s.pstack.%d",
                                                          _pid, getVespaTempDir().c_str(), name().c_str(), _pid);
                 LOG(info, "%s:%d failed to stop. Stack dumped at %s", name().c_str(), _pid, pstackCmd.c_str());
@@ -118,6 +122,7 @@ Service::terminate(bool catchable, bool dumpState)
                     LOG(warning, "'%s' failed with return value %d", pstackCmd.c_str(), pstackRet);
                 }
             }
+            setState(KILLING);
             kill(_pid, SIGCONT); // if it was stopped for some reason
             int ret = kill(_pid, SIGKILL);
             LOG(debug, "%s: kill -SIGKILL %d: %s", name().c_str(), (int)_pid,
@@ -212,7 +217,7 @@ Service::start()
             static_cast<int>(getpid()));
         signal(SIGTERM, SIG_DFL);
         signal(SIGINT, SIG_DFL);
-        if (stop) {
+        if (stop()) {
             kill(getpid(), SIGTERM);
         }
         if (_restartPenalty > 0) {
@@ -234,6 +239,7 @@ Service::start()
     // ensureChildRuns(pipes[0]); // This will wait until the execl goes through
     setState(RUNNING);
     _metrics.currentlyRunningServices++;
+    _metrics.sentinel_running.sample(_metrics.currentlyRunningServices);
     close(pipes[0]); // close reading end
 
     using ns_log::LLParser;
@@ -309,18 +315,20 @@ Service::youExited(int status)
         setState(FAILED);
     }
     _metrics.currentlyRunningServices--;
+    _metrics.sentinel_running.sample(_metrics.currentlyRunningServices);
 
     if (_state == TERMINATING) {
         setState(TERMINATED);
     } else if (_state == KILLING) {
         setState(KILLED);
     }
-    if (_isAutomatic && _config->autorestart && !stop) {
+    if (_isAutomatic && _config->autorestart && !stop()) {
         // ### Implement some rate limiting here maybe?
         LOG(debug, "%s: Has autorestart flag, restarting.", name().c_str());
         setState(READY);
         _metrics.totalRestartsCounter++;
         _metrics.totalRestartsLastPeriod++;
+        _metrics.sentinel_restarts.add();
         start();
     }
 }

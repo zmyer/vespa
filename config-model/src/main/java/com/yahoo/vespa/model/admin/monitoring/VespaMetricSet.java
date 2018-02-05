@@ -30,14 +30,29 @@ public class VespaMetricSet {
         metrics.addAll(getQrserverMetrics());
         metrics.addAll(getContainerMetrics());
         metrics.addAll(getConfigServerMetrics());
+        metrics.addAll(getSentinelMetrics());
         metrics.addAll(getOtherMetrics());
 
         return Collections.unmodifiableSet(metrics);
     }
 
+    private static Set<Metric> getSentinelMetrics() {
+        Set<Metric> metrics = new LinkedHashSet<>();
+
+        metrics.add(new Metric("sentinel.restarts.count"));
+        metrics.add(new Metric("sentinel.totalRestarts.last"));
+        metrics.add(new Metric("sentinel.uptime.last", "sentinel.uptime"));
+
+        metrics.add(new Metric("sentinel.running.count"));
+        metrics.add(new Metric("sentinel.running.last"));
+
+        return metrics;
+    }
+
     private static Set<Metric> getOtherMetrics() {
         Set<Metric> metrics = new LinkedHashSet<>();
         metrics.add(new Metric("slobrok.heartbeats.failed.count", "slobrok.heartbeats.failed"));
+        metrics.add(new Metric("logd.processed.lines.count", "logd.processed.lines"));
         return metrics;
     }
 
@@ -58,6 +73,10 @@ public class VespaMetricSet {
 
     private static Set<Metric> getContainerMetrics() {
         Set<Metric> metrics = new LinkedHashSet<>();
+
+        metrics.add(new Metric("handled.requests.count", "handled.requests"));
+        metrics.add(new Metric("handled.latency.average"));
+        metrics.add(new Metric("handled.latency.max"));
 
         metrics.add(new Metric("serverRejectedRequests.rate"));
         metrics.add(new Metric("serverRejectedRequests.count"));
@@ -200,10 +219,15 @@ public class VespaMetricSet {
         metrics.add(new Metric("content.proton.documentdb.ready.lid_space.lid_fragmentation_factor.average"));
         metrics.add(new Metric("content.proton.documentdb.notready.lid_space.lid_fragmentation_factor.average"));
         metrics.add(new Metric("content.proton.documentdb.removed.lid_space.lid_fragmentation_factor.average"));
+        metrics.add(new Metric("content.proton.documentdb.ready.lid_space.lid_limit.last"));
+        metrics.add(new Metric("content.proton.documentdb.notready.lid_space.lid_limit.last"));
+        metrics.add(new Metric("content.proton.documentdb.removed.lid_space.lid_limit.last"));
 
         // resource usage
         metrics.add(new Metric("content.proton.resource_usage.disk.average"));
+        metrics.add(new Metric("content.proton.resource_usage.disk_utilization.average"));
         metrics.add(new Metric("content.proton.resource_usage.memory.average"));
+        metrics.add(new Metric("content.proton.resource_usage.memory_utilization.average"));
         metrics.add(new Metric("content.proton.resource_usage.memory_mappings.max"));
         metrics.add(new Metric("content.proton.resource_usage.open_file_descriptors.max"));
         metrics.add(new Metric("content.proton.documentdb.attribute.resource_usage.enum_store.average"));
@@ -213,6 +237,7 @@ public class VespaMetricSet {
         // transaction log
         metrics.add(new Metric("content.proton.transactionlog.entries.average"));
         metrics.add(new Metric("content.proton.transactionlog.disk_usage.average"));
+        metrics.add(new Metric("content.proton.transactionlog.replay_time.last"));
 
         // document store
         metrics.add(new Metric("content.proton.documentdb.ready.document_store.disk_usage.average"));
@@ -289,11 +314,13 @@ public class VespaMetricSet {
         metrics.add(new Metric("vds.filestor.spi.put.success.average"));
         metrics.add(new Metric("vds.filestor.spi.remove.success.average"));
         metrics.add(new Metric("vds.filestor.spi.update.success.average"));
+        metrics.add(new Metric("vds.filestor.spi.deleteBucket.success.average"));
         metrics.add(new Metric("vds.filestor.spi.get.success.average"));
         metrics.add(new Metric("vds.filestor.spi.iterate.success.average"));
         metrics.add(new Metric("vds.filestor.spi.put.success.rate"));
         metrics.add(new Metric("vds.filestor.spi.remove.success.rate"));
         metrics.add(new Metric("vds.filestor.spi.update.success.rate"));
+        metrics.add(new Metric("vds.filestor.spi.deleteBucket.success.rate"));
         metrics.add(new Metric("vds.filestor.spi.get.success.rate"));
         metrics.add(new Metric("vds.filestor.spi.iterate.success.rate"));
 

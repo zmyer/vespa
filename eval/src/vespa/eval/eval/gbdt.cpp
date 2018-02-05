@@ -65,18 +65,16 @@ TreeStats::traverse(const nodes::Node &node, size_t depth, size_t &sum_path) {
         auto in = nodes::as<nodes::In>(if_node->cond());
         if (less) {
             auto symbol = nodes::as<nodes::Symbol>(less->lhs());
-            assert(symbol && (symbol->id() >= 0));
+            assert(symbol);
             num_params = std::max(num_params, size_t(symbol->id() + 1));
             ++num_less_checks;
         } else {
             assert(in);
-            auto symbol = nodes::as<nodes::Symbol>(in->lhs());
-            assert(symbol && (symbol->id() >= 0));
+            auto symbol = nodes::as<nodes::Symbol>(in->child());
+            assert(symbol);
             num_params = std::max(num_params, size_t(symbol->id() + 1));
             ++num_in_checks;
-            auto array = nodes::as<nodes::Array>(in->rhs());
-            size_t array_size = (array) ? array->size() : 1;
-            max_set_size = std::max(max_set_size, array_size);
+            max_set_size = std::max(max_set_size, in->num_entries());
         }
         return 1.0 + (p_true * true_path) + ((1.0 - p_true) * false_path);
     } else {

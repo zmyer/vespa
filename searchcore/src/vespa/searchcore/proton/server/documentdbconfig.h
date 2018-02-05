@@ -9,22 +9,17 @@
 #include <vespa/searchcore/proton/matching/ranking_constants.h>
 #include <vespa/config/retriever/configkeyset.h>
 #include <vespa/config/retriever/configsnapshot.h>
+#include <vespa/searchlib/docstore/logdocumentstore.h>
 
-namespace vespa {
-    namespace config {
-        namespace search {
-            namespace internal {
-                class InternalSummaryType;
-                class InternalSummarymapType;
-                class InternalRankProfilesType;
-                class InternalAttributesType;
-                class InternalIndexschemaType;
-                class InternalImportedFieldsType;
-            }
-            namespace summary { namespace internal { class InternalJuniperrcType; } }
-        }
-    }
+namespace vespa::config::search::internal {
+    class InternalSummaryType;
+    class InternalSummarymapType;
+    class InternalRankProfilesType;
+    class InternalAttributesType;
+    class InternalIndexschemaType;
+    class InternalImportedFieldsType;
 }
+namespace vespa::config::search::summary { namespace internal { class InternalJuniperrcType; } }
 
 namespace document { namespace internal { class InternalDocumenttypesType; } }
 
@@ -49,7 +44,9 @@ public:
         bool tuneFileDocumentDBChanged;
         bool schemaChanged;
         bool maintenanceChanged;
+        bool storeChanged;
         bool visibilityDelayChanged;
+        bool flushChanged;
 
         ComparisonResult();
         ComparisonResult &setRankProfilesChanged(bool val) { rankProfilesChanged = val; return *this; }
@@ -65,7 +62,22 @@ public:
         ComparisonResult &setTuneFileDocumentDBChanged(bool val) { tuneFileDocumentDBChanged = val; return *this; }
         ComparisonResult &setSchemaChanged(bool val) { schemaChanged = val; return *this; }
         ComparisonResult &setMaintenanceChanged(bool val) { maintenanceChanged = val; return *this; }
-        ComparisonResult &setVisibilityDelayChanged(bool val) { visibilityDelayChanged = val; return *this; }
+        ComparisonResult &setStoreChanged(bool val) { storeChanged = val; return *this; }
+
+        ComparisonResult &setVisibilityDelayChanged(bool val) {
+            visibilityDelayChanged = val;
+            if (val) {
+                maintenanceChanged = true;
+            }
+            return *this;
+        }
+        ComparisonResult &setFlushChanged(bool val) {
+            flushChanged = val;
+            if (val) {
+                maintenanceChanged = true;
+            }
+            return *this;
+        }
     };
 
     using SP = std::shared_ptr<DocumentDBConfig>;
@@ -89,25 +101,25 @@ public:
     using ImportedFieldsConfigSP = std::shared_ptr<ImportedFieldsConfig>;
 
 private:
-    vespalib::string               _configId;
-    vespalib::string               _docTypeName;
-    int64_t                        _generation;
-    RankProfilesConfigSP           _rankProfiles;
-    RankingConstants::SP           _rankingConstants;
-    IndexschemaConfigSP            _indexschema;
-    AttributesConfigSP             _attributes;
-    SummaryConfigSP                _summary;
-    SummarymapConfigSP             _summarymap;
-    JuniperrcConfigSP              _juniperrc;
-    DocumenttypesConfigSP          _documenttypes;
-    document::DocumentTypeRepo::SP _repo;
-    ImportedFieldsConfigSP         _importedFields;
-    search::TuneFileDocumentDB::SP _tuneFileDocumentDB;
-    search::index::Schema::SP      _schema;
-    MaintenanceConfigSP            _maintenance;
-    config::ConfigSnapshot         _extraConfigs;
-    SP _orig;
-    bool                           _delayedAttributeAspects;
+    vespalib::string                 _configId;
+    vespalib::string                 _docTypeName;
+    int64_t                          _generation;
+    RankProfilesConfigSP             _rankProfiles;
+    RankingConstants::SP             _rankingConstants;
+    IndexschemaConfigSP              _indexschema;
+    AttributesConfigSP               _attributes;
+    SummaryConfigSP                  _summary;
+    SummarymapConfigSP               _summarymap;
+    JuniperrcConfigSP                _juniperrc;
+    DocumenttypesConfigSP            _documenttypes;
+    document::DocumentTypeRepo::SP   _repo;
+    ImportedFieldsConfigSP           _importedFields;
+    search::TuneFileDocumentDB::SP   _tuneFileDocumentDB;
+    search::index::Schema::SP        _schema;
+    MaintenanceConfigSP              _maintenance;
+    search::LogDocumentStore::Config _storeConfig;
+    SP                               _orig;
+    bool                             _delayedAttributeAspects;
 
 
     template <typename T>
@@ -117,6 +129,14 @@ private:
             return rhs == NULL;
         }
         return rhs != NULL && *lhs == *rhs;
+    }
+    template <typename T, typename Func>
+    bool equals(const T *lhs, const T *rhs, Func isEqual) const
+    {
+        if (lhs == NULL) {
+            return rhs == NULL;
+        }
+        return rhs != NULL && isEqual(*lhs, *rhs);
     }
 public:
     DocumentDBConfig(int64_t generation,
@@ -133,9 +153,9 @@ public:
                      const search::TuneFileDocumentDB::SP &tuneFileDocumentDB,
                      const search::index::Schema::SP &schema,
                      const DocumentDBMaintenanceConfig::SP &maintenance,
+                     const search::LogDocumentStore::Config & storeConfig,
                      const vespalib::string &configId,
-                     const vespalib::string &docTypeName,
-                     const config::ConfigSnapshot &extraConfig = config::ConfigSnapshot());
+                     const vespalib::string &docTypeName);
 
     DocumentDBConfig(const DocumentDBConfig &cfg);
     ~DocumentDBConfig();
@@ -181,9 +201,6 @@ public:
 
     bool valid() const;
 
-    const config::ConfigSnapshot &getExtraConfigs() const { return _extraConfigs; }
-    void setExtraConfigs(const config::ConfigSnapshot &extraConfigs) { _extraConfigs = extraConfigs; }
-
     /**
      * Only keep configs needed for replay of transaction log.
      */
@@ -205,6 +222,8 @@ public:
      * Create modified attributes config.
      */
     SP newFromAttributesConfig(const AttributesConfigSP &attributes) const;
+
+    const search::LogDocumentStore::Config & getStoreConfig() const { return _storeConfig; }
 
     /**
      * Create config with delayed attribute aspect changes if they require

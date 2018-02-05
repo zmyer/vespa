@@ -20,8 +20,6 @@ namespace eval {
 class Value;
 class Tensor;
 class TensorSpec;
-struct UnaryOperation;
-struct BinaryOperation;
 
 /**
  * Top-level API for a tensor implementation. All Tensor operations
@@ -34,31 +32,25 @@ struct BinaryOperation;
  **/
 struct TensorEngine
 {
-    using ValueType = eval::ValueType;
+    using Aggr = eval::Aggr;
     using Tensor = eval::Tensor;
+    using TensorFunction = eval::TensorFunction;
     using TensorSpec = eval::TensorSpec;
     using Value = eval::Value;
-    using BinaryOperation = eval::BinaryOperation;
-    using UnaryOperation = eval::UnaryOperation;
-    using Aggr = eval::Aggr;
+    using ValueType = eval::ValueType;
+    using join_fun_t = double (*)(double, double);
+    using map_fun_t = double (*)(double);
 
-    virtual ValueType type_of(const Tensor &tensor) const = 0;
-    virtual bool equal(const Tensor &a, const Tensor &b) const = 0;
-    virtual vespalib::string to_string(const Tensor &tensor) const = 0;
-    virtual TensorSpec to_spec(const Tensor &tensor) const = 0;
+    virtual TensorSpec to_spec(const Value &value) const = 0;
+    virtual Value::UP from_spec(const TensorSpec &spec) const = 0;
 
-    virtual TensorFunction::UP compile(tensor_function::Node_UP expr) const { return std::move(expr); }
+    virtual void encode(const Value &value, nbostream &output) const = 0;
+    virtual Value::UP decode(nbostream &input) const = 0;
 
-    virtual std::unique_ptr<Tensor> create(const TensorSpec &spec) const = 0;
-    virtual const Value &reduce(const Tensor &tensor, const BinaryOperation &op, const std::vector<vespalib::string> &dimensions, Stash &stash) const = 0;
-    virtual const Value &map(const UnaryOperation &op, const Tensor &a, Stash &stash) const = 0;
-    virtual const Value &apply(const BinaryOperation &op, const Tensor &a, const Tensor &b, Stash &stash) const = 0;
+    virtual const TensorFunction &optimize(const TensorFunction &expr, Stash &) const { return expr; }
 
-    // havardpe: new API, WIP
-    virtual void encode(const Value &value, nbostream &output, Stash &stash) const = 0;
-    virtual const Value &decode(nbostream &input, Stash &stash) const = 0;
-    virtual const Value &map(const Value &a, const std::function<double(double)> &function, Stash &stash) const = 0;
-    virtual const Value &join(const Value &a, const Value &b, const std::function<double(double,double)> &function, Stash &stash) const = 0;
+    virtual const Value &map(const Value &a, map_fun_t function, Stash &stash) const = 0;
+    virtual const Value &join(const Value &a, const Value &b, join_fun_t function, Stash &stash) const = 0;
     virtual const Value &reduce(const Value &a, Aggr aggr, const std::vector<vespalib::string> &dimensions, Stash &stash) const = 0;
     virtual const Value &concat(const Value &a, const Value &b, const vespalib::string &dimension, Stash &stash) const = 0;
     virtual const Value &rename(const Value &a, const std::vector<vespalib::string> &from, const std::vector<vespalib::string> &to, Stash &stash) const = 0;

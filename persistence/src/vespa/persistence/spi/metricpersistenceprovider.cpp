@@ -1,6 +1,8 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
 #include "metricpersistenceprovider.h"
+#include <vespa/metrics/valuemetric.h>
+#include <vespa/metrics/metrictimer.h>
 #include <cassert>
 
 #include <vespa/log/log.h>
@@ -104,19 +106,19 @@ Impl::getPartitionStates() const
 }
 
 BucketIdListResult
-Impl::listBuckets(PartitionId v1) const
+Impl::listBuckets(BucketSpace bucketSpace, PartitionId v1) const
 {
     PRE_PROCESS(2);
-    BucketIdListResult r(_next->listBuckets(v1));
+    BucketIdListResult r(_next->listBuckets(bucketSpace, v1));
     POST_PROCESS(2, r);
     return r;
 }
 
 Result
-Impl::setClusterState(const ClusterState& v1)
+Impl::setClusterState(BucketSpace bucketSpace, const ClusterState& v1)
 {
     PRE_PROCESS(3);
-    Result r(_next->setClusterState(v1));
+    Result r(_next->setClusterState(bucketSpace, v1));
     POST_PROCESS(3, r);
     return r;
 }
@@ -250,10 +252,10 @@ Impl::deleteBucket(const Bucket& v1, Context& v2)
 }
 
 BucketIdListResult
-Impl::getModifiedBuckets() const
+Impl::getModifiedBuckets(BucketSpace bucketSpace) const
 {
     PRE_PROCESS(18);
-    BucketIdListResult r(_next->getModifiedBuckets());
+    BucketIdListResult r(_next->getModifiedBuckets(bucketSpace));
     POST_PROCESS(18, r);
     return r;
 }

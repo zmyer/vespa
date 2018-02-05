@@ -1,6 +1,7 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.vespavisit;
 
+import com.yahoo.document.FixedBucketSpaces;
 import com.yahoo.document.select.parser.ParseException;
 import com.yahoo.documentapi.ProgressToken;
 import com.yahoo.documentapi.VisitorControlHandler;
@@ -261,7 +262,7 @@ public class VdsVisit {
                 .longOpt("cluster")
                 .hasArg(true)
                 .argName("cluster")
-                .desc("Visit the given VDS cluster.")
+                .desc("Visit the given cluster.")
                 .build());
 
         options.addOption("v", "verbose", false, "Indent XML, show progress and info on STDERR.");
@@ -336,6 +337,15 @@ public class VdsVisit {
                 .desc("Output documents as JSON")
                 .hasArg(false)
                 .build());
+
+        options.addOption(Option.builder()
+                .longOpt("bucketspace")
+                .hasArg(true)
+                .argName("space")
+                .desc(String.format("Bucket space to visit ('%s' or '%s'). If not specified, '%s' is used.",
+                        FixedBucketSpaces.defaultSpace(), FixedBucketSpaces.globalSpace(), FixedBucketSpaces.defaultSpace()))
+                .build());
+
         return options;
     }
 
@@ -441,6 +451,9 @@ public class VdsVisit {
             }
             if (line.hasOption("s")) {
                 params.setDocumentSelection(line.getOptionValue("s"));
+            }
+            if (line.hasOption("bucketspace")) {
+                params.setBucketSpace(line.getOptionValue("bucketspace"));
             }
             if (line.hasOption("f")) {
                 params.setFromTimestamp(((Number) line.getParsedOptionValue("f")).longValue());
@@ -607,6 +620,7 @@ public class VdsVisit {
         } else {
             out.println("Visiting documents matching: " + params.getDocumentSelection());
         }
+        out.println(String.format("Visiting bucket space: %s", params.getBucketSpace()));
         if (params.getFromTimestamp() != 0 && params.getToTimestamp() != 0) {
             out.println("Visiting in the inclusive timestamp range "
                                + params.getFromTimestamp() + " - " + params.getToTimestamp() + ".");

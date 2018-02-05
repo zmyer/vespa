@@ -19,7 +19,6 @@ using namespace search::features;
 using vespalib::eval::Function;
 using vespalib::eval::Value;
 using vespalib::eval::DoubleValue;
-using vespalib::eval::TensorValue;
 using vespalib::eval::TensorSpec;
 using vespalib::eval::ValueType;
 using vespalib::tensor::DefaultTensorEngine;
@@ -39,7 +38,7 @@ Tensor::UP createTensor(const TensorCells &cells,
 }
 
 Tensor::UP make_tensor(const TensorSpec &spec) {
-    auto tensor = DefaultTensorEngine::ref().create(spec);
+    auto tensor = DefaultTensorEngine::ref().from_spec(spec);
     return Tensor::UP(dynamic_cast<Tensor*>(tensor.release()));
 }
 
@@ -77,10 +76,10 @@ struct ExecFixture
                    const TensorDimensions &dimensions)
     {
         Tensor::UP tensor = createTensor(cells, dimensions);
-        ValueType type(tensor->getType());
+        ValueType type(tensor->type());
         test.getIndexEnv().addConstantValue(name,
                                             std::move(type),
-                                            std::make_unique<TensorValue>(std::move(tensor)));
+                                            std::move(tensor));
     }
 
     void addDouble(const vespalib::string &name, const double value) {

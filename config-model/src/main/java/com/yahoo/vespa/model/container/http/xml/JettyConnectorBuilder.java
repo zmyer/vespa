@@ -12,8 +12,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * @author <a href="mailto:einarmr@yahoo-inc.com">Einar M R Rosenvinge</a>
- * @since 5.21.0
+ * @author Einar M R Rosenvinge
  */
 public class JettyConnectorBuilder extends VespaDomBuilder.DomConfigProducerBuilder<ConnectorFactory>  {
     private static final Logger log = Logger.getLogger(JettyConnectorBuilder.class.getName());
@@ -33,6 +32,9 @@ public class JettyConnectorBuilder extends VespaDomBuilder.DomConfigProducerBuil
                 legacyServerConfig = null;
             }
         }
-        return new ConnectorFactory(name, port, legacyServerConfig);
+        Element sslKeystoreConfigurator = XML.getChild(serverSpec, "ssl-keystore-configurator");
+        Element sslTruststoreConfigurator = XML.getChild(serverSpec, "ssl-truststore-configurator");
+        return new ConnectorFactory(name, port, legacyServerConfig, sslKeystoreConfigurator, sslTruststoreConfigurator);
     }
+
 }

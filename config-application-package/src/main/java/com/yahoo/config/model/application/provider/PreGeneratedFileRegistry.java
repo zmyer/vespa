@@ -70,7 +70,12 @@ public class PreGeneratedFileRegistry implements FileRegistry {
     }
 
     public FileReference addFile(String relativePath) {
-        return FileReferenceCreator.create(path2Hash.get(relativePath));
+        return new FileReference(path2Hash.get(relativePath));
+    }
+
+    @Override
+    public FileReference addUri(String uri) {
+        return new FileReference(path2Hash.get(uri));
     }
 
     @Override
@@ -86,7 +91,7 @@ public class PreGeneratedFileRegistry implements FileRegistry {
     public List<Entry> export() {
         List<Entry> entries = new ArrayList<>();
         for (Map.Entry<String, String> entry : path2Hash.entrySet()) {
-            entries.add(new Entry(entry.getKey(), FileReferenceCreator.create(entry.getValue())));
+            entries.add(new Entry(entry.getKey(), new FileReference(entry.getValue())));
         }
         return entries;
     }

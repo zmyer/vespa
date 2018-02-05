@@ -25,6 +25,7 @@ double vespalib_eval_isnan(double a) { return (std::isnan(a) ? 1.0 : 0.0); }
 double vespalib_eval_approx(double a, double b) { return (vespalib::approx_equal(a, b) ? 1.0 : 0.0); }
 double vespalib_eval_relu(double a) { return std::max(a, 0.0); }
 double vespalib_eval_sigmoid(double a) { return 1.0 / (1.0 + std::exp(-1.0 * a)); }
+double vespalib_eval_elu(double a) { return (a < 0) ? std::exp(a) - 1.0 : a; }
 
 using vespalib::eval::gbdt::Forest;
 using resolve_function = double (*)(void *ctx, size_t idx);
@@ -56,9 +57,9 @@ namespace {
 
 struct SetMemberHash : PluginState {
     vespalib::hash_set<double> members;
-    explicit SetMemberHash(const Array &array) : members(array.size() * 3) {
-        for (size_t i = 0; i < array.size(); ++i) {
-            members.insert(array.get(i).get_const_value());
+    explicit SetMemberHash(const In &in) : members(in.num_entries() * 3) {
+        for (size_t i = 0; i < in.num_entries(); ++i) {
+            members.insert(in.get_entry(i).get_const_value());
         }
     }
     static bool check_membership(const PluginState *state, double value) {
@@ -74,7 +75,6 @@ struct FunctionBuilder : public NodeVisitor, public NodeTraverser {
     llvm::IRBuilder<>         builder;
     std::vector<llvm::Value*> params;
     std::vector<llvm::Value*> values;
-    std::vector<llvm::Value*> let_values;
     llvm::Function           *function;
     size_t                    num_params;
     PassParams                pass_params;
@@ -132,7 +132,6 @@ struct FunctionBuilder : public NodeVisitor, public NodeTraverser {
           builder(context),
           params(),
           values(),
-          let_values(),
           function(nullptr),
           num_params(num_params_in),
           pass_params(pass_params_in),
@@ -254,7 +253,7 @@ struct FunctionBuilder : public NodeVisitor, public NodeTraverser {
             inside_forest = true;
             forest_end = &node;
         }
-        if (check_type<Array, If, Let, In>(node)) {
+        if (check_type<If>(node)) {
             node.accept(*this);
             return false;
         }
@@ -352,20 +351,32 @@ struct FunctionBuilder : public NodeVisitor, public NodeTraverser {
         push_double(item.value());
     }
     void visit(const Symbol &item) override {
-        if (item.id() >= 0) {
-            push(get_param(item.id()));
-        } else {
-            int let_offset = -(item.id() + 1);
-            assert(size_t(let_offset) < let_values.size());
-            push(let_values[let_offset]);
-        }
+        push(get_param(item.id()));
     }
     void visit(const String &item) override {
         push_double(item.hash());
     }
-    void visit(const Array &item) override {
-        // NB: visit not open
-        push_double(item.size());
+    void visit(const In &item) override {
+        llvm::Value *lhs = pop_double();
+        if (item.num_entries() > 8) {
+            // build call to hash lookup
+            plugin_state.emplace_back(new SetMemberHash(item));
+            void *call_ptr = (void *) SetMemberHash::check_membership;
+            PluginState *state = plugin_state.back().get();
+            llvm::PointerType *funptr_t = make_check_membership_funptr_t();
+            llvm::Value *call_fun = builder.CreateIntToPtr(builder.getInt64((uint64_t)call_ptr), funptr_t, "inject_call_addr");
+            llvm::Value *ctx = builder.CreateIntToPtr(builder.getInt64((uint64_t)state), builder.getVoidTy()->getPointerTo(), "inject_ctx");
+            push(builder.CreateCall(call_fun, {ctx, lhs}, "call_check_membership"));
+        } else {
+            // build explicit code to check all set members
+            llvm::Value *found = builder.getFalse();
+            for (size_t i = 0; i < item.num_entries(); ++i) {
+                llvm::Value *elem = llvm::ConstantFP::get(builder.getDoubleTy(), item.get_entry(i).get_const_value());
+                llvm::Value *elem_eq = builder.CreateFCmpOEQ(lhs, elem, "elem_eq");
+                found = builder.CreateOr(found, elem_eq, "found");
+            }
+            push(found);
+        }
     }
     void visit(const Neg &) override {
         llvm::Value *child = pop_double();
@@ -402,22 +413,12 @@ struct FunctionBuilder : public NodeVisitor, public NodeTraverser {
         phi->addIncoming(false_res, false_end);
         push(phi);
     }
-    void visit(const Let &item) override {
-        // NB: visit not open
-        item.value().traverse(*this); // NB: recursion
-        let_values.push_back(pop_double());
-        item.expr().traverse(*this); // NB: recursion
-        let_values.pop_back();
-    }
     void visit(const Error &) override {
         make_error(0);
     }
 
     // tensor nodes (not supported in compiled expressions)
 
-    void visit(const TensorSum &node) override {
-        make_error(node.num_children());
-    }
     void visit(const TensorMap &node) override {
         make_error(node.num_children());
     }
@@ -497,38 +498,6 @@ struct FunctionBuilder : public NodeVisitor, public NodeTraverser {
         llvm::Value *b = pop_double();
         llvm::Value *a = pop_double();
         push(builder.CreateFCmpOGE(a, b, "cmp_ge_res"));
-    }
-    void visit(const In &item) override {
-        // NB: visit not open
-        item.lhs().traverse(*this); // NB: recursion
-        llvm::Value *lhs = pop_double();
-        auto array = as<Array>(item.rhs());
-        if (array) {
-            if (array->is_const() && array->size() > 8) {
-                // build call to hash lookup
-                plugin_state.emplace_back(new SetMemberHash(*array));
-                void *call_ptr = (void *) SetMemberHash::check_membership;
-                PluginState *state = plugin_state.back().get();
-                llvm::PointerType *funptr_t = make_check_membership_funptr_t();
-                llvm::Value *call_fun = builder.CreateIntToPtr(builder.getInt64((uint64_t)call_ptr), funptr_t, "inject_call_addr");
-                llvm::Value *ctx = builder.CreateIntToPtr(builder.getInt64((uint64_t)state), builder.getVoidTy()->getPointerTo(), "inject_ctx");
-                push(builder.CreateCall(call_fun, {ctx, lhs}, "call_check_membership"));
-            } else {
-                // build explicit code to check all set members
-                llvm::Value *found = builder.getFalse();
-                for (size_t i = 0; i < array->size(); ++i) {
-                    array->get(i).traverse(*this); // NB: recursion
-                    llvm::Value *elem = pop_double();
-                    llvm::Value *elem_eq = builder.CreateFCmpOEQ(lhs, elem, "elem_eq");
-                    found = builder.CreateOr(found, elem_eq, "found");
-                }
-                push(found);
-            }
-        } else {
-            item.rhs().traverse(*this); // NB: recursion
-            llvm::Value *rhs = pop_double();
-            push(builder.CreateFCmpOEQ(lhs, rhs, "rhs_eq"));
-        }
     }
     void visit(const And &) override {
         llvm::Value *b = pop_bool();
@@ -618,6 +587,9 @@ struct FunctionBuilder : public NodeVisitor, public NodeTraverser {
     void visit(const Sigmoid &) override {
         make_call_1("vespalib_eval_sigmoid");
     }
+    void visit(const Elu &) override {
+        make_call_1("vespalib_eval_elu");
+    }
 };
 
 FunctionBuilder::~FunctionBuilder() { }
@@ -660,7 +632,7 @@ LLVMWrapper::LLVMWrapper()
 size_t
 LLVMWrapper::make_function(size_t num_params, PassParams pass_params, const Node &root,
                            const gbdt::Optimize::Chain &forest_optimizers)
-{ 
+{
     std::lock_guard<std::recursive_mutex> guard(_global_llvm_lock);
     size_t function_id = _functions.size();
     FunctionBuilder builder(*_context, *_module,

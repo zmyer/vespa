@@ -4,8 +4,7 @@
 
 #include <vespa/searchcore/proton/server/documentdbconfig.h>
 
-namespace proton {
-namespace test {
+namespace proton::test {
 
 /**
  * Builder for instances of DocumentDBConfig used in unit tests.
@@ -26,9 +25,9 @@ private:
     search::TuneFileDocumentDB::SP _tuneFileDocumentDB;
     search::index::Schema::SP _schema;
     DocumentDBConfig::MaintenanceConfigSP _maintenance;
+    search::LogDocumentStore::Config _store;
     vespalib::string _configId;
     vespalib::string _docTypeName;
-    config::ConfigSnapshot _extraConfig;
 
 public:
     DocumentDBConfigBuilder(int64_t generation,
@@ -66,5 +65,4 @@ public:
     DocumentDBConfig::SP build();
 };
 
-}
 }

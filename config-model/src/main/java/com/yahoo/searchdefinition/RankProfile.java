@@ -1,21 +1,45 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.searchdefinition;
 
+import com.yahoo.config.application.api.ApplicationPackage;
+import com.yahoo.config.model.deploy.DeployState;
+import com.yahoo.io.reader.NamedReader;
+import com.yahoo.processing.request.CompoundName;
+import com.yahoo.search.query.profile.QueryProfile;
+import com.yahoo.search.query.profile.QueryProfileRegistry;
+import com.yahoo.search.query.profile.config.QueryProfileXMLReader;
+import com.yahoo.search.query.profile.types.FieldDescription;
+import com.yahoo.search.query.profile.types.QueryProfileType;
+import com.yahoo.search.query.profile.types.TensorFieldType;
 import com.yahoo.search.query.ranking.Diversity;
+import com.yahoo.searchdefinition.document.SDField;
+import com.yahoo.searchdefinition.expressiontransforms.RankProfileTransformContext;
 import com.yahoo.searchdefinition.parser.ParseException;
 import com.yahoo.searchlib.rankingexpression.ExpressionFunction;
 import com.yahoo.searchlib.rankingexpression.FeatureList;
 import com.yahoo.searchlib.rankingexpression.RankingExpression;
 import com.yahoo.searchlib.rankingexpression.evaluation.TensorValue;
+import com.yahoo.searchlib.rankingexpression.evaluation.TypeMapContext;
 import com.yahoo.searchlib.rankingexpression.evaluation.Value;
 import com.yahoo.searchlib.rankingexpression.rule.ReferenceNode;
-import com.yahoo.searchlib.rankingexpression.rule.SetMembershipNode;
-import com.yahoo.searchlib.rankingexpression.transform.ConstantDereferencer;
-import com.yahoo.searchlib.rankingexpression.transform.Simplifier;
-import com.yahoo.config.application.api.ApplicationPackage;
+import com.yahoo.tensor.TensorType;
+import com.yahoo.tensor.evaluation.TypeContext;
 
-import java.io.*;
-import java.util.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.Reader;
+import java.io.Serializable;
+import java.io.StringReader;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Represents a rank profile - a named set of ranking settings
@@ -28,7 +52,7 @@ public class RankProfile implements Serializable, Cloneable {
     private final String name;
 
     /** The search definition owning this profile, or null if none */
-    private Search search=null;
+    private Search search = null;
 
     /** The name of the rank profile inherited by this */
     private String inheritedName = null;
@@ -40,7 +64,7 @@ public class RankProfile implements Serializable, Cloneable {
     protected Set<RankSetting> rankSettings = new java.util.LinkedHashSet<>();
 
     /** The ranking expression to be used for first phase */
-    private RankingExpression firstPhaseRanking= null; 
+    private RankingExpression firstPhaseRanking = null;
 
     /** The ranking expression to be used for second phase */
     private RankingExpression secondPhaseRanking = null;
@@ -91,7 +115,8 @@ public class RankProfile implements Serializable, Cloneable {
      *
      * @param name   the name of the new profile
      * @param search the search definition owning this profile
-     * @param rankProfileRegistry The {@link com.yahoo.searchdefinition.RankProfileRegistry} to use for storing and looking up rank profiles.
+     * @param rankProfileRegistry The {@link com.yahoo.searchdefinition.RankProfileRegistry} to use for storing
+     *                            and looking up rank profiles.
      */
     public RankProfile(String name, Search search, RankProfileRegistry rankProfileRegistry) {
         this.name = name;
@@ -264,12 +289,10 @@ public class RankProfile implements Serializable, Cloneable {
         addConstant(name, value);
     }
 
-    /**
-     * Returns an unmodifiable view of the constants to use in this.
-     */
+    /** Returns an unmodifiable view of the constants available in this */
     public Map<String, Value> getConstants() {
         if (constants.isEmpty())
-            return getInherited() != null ? getInherited().getConstants() : Collections.<String,Value>emptyMap();
+            return getInherited() != null ? getInherited().getConstants() : Collections.emptyMap();
         if (getInherited() == null || getInherited().getConstants().isEmpty())
             return Collections.unmodifiableMap(constants);
 
@@ -421,8 +444,9 @@ public class RankProfile implements Serializable, Cloneable {
         properties.add(rankProperty);
     }
 
+    @Override
     public String toString() {
-        return "rank profile " + getName();
+        return "rank profile '" + getName() + "'";
     }
 
     public int getRerankCount() {
@@ -485,7 +509,7 @@ public class RankProfile implements Serializable, Cloneable {
 
     /**
      * Returns the string form of the second phase ranking expression.
-     * 
+     *
      * @return string form of second phase ranking expression
      */
     public String getSecondPhaseRankingString() {
@@ -496,6 +520,7 @@ public class RankProfile implements Serializable, Cloneable {
 
     /**
      * Returns the string form of the first phase ranking expression.
+     *
      * @return string form of first phase ranking expression
      */
     public String getFirstPhaseRankingString() {
@@ -653,10 +678,10 @@ public class RankProfile implements Serializable, Cloneable {
      * Returns a copy of this where the content is optimized for execution.
      * Compiled profiles should never be modified.
      */
-    public RankProfile compile() {
+    public RankProfile compile(QueryProfileRegistry queryProfiles) {
         try {
             RankProfile compiled = this.clone();
-            compiled.compileThis();
+            compiled.compileThis(queryProfiles);
             return compiled;
         }
         catch (IllegalArgumentException e) {
@@ -664,7 +689,7 @@ public class RankProfile implements Serializable, Cloneable {
         }
     }
 
-    private void compileThis() {
+    private void compileThis(QueryProfileRegistry queryProfiles) {
         parseExpressions();
 
         checkNameCollisions(getMacros(), getConstants());
@@ -673,19 +698,21 @@ public class RankProfile implements Serializable, Cloneable {
         for (Map.Entry<String, Macro> macroEntry : getMacros().entrySet()) {
             Macro compiledMacro = macroEntry.getValue().clone();
             compiledMacro.setRankingExpression(compile(macroEntry.getValue().getRankingExpression(),
-                                               getConstants(), Collections.<String, Macro>emptyMap()));
+                                                       queryProfiles,
+                                                       getConstants(), Collections.<String, Macro>emptyMap()));
             compiledMacros.put(macroEntry.getKey(), compiledMacro);
         }
         macros = compiledMacros;
         Map<String, Macro> inlineMacros = keepInline(compiledMacros);
-        firstPhaseRanking = compile(this.getFirstPhaseRanking(), getConstants(), inlineMacros);
-        secondPhaseRanking = compile(this.getSecondPhaseRanking(), getConstants(), inlineMacros);
+        firstPhaseRanking = compile(this.getFirstPhaseRanking(), queryProfiles, getConstants(), inlineMacros);
+        secondPhaseRanking = compile(this.getSecondPhaseRanking(), queryProfiles, getConstants(), inlineMacros);
     }
 
     private void checkNameCollisions(Map<String, Macro> macros, Map<String, Value> constants) {
         for (Map.Entry<String, Macro> macroEntry : macros.entrySet()) {
             if (constants.get(macroEntry.getKey()) != null)
-                throw new IllegalArgumentException("Cannot have both a constant and macro named '" + macroEntry.getKey() + "'");
+                throw new IllegalArgumentException("Cannot have both a constant and macro named '" +
+                                                   macroEntry.getKey() + "'");
         }
     }
 
@@ -698,19 +725,56 @@ public class RankProfile implements Serializable, Cloneable {
     }
 
     private RankingExpression compile(RankingExpression expression,
+                                      QueryProfileRegistry queryProfiles,
                                       Map<String, Value> constants,
                                       Map<String, Macro> inlineMacros) {
         if (expression == null) return null;
         Map<String, String> rankPropertiesOutput = new HashMap<>();
-        expression = new ConstantDereferencer(constants).transform(expression);
-        expression = new ConstantTensorTransformer(constants, rankPropertiesOutput).transform(expression);
-        expression = new MacroInliner(inlineMacros).transform(expression);
-        expression = new MacroShadower(getMacros()).transform(expression);
-        expression = new Simplifier().transform(expression);
+
+        RankProfileTransformContext context = new RankProfileTransformContext(this,
+                                                                              queryProfiles,
+                                                                              constants,
+                                                                              inlineMacros,
+                                                                              rankPropertiesOutput);
+        expression = rankProfileRegistry.expressionTransforms().transform(expression, context);
         for (Map.Entry<String, String> rankProperty : rankPropertiesOutput.entrySet()) {
             addRankProperty(rankProperty.getKey(), rankProperty.getValue());
         }
         return expression;
+    }
+
+    /**
+     * Creates a context containing the type information of all constants, attributes and query profiles
+     * referable from this rank profile.
+     */
+    public TypeContext typeContext(QueryProfileRegistry queryProfiles) {
+        TypeMapContext context = new TypeMapContext();
+
+        // Add constants
+        getSearch().getRankingConstants().forEach((k, v) -> context.setType(FeatureNames.asConstantFeature(k), v.getTensorType()));
+
+        // Add attributes
+        for (SDField field : getSearch().allConcreteFields()) {
+            field.getAttributes().forEach((k, a) -> context.setType(FeatureNames.asAttributeFeature(k), a.tensorType().orElse(TensorType.empty)));
+        }
+
+        // Add query features from rank profile types reached from the "default" profile
+        for (QueryProfileType queryProfileType : queryProfiles.getTypeRegistry().allComponents()) {
+            for (FieldDescription field : queryProfileType.declaredFields().values()) {
+                TensorType type = field.getType().asTensorType();
+                String feature = FeatureNames.asQueryFeature(field.getName());
+                TensorType existingType = context.getType(feature);
+                if (existingType != null)
+                    type = existingType.dimensionwiseGeneralizationWith(type).orElseThrow( () ->
+                        new IllegalArgumentException(queryProfileType + " contains query feature " + feature +
+                                                     " with type " + field.getType().asTensorType() +
+                                                     ", but this is already defined " +
+                                                     "in another query profile with type " + context.getType(feature)));
+                context.setType(feature, type);
+            }
+        }
+
+        return context;
     }
 
     /**
@@ -974,7 +1038,7 @@ public class RankProfile implements Serializable, Cloneable {
                 throw new IllegalArgumentException("match-phase did not set max-hits > 0");
             }
         }
-            
+
     }
 
     public static class TypeSettings {

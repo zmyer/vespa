@@ -19,7 +19,6 @@ import java.util.stream.Collectors;
  * A tensor type with its dimensions. This is immutable.
  * <p>
  * A dimension can be indexed (bound or unbound) or mapped.
- * Currently, we only support tensor types where all dimensions have the same type.
  *
  * @author geirst
  * @author bratseth
@@ -27,6 +26,7 @@ import java.util.stream.Collectors;
 @Beta
 public class TensorType {
 
+    /** The empty tensor type - which is the same as a double */
     public static final TensorType empty = new TensorType(Collections.emptyList());
 
     /** Sorted list of the dimensions of this */
@@ -53,14 +53,17 @@ public class TensorType {
         return TensorTypeParser.fromSpec(specString);
     }
 
+    /** Returns the number of dimensions of this: dimensions().size() */
+    public int rank() { return dimensions.size(); }
+
     /** Returns an immutable list of the dimensions of this */
     public List<Dimension> dimensions() { return dimensions; }
-    
+
     /** Returns an immutable set of the names of the dimensions of this */
     public Set<String> dimensionNames() {
         return dimensions.stream().map(Dimension::name).collect(Collectors.toSet());
     }
-    
+
     /** Returns the dimension with this name, or empty if not present */
     public Optional<Dimension> dimension(String name) {
         return indexOfDimension(name).map(i -> dimensions.get(i));
@@ -74,11 +77,26 @@ public class TensorType {
         return Optional.empty();
     }
 
-    /** 
+    /**
      * Returns whether this type can be assigned to the given type,
      * i.e if the given type is a generalization of this type.
      */
     public boolean isAssignableTo(TensorType generalization) {
+        return isConvertibleOrAssignableTo(generalization, false);
+    }
+
+    /**
+     * Returns whether this type can be converted to the given type.
+     * This is true if this type isAssignableTo the given type or
+     * if it is not assignable only because it has a shorter dimension length
+     * than the given type in some shared dimension(s), as it can then be
+     * converted to the given type by zero padding.
+     */
+    public boolean isConvertibleTo(TensorType generalization) {
+        return isConvertibleOrAssignableTo(generalization, true);
+    }
+
+    private boolean isConvertibleOrAssignableTo(TensorType generalization, boolean convertible) {
         if (generalization.dimensions().size() != this.dimensions().size()) return false;
         for (int i = 0; i < generalization.dimensions().size(); i++) {
             Dimension thisDimension = this.dimensions().get(i);
@@ -87,7 +105,12 @@ public class TensorType {
             if ( ! thisDimension.name().equals(generalizationDimension.name())) return false;
             if (generalizationDimension.size().isPresent()) {
                 if ( ! thisDimension.size().isPresent()) return false;
-                if (thisDimension.size().get() > generalizationDimension.size().get() ) return false;
+                if (convertible) {
+                    if (thisDimension.size().get() > generalizationDimension.size().get()) return false;
+                }
+                else { // assignable
+                    if (!thisDimension.size().get().equals(generalizationDimension.size().get())) return false;
+                }
             }
         }
         return true;
@@ -113,6 +136,47 @@ public class TensorType {
         return true;
     }
 
+    /**
+     * Returns the dimensionwise generalization of this and the given type, or empty if no generalization exists.
+     * A dimensionwise generalization exists if the two tensors share the same dimensions, and each dimension
+     * is compatible.
+     * For example, the dimensionwise generalization of tensor(x[],y[5]) and tensor(x[5],y[]) is tensor(x[],y[])
+     */
+    public Optional<TensorType> dimensionwiseGeneralizationWith(TensorType other) {
+        if (this.equals(other)) return Optional.of(this); // shortcut
+        if (this.dimensions.size() != other.dimensions.size()) return Optional.empty();
+
+        Builder b = new Builder();
+        for (int i = 0; i < dimensions.size(); i++) {
+            Dimension thisDim = this.dimensions().get(i);
+            Dimension otherDim = other.dimensions().get(i);
+            if ( ! thisDim.name().equals(otherDim.name())) return Optional.empty();
+            if (thisDim.isIndexed() && otherDim.isIndexed()) {
+                if (thisDim.size().isPresent() && otherDim.size().isPresent()) {
+                    if ( ! thisDim.size().get().equals(otherDim.size().get()))
+                        return Optional.empty();
+                    b.dimension(thisDim); // both are equal and bound
+                }
+                else if (thisDim.size().isPresent()) {
+                    b.dimension(otherDim); // use the unbound
+                }
+                else if (otherDim.size().isPresent()) {
+                    b.dimension(thisDim); // use the unbound
+                }
+                else {
+                    b.dimension(thisDim); // both are equal and unbound
+                }
+            }
+            else if ( ! thisDim.isIndexed() && ! otherDim.isIndexed()) {
+                b.dimension(thisDim); // both are equal and mapped
+            }
+            else {
+                return Optional.empty(); // one indexed and one mapped
+            }
+        }
+        return Optional.of(b.build());
+    }
+
     @Override
     public int hashCode() {
         return dimensions.hashCode();
@@ -128,15 +192,15 @@ public class TensorType {
 
         private final String name;
 
-        private Dimension(String name) { 
+        private Dimension(String name) {
             Objects.requireNonNull(name, "A tensor name cannot be null");
-            this.name = name; 
+            this.name = name;
         }
 
         public final String name() { return name; }
 
         /** Returns the size of this dimension if it is bound, empty otherwise */
-        public abstract Optional<Integer> size();
+        public abstract Optional<Long> size();
 
         public abstract Type type();
 
@@ -146,7 +210,7 @@ public class TensorType {
         /** Returns true if this is an indexed bound or unboun type */
         public boolean isIndexed() { return type() == Type.indexedBound || type() == Type.indexedUnbound; }
 
-        /** 
+        /**
          * Returns the dimension resulting from combining two dimensions having the same name but possibly different
          * types. This works by degrading to the type making the fewer promises.
          * [N] + [M] = [min(N, M)]
@@ -165,7 +229,7 @@ public class TensorType {
             IndexedBoundDimension otherIb = (IndexedBoundDimension)other.get();
             return thisIb.size().get() < otherIb.size().get() ? thisIb : otherIb;
         }
-        
+
         @Override
         public abstract String toString();
 
@@ -175,36 +239,38 @@ public class TensorType {
             if (other == null || getClass() != other.getClass()) return false;
             return name.equals(((Dimension)other).name);
         }
-        
+
         @Override
         public int hashCode() {
             return name.hashCode();
         }
-        
+
         @Override
         public int compareTo(Dimension other) {
             return this.name.compareTo(other.name);
         }
-        
-        public static Dimension indexed(String name, int size) {
+
+        public static Dimension indexed(String name, long size) {
             return new IndexedBoundDimension(name, size);
         }
-        
+
     }
 
     public static class IndexedBoundDimension extends TensorType.Dimension {
 
-        private final Integer size;
+        private final Long size;
 
-        private IndexedBoundDimension(String name, int size) {
+        private IndexedBoundDimension(String name, long size) {
             super(name);
             if (size < 1)
                 throw new IllegalArgumentException("Size of bound dimension '" + name + "' must be at least 1");
+            if (size > Integer.MAX_VALUE)
+                throw new IllegalArgumentException("Size of bound dimension '" + name + "' cannot be larger than " + Integer.MAX_VALUE);
             this.size = size;
         }
 
         @Override
-        public Optional<Integer> size() { return Optional.of(size); }
+        public Optional<Long> size() { return Optional.of(size); }
 
         @Override
         public Type type() { return Type.indexedBound; }
@@ -245,7 +311,7 @@ public class TensorType {
         }
 
         @Override
-        public Optional<Integer> size() { return Optional.empty(); }
+        public Optional<Long> size() { return Optional.empty(); }
 
         @Override
         public Type type() { return Type.indexedUnbound; }
@@ -266,7 +332,7 @@ public class TensorType {
         }
 
         @Override
-        public Optional<Integer> size() { return Optional.empty(); }
+        public Optional<Long> size() { return Optional.empty(); }
 
         @Override
         public Type type() { return Type.mapped; }
@@ -289,9 +355,9 @@ public class TensorType {
         public Builder() {
         }
 
-        /** 
-         * Creates a builder containing a combination of the dimensions of the given types 
-         * 
+        /**
+         * Creates a builder containing a combination of the dimensions of the given types
+         *
          * If the same dimension is indexed with different size restrictions the largest size will be used.
          * If it is size restricted in one argument but not the other it will not be size restricted.
          * If it is indexed in one and mapped in the other it will become mapped.
@@ -325,9 +391,12 @@ public class TensorType {
             }
         }
 
-        /** 
+        /** Returns the current number of dimensions in this */
+        public int rank() { return dimensions.size(); }
+
+        /**
          * Adds a new dimension to this
-         * 
+         *
          * @throws IllegalArgumentException if the dimension is already present
          */
         private Builder add(Dimension dimension) {
@@ -346,16 +415,16 @@ public class TensorType {
             return this;
         }
 
-        /** 
+        /**
          * Adds a bound indexed dimension to this
          *
          * @throws IllegalArgumentException if the dimension is already present
          */
-        public Builder indexed(String name, int size) { return add(new IndexedBoundDimension(name, size)); }
+        public Builder indexed(String name, long size) { return add(new IndexedBoundDimension(name, size)); }
 
         /**
          * Adds an unbound indexed dimension to this
-         * 
+         *
          * @throws IllegalArgumentException if the dimension is already present
          */
         public Builder indexed(String name) {
@@ -375,7 +444,7 @@ public class TensorType {
         public Builder dimension(Dimension dimension) {
             return add(dimension);
         }
-        
+
         /** Returns the given dimension, or empty if none is present */
         public Optional<Dimension> getDimension(String dimension) {
             return Optional.ofNullable(dimensions.get(dimension));
@@ -393,7 +462,7 @@ public class TensorType {
         public TensorType build() {
             return new TensorType(dimensions.values());
         }
-        
+
     }
 
 }

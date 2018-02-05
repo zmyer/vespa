@@ -181,7 +181,7 @@ public class ProvisioningTest {
         SystemState state5 = prepare(application1, 2, 2, 3, 3, "default", tester);
         tester.activate(application1, state5.allHosts);
         assertEquals("Superfluous container nodes are also deactivated",
-                     4-2 + 5-2 + 1, tester.getNodes(application1, Node.State.inactive).size()); // 
+                     4-2 + 5-2 + 1, tester.getNodes(application1, Node.State.inactive).size()); //
         assertEquals("Superfluous content nodes are retired",
                      5-3 + 6-3 - 1, tester.getNodes(application1, Node.State.active).retired().size());
 
@@ -229,6 +229,31 @@ public class ProvisioningTest {
                      4 + 4, tester.getNodes(application1, Node.State.active).retired().type(ClusterSpec.Type.content).flavor("small").size());
         assertEquals("No 'large' content nodes are retired",
                      0, tester.getNodes(application1, Node.State.active).retired().flavor("large").size());
+    }
+
+    // TODO: Enable when this feature is re-enabled
+    @Ignore
+    @Test
+    public void application_deployment_with_inplace_downsize() {
+        ProvisioningTester tester = new ProvisioningTester(new Zone(Environment.prod, RegionName.from("us-east")));
+
+        ApplicationId application1 = tester.makeApplicationId();
+
+        tester.makeReadyNodes(14, "dockerLarge");
+
+        // deploy
+        SystemState state1 = prepare(application1, 2, 2, 4, 4, "dockerLarge", tester);
+        tester.activate(application1, state1.allHosts);
+
+        // redeploy with smaller docker flavor - causes in-place flavor change
+        SystemState state2 = prepare(application1, 2, 2, 4, 4, "dockerSmall", tester);
+        tester.activate(application1, state2.allHosts);
+
+        assertEquals(12, tester.getNodes(application1, Node.State.active).asList().size());
+        for (Node node : tester.getNodes(application1, Node.State.active).asList())
+            assertEquals("Node changed flavor in place", "dockerSmall", node.flavor().name());
+        assertEquals("No nodes are retired",
+                     0, tester.getNodes(application1, Node.State.active).retired().size());
     }
 
     @Test
@@ -357,7 +382,6 @@ public class ProvisioningTest {
         tester.activate(application, state.allHosts);
     }
 
-    @Ignore // TODO: Re-activate when the check is reactivate in CapacityPolicies
     @Test(expected = IllegalArgumentException.class)
     public void prod_deployment_requires_redundancy() {
         ProvisioningTester tester = new ProvisioningTester(new Zone(Environment.prod, RegionName.from("us-east")));
@@ -506,7 +530,7 @@ public class ProvisioningTest {
             fail("Expected exception");
         }
         catch (IllegalArgumentException e) {
-            assertEquals("Unknown flavor 'nonexisting'. Flavors are [default, docker1, large, old-large1, old-large2, small, v-4-8-100]", e.getMessage());
+            assertEquals("Unknown flavor 'nonexisting'. Flavors are [default, dockerLarge, dockerSmall, large, old-large1, old-large2, small, v-4-8-100]", e.getMessage());
         }
     }
 
@@ -516,25 +540,27 @@ public class ProvisioningTest {
 
         ApplicationId application1 = tester.makeApplicationId();
 
-        tester.makeReadyNodes(10, "default");
+        tester.makeReadyNodes(14, "default");
 
         // deploy
-        SystemState state1 = prepare(application1, 2, 2, 3, 3, "default", tester);
+        SystemState state1 = prepare(application1, 3, 3, 4, 4, "default", tester);
         tester.activate(application1, state1.allHosts);
 
         // decrease cluster sizes
-        SystemState state2 = prepare(application1, 1, 1, 1, 1, "default", tester);
+        SystemState state2 = prepare(application1, 2, 2, 2, 2, "default", tester);
         tester.activate(application1, state2.allHosts);
 
         // content0
         assertFalse(state2.hostByMembership("content0", 0, 0).membership().get().retired());
-        assertTrue( state2.hostByMembership("content0", 0, 1).membership().get().retired());
+        assertFalse( state2.hostByMembership("content0", 0, 1).membership().get().retired());
         assertTrue( state2.hostByMembership("content0", 0, 2).membership().get().retired());
+        assertTrue( state2.hostByMembership("content0", 0, 3).membership().get().retired());
 
         // content1
         assertFalse(state2.hostByMembership("content1", 0, 0).membership().get().retired());
-        assertTrue( state2.hostByMembership("content1", 0, 1).membership().get().retired());
+        assertFalse(state2.hostByMembership("content1", 0, 1).membership().get().retired());
         assertTrue( state2.hostByMembership("content1", 0, 2).membership().get().retired());
+        assertTrue( state2.hostByMembership("content1", 0, 3).membership().get().retired());
     }
 
     @Test
@@ -738,7 +764,7 @@ public class ProvisioningTest {
         if (nodeCount == 0) return Collections.emptySet(); // this is a shady practice
         return new HashSet<>(tester.prepare(application, cluster, nodeCount, groups, flavor));
     }
-    
+
     private static class SystemState {
 
         private Set<HostSpec> allHosts;
@@ -758,7 +784,7 @@ public class ProvisioningTest {
             this.content0 = content0;
             this.content1 = content1;
         }
-        
+
         /** Returns a host by cluster name and index, or null if there is no host with the given values in this */
         public HostSpec hostByMembership(String clusterId, int group, int index) {
             for (HostSpec host : allHosts) {
@@ -771,7 +797,7 @@ public class ProvisioningTest {
             }
             return null;
         }
-        
+
         private boolean groupMatches(Optional<ClusterSpec.Group> clusterGroup, int group) {
             if ( ! clusterGroup.isPresent()) return group==0;
             return clusterGroup.get().index() == group;

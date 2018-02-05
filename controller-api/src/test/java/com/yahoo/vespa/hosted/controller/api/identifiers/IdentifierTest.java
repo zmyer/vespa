@@ -1,15 +1,14 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.vespa.hosted.controller.api.identifiers;
 
-import com.yahoo.config.provision.Environment;
-import com.yahoo.config.provision.RegionName;
-import com.yahoo.config.provision.Zone;
+import com.yahoo.vespa.hosted.controller.api.integration.zone.ZoneId;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 
+/**
+ * @author smorgrav
+ */
 public class IdentifierTest {
 
     @Test(expected = IllegalArgumentException.class)
@@ -118,22 +117,6 @@ public class IdentifierTest {
     }
 
     @Test
-    public void athens_parent_domain_is_without_name_suffix() {
-        assertEquals(new AthensDomain("yby.john"), new AthensDomain("yby.john.myapp").getParent());
-    }
-
-    @Test
-    public void athens_domain_name_is_last_suffix() {
-        assertEquals("myapp", new AthensDomain("yby.john.myapp").getName());
-    }
-
-    @Test
-    public void domain_without_dot_is_toplevel() {
-        assertTrue(new AthensDomain("toplevel").isTopLevelDomain());
-        assertFalse(new AthensDomain("not.toplevel").isTopLevelDomain());
-    }
-
-    @Test
     public void dns_names_has_no_underscore() {
         assertEquals("a-b-c", new ApplicationId("a_b_c").toDns());
     }
@@ -143,11 +126,15 @@ public class IdentifierTest {
         new ApplicationId("api");
     }
 
-
     @Test
     public void application_instance_id_dotted_string_is_subindentifers_concatinated_with_dots() {
         DeploymentId id = new DeploymentId(com.yahoo.config.provision.ApplicationId.from("tenant", "application", "instance"),
-                                           new Zone(Environment.prod, RegionName.from("region")));
+                                           ZoneId.from("prod", "region"));
         assertEquals("tenant.application.prod.region.instance", id.dottedString());
+    }
+
+    @Test
+    public void revision_id_can_contain_application_version_number() {
+        new RevisionId("1.0.1078-24825d1f6");
     }
 }

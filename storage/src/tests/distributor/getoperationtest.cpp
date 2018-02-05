@@ -5,24 +5,22 @@
 #include <vespa/document/repo/documenttyperepo.h>
 #include <vespa/storage/distributor/externaloperationhandler.h>
 #include <vespa/storage/distributor/distributor.h>
+#include <vespa/storage/distributor/distributormetricsset.h>
 #include <tests/distributor/distributortestutil.h>
 #include <vespa/storageapi/message/persistence.h>
-#include <tests/common/dummystoragelink.h>
-#include <vespa/vdstestlib/cppunit/macros.h>
+#include <vespa/document/test/make_document_bucket.h>
 #include <vespa/vespalib/testkit/testapp.h>
 #include <vespa/config/helper/configgetter.hpp>
 #include <iomanip>
-#include <iostream>
-#include <memory>
 #include <vespa/storage/distributor/operations/external/getoperation.h>
 
 using std::shared_ptr;
 using config::ConfigGetter;
 using document::DocumenttypesConfig;
 using config::FileSpec;
+using document::test::makeDocumentBucket;
 
-namespace storage {
-namespace distributor {
+namespace storage::distributor {
 
 class GetOperationTest : public CppUnit::TestFixture, public DistributorTestUtil {
     CPPUNIT_TEST_SUITE(GetOperationTest);
@@ -70,9 +68,10 @@ public:
 
     void sendGet() {
         std::shared_ptr<api::GetCommand> msg(
-                new api::GetCommand(document::BucketId(0), docId, "[all]"));
+                new api::GetCommand(makeDocumentBucket(document::BucketId(0)), docId, "[all]"));
 
         op.reset(new GetOperation(getExternalOperationHandler(),
+                                  getDistributorBucketSpace(),
                                   msg,
                                   getDistributor().getMetrics().
                                   gets[msg->getLoadType()]));
@@ -565,5 +564,4 @@ GetOperationTest::canGetDocumentsWhenAllReplicaNodesRetired()
             _sender.getCommands(true));
 }
 
-} // distributor
-} // storage
+}

@@ -3,17 +3,26 @@ package com.yahoo.searchlib.rankingexpression.evaluation;
 
 import com.yahoo.searchlib.rankingexpression.rule.Function;
 import com.yahoo.searchlib.rankingexpression.rule.TruthOperator;
+import com.yahoo.tensor.Tensor;
+import com.yahoo.tensor.TensorType;
 
 /**
  * A value which acts as a double in numerical context.
  *
  * @author bratseth
- * @since 5.1.21
  */
 public abstract class DoubleCompatibleValue extends Value {
 
     @Override
+    public TensorType type() { return TensorType.empty; }
+
+    @Override
     public boolean hasDouble() { return true; }
+
+    @Override
+    public Tensor asTensor() {
+        return doubleAsTensor(asDouble());
+    }
 
     @Override
     public Value negate() { return new DoubleValue(-asDouble()); }
@@ -36,6 +45,31 @@ public abstract class DoubleCompatibleValue extends Value {
     @Override
     public Value divide(Value value) {
         return new DoubleValue(asDouble() / value.asDouble());
+    }
+
+    @Override
+    public Value modulo(Value value) {
+        return new DoubleValue(asDouble() % value.asDouble());
+    }
+
+    @Override
+    public Value and(Value value) {
+        return new BooleanValue(asBoolean() && value.asBoolean());
+    }
+
+    @Override
+    public Value or(Value value) {
+        return new BooleanValue(asBoolean() || value.asBoolean());
+    }
+
+    @Override
+    public Value not() {
+        return new BooleanValue(!asBoolean());
+    }
+
+    @Override
+    public Value power(Value value) {
+        return new DoubleValue(Function.pow.evaluate(asDouble(), value.asDouble()));
     }
 
     @Override

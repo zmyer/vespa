@@ -6,8 +6,7 @@ import com.yahoo.search.query.profile.QueryProfileRegistry;
 import com.yahoo.search.query.profile.compiled.CompiledQueryProfileRegistry;
 import com.yahoo.search.yql.YqlQuery;
 import com.yahoo.tensor.Tensor;
-
-import java.util.Optional;
+import com.yahoo.tensor.TensorType;
 
 /**
  * Superclass of query type field types.
@@ -24,7 +23,6 @@ public abstract class FieldType {
     public static final PrimitiveFieldType floatType = new PrimitiveFieldType(Float.class);
     public static final PrimitiveFieldType doubleType = new PrimitiveFieldType(Double.class);
     public static final PrimitiveFieldType booleanType = new PrimitiveFieldType(Boolean.class);
-    public static final TensorFieldType genericTensorType = new TensorFieldType(Optional.empty());
     public static final QueryFieldType queryType = new QueryFieldType();
     public static final QueryProfileFieldType genericQueryProfileType = new QueryProfileFieldType();
 
@@ -44,6 +42,12 @@ public abstract class FieldType {
 
     /** Converts the given type to an instance of this type, if possible. Returns null if not possible. */
     public abstract Object convertFrom(Object o, CompiledQueryProfileRegistry registry);
+
+    /**
+     * Returns this type as a tensor type: The true tensor type is this is a tensor field an an empty type -
+     * interpreted as a double in numerical contexts - otherwise
+     */
+    public TensorType asTensorType() { return TensorType.empty; }
 
     /**
      * Returns the field type for a given string name.
@@ -77,18 +81,19 @@ public abstract class FieldType {
         throw new IllegalArgumentException("Unknown type '" + typeString + "'");
     }
 
-    /** Returns the field type from a value class, or null if there is no type for it */
-    public static FieldType fromClass(Class clazz) {
-        if (clazz == String.class) return stringType;
-        if (clazz == Integer.class) return integerType;
-        if (clazz == Long.class) return longType;
-        if (clazz == Float.class) return floatType;
-        if (clazz == Double.class) return doubleType;
-        if (clazz == Boolean.class) return booleanType;
-        if (clazz == Tensor.class) return genericTensorType;
-        if (clazz == YqlQuery.class) return queryType;
-        if (clazz == QueryProfile.class) return genericQueryProfileType;
-        return null;
+    /** Returns true if the given object is a legal field value of some field value type */
+    public static boolean isLegalFieldValue(Object value) {
+        Class clazz = value.getClass();
+        if (clazz == String.class) return true;
+        if (clazz == Integer.class) return true;
+        if (clazz == Long.class) return true;
+        if (clazz == Float.class) return true;
+        if (clazz == Double.class) return true;
+        if (clazz == Boolean.class) return true;
+        if (clazz == YqlQuery.class) return true;
+        if (clazz == QueryProfile.class) return true;
+        if (clazz == Tensor.class) return true;
+        return false;
     }
 
 }

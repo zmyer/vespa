@@ -5,7 +5,6 @@ import com.yahoo.config.provision.ApplicationLockException;
 import com.yahoo.container.jdisc.HttpRequest;
 import com.yahoo.container.jdisc.HttpResponse;
 import com.yahoo.container.jdisc.LoggingRequestHandler;
-import com.yahoo.container.logging.AccessLog;
 import com.yahoo.log.LogLevel;
 import com.yahoo.config.provision.OutOfCapacityException;
 import com.yahoo.vespa.config.server.ActivationConflictException;
@@ -14,7 +13,6 @@ import com.yahoo.yolean.Exceptions;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.time.Duration;
-import java.util.concurrent.Executor;
 
 /**
  * Super class for http handlers, that takes care of checking valid
@@ -22,12 +20,11 @@ import java.util.concurrent.Executor;
  * implement the handleMETHOD methods that it supports.
  *
  * @author hmusum
- * @since 5.1.14
  */
 public class HttpHandler extends LoggingRequestHandler {
 
-    public HttpHandler(Executor executor, AccessLog accessLog) {
-        super(executor, accessLog);
+    public HttpHandler(HttpHandler.Context ctx) {
+        super(ctx);
     }
 
     @Override
@@ -70,11 +67,15 @@ public class HttpHandler extends LoggingRequestHandler {
         }
     }
 
-    // Override default, since we need a higher timeout for some calls
-    // TODO: Review and see if overriding only in SessionPrepareHandler is enough
-    @Override
-    public Duration getTimeout() {
-        return Duration.ofSeconds(910);
+    protected static Duration getRequestTimeout(HttpRequest request, Duration defaultTimeout) {
+        if (!request.hasProperty("timeout")) {
+            return defaultTimeout;
+        }
+        try {
+            return Duration.ofMillis((long) (Double.parseDouble(request.getProperty("timeout")) * 1000));
+        } catch (Exception e) {
+            return defaultTimeout;
+        }
     }
 
     private String getMessage(Exception e, HttpRequest request) {

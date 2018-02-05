@@ -243,6 +243,7 @@ public class Tuning extends AbstractConfigProducer implements PartitionsConfig.P
 
                 public static class Component {
                     public Long maxSize = null;
+                    public Double maxSizePercent = null;
                     public Long initialEntries = null;
                     public Compression compression = null;
                     private final boolean outputInt;
@@ -257,9 +258,11 @@ public class Tuning extends AbstractConfigProducer implements PartitionsConfig.P
 
                     public void getConfig(ProtonConfig.Summary.Cache.Builder cache) {
                         if (outputInt) {
+                            if (maxSizePercent !=null) cache.maxbytes(-maxSizePercent.longValue());
                             if (maxSize!=null) cache.maxbytes(maxSize.intValue());
                             if (initialEntries!=null) cache.initialentries(initialEntries.intValue());
                         } else {
+                            if (maxSizePercent !=null) cache.maxbytes(-maxSizePercent.longValue());
                             if (maxSize!=null) cache.maxbytes(maxSize);
                             if (initialEntries!=null) cache.initialentries(initialEntries);
                         }
@@ -282,14 +285,12 @@ public class Tuning extends AbstractConfigProducer implements PartitionsConfig.P
 
                 public static class LogStore {
                     public Long maxFileSize = null;
-                    public Double maxDiskBloatFactor = null;
                     public Integer numThreads = null;
                     public Component chunk = null;
                     public Double minFileSizeFactor = null;
 
                     public void getConfig(ProtonConfig.Summary.Log.Builder log) {
                         if (maxFileSize!=null) log.maxfilesize(maxFileSize);
-                        if (maxDiskBloatFactor!=null) log.maxdiskbloatfactor(maxDiskBloatFactor);
                         if (minFileSizeFactor!=null) log.minfilesizefactor(minFileSizeFactor);
                         if (numThreads != null) log.numthreads(numThreads);
                         if (chunk != null) {
@@ -304,7 +305,6 @@ public class Tuning extends AbstractConfigProducer implements PartitionsConfig.P
                 public void getConfig(ProtonConfig.Summary.Builder builder) {
                     if (cache != null) {
                         cache.getConfig(builder.cache);
-
                     }
                     if (logStore != null) {
                         logStore.getConfig(builder.log);
@@ -337,6 +337,17 @@ public class Tuning extends AbstractConfigProducer implements PartitionsConfig.P
             }
         }
 
+        public static class Feeding implements ProtonConfig.Producer {
+            public Double concurrency = null;
+
+            @Override
+            public void getConfig(ProtonConfig.Builder builder) {
+                if (concurrency != null) {
+                    builder.feeding.concurrency(concurrency);
+                }
+            }
+        }
+
         public RequestThreads threads = null;
         public FlushStrategy strategy = null;
         public Resizing resizing = null;
@@ -344,6 +355,7 @@ public class Tuning extends AbstractConfigProducer implements PartitionsConfig.P
         public Attribute attribute = null;
         public Summary summary = null;
         public Initialize initialize = null;
+        public Feeding feeding = null;
 
         @Override
         public void getConfig(ProtonConfig.Builder builder) {
@@ -354,6 +366,7 @@ public class Tuning extends AbstractConfigProducer implements PartitionsConfig.P
             if (attribute != null) attribute.getConfig(builder);
             if (summary != null) summary.getConfig(builder);
             if (initialize != null) initialize.getConfig(builder);
+            if (feeding != null) feeding.getConfig(builder);
         }
     }
 

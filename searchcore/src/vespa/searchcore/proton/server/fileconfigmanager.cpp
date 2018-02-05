@@ -2,17 +2,17 @@
 
 #include "fileconfigmanager.h"
 #include "bootstrapconfig.h"
+#include <vespa/searchcore/proton/common/hw_info_sampler.h>
 #include <vespa/config/print/fileconfigwriter.h>
 #include <vespa/config/print/fileconfigsnapshotreader.h>
 #include <vespa/config/print/fileconfigsnapshotwriter.h>
+#include <vespa/config-bucketspaces.h>
 #include <vespa/searchcommon/common/schemaconfigurer.h>
 #include <vespa/vespalib/io/fileutil.h>
 #include <vespa/config-summarymap.h>
 #include <vespa/config-rank-profiles.h>
 #include <vespa/searchsummary/config/config-juniperrc.h>
-#include <vespa/fastos/file.h>
 #include <vespa/config/helper/configgetter.hpp>
-#include <fstream>
 #include <sstream>
 #include <fcntl.h>
 
@@ -32,6 +32,7 @@ using vespa::config::search::SummaryConfig;
 using vespa::config::search::SummarymapConfig;
 using vespa::config::search::core::ProtonConfig;
 using vespa::config::search::summary::JuniperrcConfig;
+using vespa::config::content::core::BucketspacesConfig;
 using vespalib::nbostream;
 
 typedef IndexMetaInfo::SnapshotList SnapshotList;
@@ -46,12 +47,6 @@ makeSnapDirBaseName(SerialNum serialNum)
     std::ostringstream os;
     os << "config-" << serialNum;
     return os.str();
-}
-
-vespalib::string
-makeExtraConfigsFileName(const vespalib::string &snapDir)
-{
-    return snapDir + "/extraconfigs.dat";
 }
 
 
@@ -86,35 +81,9 @@ saveHelper(const vespalib::string &snapDir,
 
 template <class Config>
 void
-save(const vespalib::string &snapDir,
-     const Config &config)
+save(const vespalib::string &snapDir, const Config &config)
 {
     saveHelper(snapDir, config.defName(), config);
-}
-
-void writeExtraConfigs(const vespalib::string &snapDir,
-                       const DocumentDBConfig &snapshot)
-{
-    vespalib::string extraName(makeExtraConfigsFileName(snapDir));
-    config::FileConfigSnapshotWriter writer(extraName);
-    bool extraConfigsWriterResult = writer.write(snapshot.getExtraConfigs());
-    assert(extraConfigsWriterResult);
-    (void) extraConfigsWriterResult;
-    fsyncFile(extraName);
-}
-
-config::ConfigSnapshot
-readExtraConfigs(const vespalib::string &snapDir)
-{
-    vespalib::string fileName = makeExtraConfigsFileName(snapDir);
-    if (vespalib::fileExists(fileName)) {
-        config::FileConfigSnapshotReader reader(fileName);
-        return reader.read();
-    } else {
-        LOG(warning, "Did not find data file for extra configs '%s' during loading of config snapshot. "
-            "Using empty extra configs set.", fileName.c_str());
-    }
-    return config::ConfigSnapshot();
 }
 
 
@@ -327,7 +296,6 @@ FileConfigManager::saveConfig(const DocumentDBConfig &snapshot,
     assert(saveHistorySchemaRes);
     (void) saveHistorySchemaRes;
 
-    writeExtraConfigs(snapDir, snapshot);
     _info.validateSnapshot(serialNum);
 
     bool saveValidSnap = _info.save();
@@ -373,8 +341,8 @@ FileConfigManager::loadConfig(const DocumentDBConfig &currentSnapshot,
     typedef DocumentDBConfig::DocumenttypesConfigSP DTCSP;
     DTCSP docTypesCfg(config::ConfigGetter<DTC>::getConfig("", spec).release());
     DocumentTypeRepo::SP repo;
-    if (currentSnapshot.getDocumenttypesConfigSP().get() != NULL &&
-        currentSnapshot.getDocumentTypeRepoSP().get() != NULL &&
+    if (currentSnapshot.getDocumenttypesConfigSP() &&
+        currentSnapshot.getDocumentTypeRepoSP() &&
         currentSnapshot.getDocumenttypesConfig() == *docTypesCfg) {
         docTypesCfg = currentSnapshot.getDocumenttypesConfigSP();
         repo = currentSnapshot.getDocumentTypeRepoSP();
@@ -383,6 +351,7 @@ FileConfigManager::loadConfig(const DocumentDBConfig &currentSnapshot,
     }
 
     auto filedistRpcConf = std::make_shared<FiledistributorrpcConfig>();
+    auto bucketspaces = std::make_shared<BucketspacesConfig>();
 
     /*
      * XXX: If non-default maintenance config is used then an extra config
@@ -390,19 +359,21 @@ FileConfigManager::loadConfig(const DocumentDBConfig &currentSnapshot,
      * of default values here instead of the current values from the config
      * server.
      */
-    BootstrapConfig::SP bootstrap(
-            new BootstrapConfig(1,
-                                docTypesCfg,
-                                repo,
-                                _protonConfig,
-                                filedistRpcConf,
-                                currentSnapshot.getTuneFileDocumentDBSP()));
+    const ProtonConfig &protonConfig = *_protonConfig;
+    const auto &hwDiskCfg = protonConfig.hwinfo.disk;
+    const auto &hwMemoryCfg = protonConfig.hwinfo.memory;
+    const auto &hwCpuCfg = protonConfig.hwinfo.cpu;
+    HwInfoSampler::Config samplerCfg(hwDiskCfg.size, hwDiskCfg.writespeed, hwDiskCfg.slowwritespeedlimit,
+                                     hwDiskCfg.samplewritesize, hwDiskCfg.shared, hwMemoryCfg.size, hwCpuCfg.cores);
+    HwInfoSampler sampler(protonConfig.basedir, samplerCfg);
+    auto bootstrap = std::make_shared<BootstrapConfig>(1, docTypesCfg, repo, _protonConfig, filedistRpcConf,
+                                                       bucketspaces,currentSnapshot.getTuneFileDocumentDBSP(),
+                                                       sampler.hwInfo());
     dbc.forwardConfig(bootstrap);
     dbc.nextGeneration(0);
 
     loadedSnapshot = dbc.getConfig();
     loadedSnapshot->setConfigId(_configId);
-    loadedSnapshot->setExtraConfigs(readExtraConfigs(snapDir));
 }
 
 

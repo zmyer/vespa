@@ -41,21 +41,30 @@ belowLimit()
     return ResourceUsageState(0.7, 0.6);
 }
 
+const HwInfo::Memory defaultMemory(8ul * 1024ul * 1024ul * 1024ul);
+
 struct Fixture
 {
     MemoryFlush::SP strategy;
     MemoryFlushConfigUpdater updater;
     Fixture()
-        : strategy(std::make_shared<MemoryFlush>(MemoryFlushConfigUpdater::convertConfig(getDefaultConfig()))),
-          updater(strategy, getDefaultConfig())
+        : strategy(std::make_shared<MemoryFlush>(MemoryFlushConfigUpdater::convertConfig(getDefaultConfig(), defaultMemory))),
+          updater(strategy, getDefaultConfig(), defaultMemory)
     {}
     void assertStrategyConfig(uint64_t expMaxGlobalMemory, int64_t expMaxEachMemory, uint64_t expMaxGlobalTlsSize) {
         EXPECT_EQUAL(expMaxGlobalMemory, strategy->getConfig().maxGlobalMemory);
         EXPECT_EQUAL(expMaxEachMemory, strategy->getConfig().maxMemoryGain);
         EXPECT_EQUAL(expMaxGlobalTlsSize, strategy->getConfig().maxGlobalTlsSize);
     }
+    void assertStrategyDiskConfig(double expGlobalDiskBloatFactor, double expDiskBloatFactor) {
+        EXPECT_APPROX(expGlobalDiskBloatFactor, strategy->getConfig().globalDiskBloatFactor, 0.00001);
+        EXPECT_APPROX(expDiskBloatFactor, strategy->getConfig().diskBloatFactor, 0.00001);
+    }
     void notifyDiskMemUsage(const ResourceUsageState &diskState, const ResourceUsageState &memoryState) {
         updater.notifyDiskMemUsage(DiskMemUsageState(diskState, memoryState));
+    }
+    void setNodeRetired(bool nodeRetired) {
+        updater.setNodeRetired(nodeRetired);
     }
 };
 
@@ -129,6 +138,16 @@ TEST_F("require that we must go below low watermark for memory usage before usin
     TEST_DO(f.assertStrategyConfig(4, 1, 20));
     f.notifyDiskMemUsage(belowLimit(), ResourceUsageState(0.7, 0.6));
     TEST_DO(f.assertStrategyConfig(4, 1, 20));
+}
+
+TEST_F("require that more disk bloat is allowed while node state is retired", Fixture)
+{
+    f.notifyDiskMemUsage(ResourceUsageState(0.7, 0.3), belowLimit());
+    TEST_DO(f.assertStrategyDiskConfig(0.2, 0.2));
+    f.setNodeRetired(true);
+    TEST_DO(f.assertStrategyDiskConfig((0.8 - 0.3 / 0.7) * 0.8, 1.0));
+    f.notifyDiskMemUsage(belowLimit(), belowLimit());
+    TEST_DO(f.assertStrategyDiskConfig(0.2, 0.2));
 }
 
 TEST_MAIN() { TEST_RUN_ALL(); }

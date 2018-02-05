@@ -1,6 +1,7 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 
 #include "bouncer.h"
+#include "bouncer_metrics.h"
 #include <vespa/storageapi/message/state.h>
 #include <vespa/storageapi/message/persistence.h>
 #include <vespa/config/subscription/configuri.h>
@@ -8,6 +9,7 @@
 #include <sstream>
 
 #include <vespa/log/log.h>
+#include <vespa/log/bufferedlogger.h>
 LOG_SETUP(".bouncer");
 
 namespace storage {
@@ -19,9 +21,11 @@ Bouncer::Bouncer(StorageComponentRegister& compReg, const config::ConfigUri & co
       _lock(),
       _nodeState("s:i"),
       _clusterState(&lib::State::UP),
-      _configFetcher(configUri.getContext())
+      _configFetcher(configUri.getContext()),
+      _metrics(std::make_unique<BouncerMetrics>())
 {
     _component.getStateUpdater().addStateListener(*this);
+    _component.registerMetric(*_metrics);
     // Register for config. Normally not critical, so catching config
     // exception allowing program to continue if missing/faulty config.
     try{
@@ -68,6 +72,10 @@ Bouncer::configure(std::unique_ptr<vespa::config::content::core::StorBouncerConf
     _config = std::move(config);
 }
 
+const BouncerMetrics& Bouncer::metrics() const noexcept {
+    return *_metrics;
+}
+
 void
 Bouncer::validateConfig(
         const vespa::config::content::core::StorBouncerConfig& newConfig) const
@@ -105,15 +113,19 @@ Bouncer::abortCommandForUnavailableNode(api::StorageMessage& msg,
 }
 
 void
-Bouncer::abortCommandWithTooHighClockSkew(api::StorageMessage& msg,
+Bouncer::rejectCommandWithTooHighClockSkew(api::StorageMessage& msg,
                                           int maxClockSkewInSeconds)
 {
-    std::shared_ptr<api::StorageReply> reply(
-            static_cast<api::StorageCommand&>(msg).makeReply().release());
+    auto& as_cmd = dynamic_cast<api::StorageCommand&>(msg);
     std::ostringstream ost;
     ost << "Message " << msg.getType() << " is more than "
         << maxClockSkewInSeconds << " seconds in the future.";
-    reply->setResult(api::ReturnCode(api::ReturnCode::ABORTED, ost.str()));
+    LOGBP(warning, "Rejecting operation from distributor %u: %s",
+          as_cmd.getSourceIndex(), ost.str().c_str());
+    _metrics->clock_skew_aborts.inc();
+
+    std::shared_ptr<api::StorageReply> reply(as_cmd.makeReply().release());
+    reply->setResult(api::ReturnCode(api::ReturnCode::REJECTED, ost.str()));
     sendUp(reply);
 }
 
@@ -259,7 +271,7 @@ Bouncer::onDown(const std::shared_ptr<api::StorageMessage>& msg)
         timestamp /= 1000000;
         uint64_t currentTime = _component.getClock().getTimeInSeconds().getTime();
         if (timestamp > currentTime + maxClockSkewInSeconds) {
-            abortCommandWithTooHighClockSkew(*msg, maxClockSkewInSeconds);
+            rejectCommandWithTooHighClockSkew(*msg, maxClockSkewInSeconds);
             return true;
         }
     }

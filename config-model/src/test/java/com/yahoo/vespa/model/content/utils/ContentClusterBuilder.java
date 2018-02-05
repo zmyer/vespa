@@ -18,33 +18,15 @@ import static com.yahoo.config.model.test.TestUtil.joinLines;
  */
 public class ContentClusterBuilder {
 
-    public static class DocType {
-        private final String name;
-        private final boolean global;
-
-        public DocType(String name, boolean global) {
-            this.name = name;
-            this.global = global;
-        }
-
-        public DocType(String name) {
-            this(name, false);
-        }
-
-        public String toXml() {
-            return (global ? "<document mode='index' type='" + name + "' global='true'/>" :
-                    "<document mode='index' type='" + name + "'/>");
-        }
-    }
-
     private String name = "mycluster";
     private int redundancy = 1;
     private int searchableCopies = 1;
-    private List<DocType> docTypes = Arrays.asList(new DocType("test"));
+    private List<DocType> docTypes = Arrays.asList(DocType.index("test"));
     private String groupXml = getSimpleGroupXml();
     private Optional<String> dispatchXml = Optional.empty();
     private Optional<Double> protonDiskLimit = Optional.empty();
     private Optional<Double> protonMemoryLimit = Optional.empty();
+    private Optional<Boolean> enableMultipleBucketSpaces = Optional.empty();
 
     public ContentClusterBuilder() {
     }
@@ -66,7 +48,7 @@ public class ContentClusterBuilder {
 
     public ContentClusterBuilder docTypes(String ... docTypes) {
         this.docTypes = Arrays.asList(docTypes).stream().
-                map(type -> new DocType(type)).
+                map(type -> DocType.index(type)).
                 collect(Collectors.toList());
         return this;
     }
@@ -96,6 +78,11 @@ public class ContentClusterBuilder {
         return this;
     }
 
+    public ContentClusterBuilder enableMultipleBucketSpaces(boolean value) {
+        this.enableMultipleBucketSpaces = Optional.of(value);
+        return this;
+    }
+
     public ContentCluster build(MockRoot root) throws Exception {
         return ContentClusterUtils.createCluster(getXml(), root);
     }
@@ -103,9 +90,7 @@ public class ContentClusterBuilder {
     public String getXml() {
         String xml = joinLines("<content version='1.0' id='" + name + "'>",
                "  <redundancy>" + redundancy + "</redundancy>",
-               "  <documents>",
-                docTypes.stream().map(DocType::toXml).collect(Collectors.joining("\n")),
-               "  </documents>",
+               DocType.listToXml(docTypes),
                "  <engine>",
                "    <proton>",
                "      <searchable-copies>" + searchableCopies + "</searchable-copies>",
@@ -114,6 +99,11 @@ public class ContentClusterBuilder {
                "  </engine>");
         if (dispatchXml.isPresent()) {
             xml += dispatchXml.get();
+        }
+        if (enableMultipleBucketSpaces.isPresent()) {
+            xml += joinLines("<experimental>",
+                    "<enable-multiple-bucket-spaces>" + (enableMultipleBucketSpaces.get() ? "true" : "false") + "</enable-multiple-bucket-spaces>",
+                    "</experimental>");
         }
         return xml + groupXml +
                "</content>";

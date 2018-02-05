@@ -5,20 +5,19 @@
 #include "throttlingoperationstarter.h"
 #include "idealstatemetricsset.h"
 #include "ownership_transfer_safe_time_point_calculator.h"
-#include "managed_bucket_space_repo.h"
-#include <vespa/storage/bucketdb/mapbucketdatabase.h>
-#include <vespa/storage/distributor/maintenance/simplemaintenancescanner.h>
+#include "distributor_bucket_space.h"
+#include "distributormetricsset.h"
 #include <vespa/storage/distributor/maintenance/simplebucketprioritydatabase.h>
 #include <vespa/storage/common/nodestateupdater.h>
 #include <vespa/storage/common/hostreporter/hostinfo.h>
+#include <vespa/storage/common/global_bucket_space_distribution_converter.h>
 #include <vespa/storageframework/generic/status/xmlstatusreporter.h>
-
+#include <vespa/document/bucket/fixed_bucket_spaces.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".distributor-main");
 
-namespace storage {
-namespace distributor {
+namespace storage::distributor {
 
 class Distributor::Status {
     const DelegatedStatusRequest& _request;
@@ -66,35 +65,26 @@ Distributor::Distributor(DistributorComponentRegister& compReg,
       framework::StatusReporter("distributor", "Distributor"),
       _compReg(compReg),
       _component(compReg, "distributor"),
-      _bucketSpaceRepo(std::make_unique<ManagedBucketSpaceRepo>()),
-      _metrics(new DistributorMetricSet(
-   	       _component.getLoadTypes()->getMetricLoadTypes())),
+      _bucketSpaceRepo(std::make_unique<DistributorBucketSpaceRepo>(_component.enableMultipleBucketSpaces())),
+      _metrics(new DistributorMetricSet(_component.getLoadTypes()->getMetricLoadTypes())),
       _operationOwner(*this, _component.getClock()),
       _maintenanceOperationOwner(*this, _component.getClock()),
       _pendingMessageTracker(compReg),
-      _bucketDBUpdater(*this, getDefaultBucketSpace(), *this, compReg),
+      _bucketDBUpdater(*this, *_bucketSpaceRepo, *this, compReg),
       _distributorStatusDelegate(compReg, *this, *this),
       _bucketDBStatusDelegate(compReg, *this, _bucketDBUpdater),
-      _idealStateManager(*this, getDefaultBucketSpace(), compReg,
-                         manageActiveBucketCopies),
-      _externalOperationHandler(*this, getDefaultBucketSpace(),
-                                _idealStateManager, compReg),
+      _idealStateManager(*this, *_bucketSpaceRepo, compReg, manageActiveBucketCopies),
+      _externalOperationHandler(*this, *_bucketSpaceRepo, _idealStateManager, compReg),
       _threadPool(threadPool),
       _initializingIsUp(true),
       _doneInitializeHandler(doneInitHandler),
       _doneInitializing(false),
       _messageSender(messageSender),
       _bucketPriorityDb(new SimpleBucketPriorityDatabase()),
-      _scanner(new SimpleMaintenanceScanner(
-            *_bucketPriorityDb, _idealStateManager,
-            getDefaultBucketSpace().getBucketDatabase())),
-      _throttlingStarter(new ThrottlingOperationStarter(
-            _maintenanceOperationOwner)),
-      _blockingStarter(new BlockingOperationStarter(_pendingMessageTracker,
-                                                    *_throttlingStarter)),
-      _scheduler(new MaintenanceScheduler(_idealStateManager,
-                                          *_bucketPriorityDb,
-                                          *_blockingStarter)),
+      _scanner(new SimpleMaintenanceScanner(*_bucketPriorityDb, _idealStateManager, *_bucketSpaceRepo)),
+      _throttlingStarter(new ThrottlingOperationStarter(_maintenanceOperationOwner)),
+      _blockingStarter(new BlockingOperationStarter(_pendingMessageTracker, *_throttlingStarter)),
+      _scheduler(new MaintenanceScheduler(_idealStateManager, *_bucketPriorityDb, *_blockingStarter)),
       _schedulingMode(MaintenanceScheduler::NORMAL_SCHEDULING_MODE),
       _recoveryTimeStarted(_component.getClock()),
       _tickResult(framework::ThreadWaitInfo::NO_MORE_CRITICAL_WORK_KNOWN),
@@ -104,8 +94,7 @@ Distributor::Distributor(DistributorComponentRegister& compReg,
       _metricLock(),
       _maintenanceStats(),
       _bucketDbStats(),
-      _hostInfoReporter(_pendingMessageTracker.getLatencyStatisticsProvider(),
-                        *this),
+      _hostInfoReporter(_pendingMessageTracker.getLatencyStatisticsProvider(), *this),
       _ownershipSafeTimeCalc(
             std::make_unique<OwnershipTransferSafeTimePointCalculator>(
                 std::chrono::seconds(0))) // Set by config later
@@ -116,7 +105,7 @@ Distributor::Distributor(DistributorComponentRegister& compReg,
     _distributorStatusDelegate.registerStatusPage();
     _bucketDBStatusDelegate.registerStatusPage();
     hostInfoReporterRegistrar.registerReporter(&_hostInfoReporter);
-    _bucketSpaceRepo->setDefaultDistribution(_component.getDistribution());
+    propagateDefaultDistribution(_component.getDistribution());
 };
 
 Distributor::~Distributor()
@@ -143,16 +132,8 @@ Distributor::getPendingMessageTracker() const
     return _pendingMessageTracker;
 }
 
-ManagedBucketSpace& Distributor::getDefaultBucketSpace() noexcept {
-    return _bucketSpaceRepo->getDefaultSpace();
-}
-
-const ManagedBucketSpace& Distributor::getDefaultBucketSpace() const noexcept {
-    return _bucketSpaceRepo->getDefaultSpace();
-}
-
 BucketOwnership
-Distributor::checkOwnershipInPendingState(const document::BucketId& b) const
+Distributor::checkOwnershipInPendingState(const document::Bucket &b) const
 {
     return _bucketDBUpdater.checkOwnershipInPendingState(b);
 }
@@ -161,10 +142,8 @@ void
 Distributor::sendCommand(const std::shared_ptr<api::StorageCommand>& cmd)
 {
     if (cmd->getType() == api::MessageType::MERGEBUCKET) {
-        api::MergeBucketCommand& merge(
-                static_cast<api::MergeBucketCommand&>(*cmd));
-        _idealStateManager.getMetrics().nodesPerMerge.addValue(
-                merge.getNodes().size());
+        api::MergeBucketCommand& merge(static_cast<api::MergeBucketCommand&>(*cmd));
+        _idealStateManager.getMetrics().nodesPerMerge.addValue(merge.getNodes().size());
     }
     sendUp(cmd);
 }
@@ -178,10 +157,8 @@ Distributor::sendReply(const std::shared_ptr<api::StorageReply>& reply)
 void
 Distributor::setNodeStateUp()
 {
-    NodeStateUpdater::Lock::SP lock(
-            _component.getStateUpdater().grabStateChangeLock());
-    lib::NodeState ns(
-            *_component.getStateUpdater().getReportedNodeState());
+    NodeStateUpdater::Lock::SP lock(_component.getStateUpdater().grabStateChangeLock());
+    lib::NodeState ns(*_component.getStateUpdater().getReportedNodeState());
     ns.setState(lib::State::UP);
     _component.getStateUpdater().setReportedNodeState(ns);
 }
@@ -203,23 +180,26 @@ Distributor::onOpen()
     }
 }
 
-void
-Distributor::onClose()
-{
-    for (uint32_t i=0; i<_messageQueue.size(); ++i) {
-        std::shared_ptr<api::StorageMessage> msg = _messageQueue[i];
+void Distributor::send_shutdown_abort_reply(const std::shared_ptr<api::StorageMessage>& msg) {
+    api::StorageReply::UP reply(
+            std::dynamic_pointer_cast<api::StorageCommand>(msg)->makeReply());
+    reply->setResult(api::ReturnCode(api::ReturnCode::ABORTED, "Distributor is shutting down"));
+    sendUp(std::shared_ptr<api::StorageMessage>(reply.release()));
+}
+
+void Distributor::onClose() {
+    for (auto& msg : _messageQueue) {
         if (!msg->getType().isReply()) {
-            api::StorageReply::UP reply(
-                    std::dynamic_pointer_cast<api::StorageCommand>(msg)
-                        ->makeReply());
-            reply->setResult(api::ReturnCode(api::ReturnCode::ABORTED,
-                                             "Distributor is shutting down"));
-            sendUp(std::shared_ptr<api::StorageMessage>(reply.release()));
+            send_shutdown_abort_reply(msg);
         }
     }
     _messageQueue.clear();
+    while (!_client_request_priority_queue.empty()) {
+        send_shutdown_abort_reply(_client_request_priority_queue.top());
+        _client_request_priority_queue.pop();
+    }
 
-    LOG(debug, "Distributor::onFlush invoked");
+    LOG(debug, "Distributor::onClose invoked");
     _bucketDBUpdater.flush();
     _operationOwner.onClose();
     _maintenanceOperationOwner.onClose();
@@ -286,13 +266,13 @@ Distributor::isMaintenanceReply(const api::StorageReply& reply) const
 bool
 Distributor::handleReply(const std::shared_ptr<api::StorageReply>& reply)
 {
-    document::BucketId bid = _pendingMessageTracker.reply(*reply);
+    document::Bucket bucket = _pendingMessageTracker.reply(*reply);
 
     if (reply->getResult().getResult() == api::ReturnCode::BUCKET_NOT_FOUND &&
-        bid != document::BucketId(0) &&
+        bucket.getBucketId() != document::BucketId(0) &&
         reply->getAddress())
     {
-        recheckBucketInfo(reply->getAddress()->getIndex(), bid);
+        recheckBucketInfo(reply->getAddress()->getIndex(), bucket);
     }
 
     if (reply->callHandler(_bucketDBUpdater, reply)) {
@@ -304,7 +284,7 @@ Distributor::handleReply(const std::shared_ptr<api::StorageReply>& reply)
     }
 
     if (_maintenanceOperationOwner.handleReply(reply)) {
-        _scanner->prioritizeBucket(bid);
+        _scanner->prioritizeBucket(bucket);
         return true;
     }
 
@@ -451,8 +431,8 @@ Distributor::storageDistributionChanged()
 }
 
 void
-Distributor::recheckBucketInfo(uint16_t nodeIdx, const document::BucketId& bid) {
-    _bucketDBUpdater.recheckBucketInfo(nodeIdx, bid);
+Distributor::recheckBucketInfo(uint16_t nodeIdx, const document::Bucket &bucket) {
+    _bucketDBUpdater.recheckBucketInfo(nodeIdx, bucket);
 }
 
 namespace {
@@ -503,7 +483,8 @@ public:
 }
 
 void
-Distributor::checkBucketForSplit(const BucketDatabase::Entry& e,
+Distributor::checkBucketForSplit(document::BucketSpace bucketSpace,
+                                 const BucketDatabase::Entry& e,
                                  uint8_t priority)
 {
     if (!getConfig().doInlineSplit()) {
@@ -515,7 +496,7 @@ Distributor::checkBucketForSplit(const BucketDatabase::Entry& e,
     SplitChecker checker(priority);
     for (uint32_t i = 0; i < e->getNodeCount(); ++i) {
         _pendingMessageTracker.checkPendingMessages(e->getNodeRef(i).getNode(),
-                                                    e.getBucketId(),
+                                                    document::Bucket(bucketSpace, e.getBucketId()),
                                                     checker);
         if (checker.found) {
             return;
@@ -523,23 +504,11 @@ Distributor::checkBucketForSplit(const BucketDatabase::Entry& e,
     }
 
     Operation::SP operation =
-        _idealStateManager.generateInterceptingSplit(e, priority);
+        _idealStateManager.generateInterceptingSplit(bucketSpace, e, priority);
 
     if (operation.get()) {
         _maintenanceOperationOwner.start(operation, priority);
     }
-}
-
-const lib::Distribution&
-Distributor::getDistribution() const
-{
-    // FIXME having _distribution be mutable for this is smelly. Is this only
-    // in place for the sake of tests?
-    if (!_distribution.get()) {
-        _distribution = _component.getDistribution();
-    }
-
-    return *_distribution;
 }
 
 void
@@ -549,15 +518,19 @@ Distributor::enableNextDistribution()
         _distribution = _nextDistribution;
         propagateDefaultDistribution(_distribution);
         _nextDistribution = std::shared_ptr<lib::Distribution>();
-        _bucketDBUpdater.storageDistributionChanged(getDistribution());
+        _bucketDBUpdater.storageDistributionChanged();
     }
 }
 
 void
 Distributor::propagateDefaultDistribution(
-        std::shared_ptr<lib::Distribution> distribution)
+        std::shared_ptr<const lib::Distribution> distribution)
 {
-    _bucketSpaceRepo->setDefaultDistribution(std::move(distribution));
+    _bucketSpaceRepo->get(document::FixedBucketSpaces::default_space()).setDistribution(distribution);
+    if (_component.enableMultipleBucketSpaces()) {
+        auto global_distr = GlobalBucketSpaceDistributionConverter::convert_to_global(*distribution);
+        _bucketSpaceRepo->get(document::FixedBucketSpaces::global_space()).setDistribution(std::move(global_distr));
+    }
 }
 
 void
@@ -572,19 +545,61 @@ Distributor::workWasDone()
     return !_tickResult.waitWanted();
 }
 
-void
-Distributor::startExternalOperations()
-{
-    for (uint32_t i=0; i<_fetchedMessages.size(); ++i) {
-        MBUS_TRACE(_fetchedMessages[i]->getTrace(), 9,
-                   "Distributor: Grabbed from queue to be processed.");
-        if (!handleMessage(_fetchedMessages[i])) {
-            MBUS_TRACE(_fetchedMessages[i]->getTrace(), 9,
-                       "Distributor: Not handling it. Sending further down.");
-            sendDown(_fetchedMessages[i]);
+namespace {
+
+bool is_client_request(const api::StorageMessage& msg) noexcept {
+    // Despite having been converted to StorageAPI messages, the following
+    // set of messages are never sent to the distributor by other processes
+    // than clients.
+    switch (msg.getType().getId()) {
+    case api::MessageType::GET_ID:
+    case api::MessageType::PUT_ID:
+    case api::MessageType::REMOVE_ID:
+    case api::MessageType::VISITOR_CREATE_ID:
+    case api::MessageType::VISITOR_DESTROY_ID:
+    case api::MessageType::MULTIOPERATION_ID: // Deprecated
+    case api::MessageType::GETBUCKETLIST_ID:
+    case api::MessageType::STATBUCKET_ID:
+    case api::MessageType::UPDATE_ID:
+    case api::MessageType::REMOVELOCATION_ID:
+    case api::MessageType::BATCHPUTREMOVE_ID: // Deprecated
+    case api::MessageType::BATCHDOCUMENTUPDATE_ID: // Deprecated
+        return true;
+    default:
+        return false;
+    }
+}
+
+}
+
+void Distributor::handle_or_propagate_message(const std::shared_ptr<api::StorageMessage>& msg) {
+    if (!handleMessage(msg)) {
+        MBUS_TRACE(msg->getTrace(), 9, "Distributor: Not handling it. Sending further down.");
+        sendDown(msg);
+    }
+}
+
+void Distributor::startExternalOperations() {
+    for (auto& msg : _fetchedMessages) {
+        if (is_client_request(*msg)) {
+            MBUS_TRACE(msg->getTrace(), 9, "Distributor: adding to client request priority queue");
+            _client_request_priority_queue.emplace(std::move(msg));
+        } else {
+            MBUS_TRACE(msg->getTrace(), 9, "Distributor: Grabbed from queue to be processed.");
+            handle_or_propagate_message(msg);
         }
     }
-    if (!_fetchedMessages.empty()) {
+
+    const bool start_single_client_request = !_client_request_priority_queue.empty();
+    if (start_single_client_request) {
+        const auto& msg = _client_request_priority_queue.top();
+        MBUS_TRACE(msg->getTrace(), 9, "Distributor: Grabbed from "
+                   "client request priority queue to be processed.");
+        handle_or_propagate_message(msg);
+        _client_request_priority_queue.pop();
+    }
+
+    if (!_fetchedMessages.empty() || start_single_client_request) {
         signalWorkWasDone();
     }
     _fetchedMessages.clear();
@@ -638,9 +653,10 @@ Distributor::scanNextBucket()
         updateInternalMetricsForCompletedScan();
         _scanner->reset();
     } else {
+        const auto &distribution(_bucketSpaceRepo->get(scanResult.getBucketSpace()).getDistribution());
         _bucketDBMetricUpdater.visit(
                 scanResult.getEntry(),
-                _component.getDistribution()->getRedundancy());
+                distribution.getRedundancy());
     }
     return scanResult;
 }
@@ -796,5 +812,4 @@ Distributor::handleStatusRequest(const DelegatedStatusRequest& request) const
     return true;    
 }
 
-} // distributor
-} // storage
+}

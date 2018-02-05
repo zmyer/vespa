@@ -2,6 +2,8 @@
 
 #include "servicelayercomponentregisterimpl.h"
 #include <vespa/vespalib/util/exceptions.h>
+#include <vespa/document/bucket/fixed_bucket_spaces.h>
+#include <vespa/storage/common/global_bucket_space_distribution_converter.h>
 
 namespace storage {
 
@@ -9,7 +11,7 @@ using vespalib::IllegalStateException;
 
 ServiceLayerComponentRegisterImpl::ServiceLayerComponentRegisterImpl()
     : _diskCount(0),
-      _bucketDatabase()
+      _bucketSpaceRepo()
 { }
 
 void
@@ -19,7 +21,7 @@ ServiceLayerComponentRegisterImpl::registerServiceLayerComponent(
     vespalib::LockGuard lock(_componentLock);
     _components.push_back(&smc);
     smc.setDiskCount(_diskCount);
-    smc.setBucketDatabase(_bucketDatabase);
+    smc.setBucketSpaceRepo(_bucketSpaceRepo);
     smc.setMinUsedBitsTracker(_minUsedBitsTracker);
 }
 
@@ -33,6 +35,24 @@ ServiceLayerComponentRegisterImpl::setDiskCount(uint16_t count)
     _diskCount = count;
     for (uint32_t i=0; i<_components.size(); ++i) {
         _components[i]->setDiskCount(count);
+    }
+}
+
+void
+ServiceLayerComponentRegisterImpl::setDistribution(lib::Distribution::SP distribution)
+{
+    _bucketSpaceRepo.get(document::FixedBucketSpaces::default_space()).setDistribution(distribution);
+    if (enableMultipleBucketSpaces()) {
+        auto global_distr = GlobalBucketSpaceDistributionConverter::convert_to_global(*distribution);
+        _bucketSpaceRepo.get(document::FixedBucketSpaces::global_space()).setDistribution(global_distr);
+    }
+    StorageComponentRegisterImpl::setDistribution(distribution);
+}
+
+void ServiceLayerComponentRegisterImpl::setEnableMultipleBucketSpaces(bool enabled) {
+    StorageComponentRegisterImpl::setEnableMultipleBucketSpaces(enabled);
+    if (enabled) {
+        _bucketSpaceRepo.enableGlobalBucketSpace();
     }
 }
 

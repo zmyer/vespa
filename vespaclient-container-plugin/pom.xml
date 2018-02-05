@@ -9,6 +9,7 @@
     <groupId>com.yahoo.vespa</groupId>
     <artifactId>parent</artifactId>
     <version>6-SNAPSHOT</version>
+    <relativePath>../parent/pom.xml</relativePath>
   </parent>
   <artifactId>vespaclient-container-plugin</artifactId>
   <version>6-SNAPSHOT</version>
@@ -36,7 +37,6 @@
       <version>${project.version}</version>
       <scope>provided</scope>
     </dependency>
-
     <dependency>
       <groupId>org.apache.httpcomponents</groupId>
       <artifactId>httpclient</artifactId>

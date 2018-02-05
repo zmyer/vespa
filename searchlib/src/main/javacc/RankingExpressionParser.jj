@@ -65,6 +65,8 @@ TOKEN :
     <DIV: "/"> |
     <MUL: "*"> |
     <DOT: "."> |
+    <MOD: "%"> |
+    <POWOP: "^"> |
 
     <DOLLAR: "$"> |
     <COMMA: ","> |
@@ -84,6 +86,10 @@ TOKEN :
     <IF: "if"> |
     <IN: "in"> |
     <F: "f"> |
+
+    <NOT: "!"> |
+    <AND: "&&"> |
+    <OR: "||"> |
 
     <ABS: "abs"> |
     <ACOS: "acos"> |
@@ -199,10 +205,14 @@ ExpressionNode arithmeticExpression() :
 
 ArithmeticOperator arithmetic() : { }
 {
-    ( <ADD> { return ArithmeticOperator.PLUS;     } |
-      <SUB> { return ArithmeticOperator.MINUS;    } |
-      <DIV> { return ArithmeticOperator.DIVIDE;   } |
-      <MUL> { return ArithmeticOperator.MULTIPLY; } )
+    ( <ADD>   { return ArithmeticOperator.PLUS;     } |
+      <SUB>   { return ArithmeticOperator.MINUS;    } |
+      <DIV>   { return ArithmeticOperator.DIVIDE;   } |
+      <MUL>   { return ArithmeticOperator.MULTIPLY; } |
+      <MOD>   { return ArithmeticOperator.MODULO; }   |
+      <AND>   { return ArithmeticOperator.AND; }      |
+      <OR>    { return ArithmeticOperator.OR; }       |
+      <POWOP> { return ArithmeticOperator.POWER; } )
     { return null; }
 }
 
@@ -222,16 +232,23 @@ ExpressionNode value() :
 {
     ExpressionNode ret;
     boolean neg = false;
+    boolean not = false;
 }
 {
-    ( [ LOOKAHEAD(2) <SUB>                                  { neg = true;     }   ]
-      (            ret = constantPrimitive()                                      |
-                   LOOKAHEAD(2) ret = ifExpression()                              |
-                   LOOKAHEAD(4) ret = function()                                  |
-                   ret = feature()                                                |
-                   ret = queryFeature()                                           |
+    (
+      [ <NOT>                                               { not = true; } ]
+      [ LOOKAHEAD(2) <SUB>                                  { neg = true; } ]
+      (            ret = constantPrimitive()                                |
+                   LOOKAHEAD(2) ret = ifExpression()                        |
+                   LOOKAHEAD(4) ret = function()                            |
+                   ret = feature()                                          |
+                   ret = legacyQueryFeature()                               |
         ( <LBRACE> ret = expression() <RBRACE> { ret = new EmbracedNode(ret); } ) ) )
-    { return neg ? new NegativeNode(ret) : ret; }
+    {
+        ret = not ? new NotNode(ret) : ret;
+        ret = neg ? new NegativeNode(ret) : ret;
+        return ret;
+    }
 }
 
 IfNode ifExpression() :
@@ -247,15 +264,6 @@ IfNode ifExpression() :
     }
 }
 
-ReferenceNode queryFeature() :
-{
-    String name;
-}
-{
-    ( <DOLLAR> name = identifier() )
-    { return new ReferenceNode("query", Arrays.asList((ExpressionNode)new NameNode(name)), null); }
-}
-
 ReferenceNode feature() :
 {
     List<ExpressionNode> args = null;
@@ -264,6 +272,16 @@ ReferenceNode feature() :
 {
     ( name = identifier() [ <LBRACE> args = args() <RBRACE> ] [ <DOT> out = outs() ] )
     { return new ReferenceNode(name, args, out); }
+}
+
+// Query features can be referenced as "$name" instead of "query(name)". TODO: Warn this is deprecated
+ReferenceNode legacyQueryFeature() :
+{
+    String name;
+}
+{
+    ( <DOLLAR> name = identifier() )
+    { return new ReferenceNode("query", Arrays.asList((ExpressionNode)new NameNode(name)), null); }
 }
 
 String outs() :
@@ -316,7 +334,7 @@ ExpressionNode arg() :
 {
     ( ret = constantPrimitive()                                          |
       LOOKAHEAD(2) ret = feature()                                       |
-      name = identifier()            { ret = new NameNode(name);       } )
+      name = identifier()              { ret = new NameNode(name);       } )
     { return ret; }
 }
 
@@ -325,7 +343,7 @@ ExpressionNode function() :
     ExpressionNode function;
 }
 {
-    ( function = scalarOrTensorFunction() | function = tensorFunction() )
+    ( LOOKAHEAD(2) function = scalarOrTensorFunction() | function = tensorFunction() )
     { return function; }
 }
 
@@ -450,7 +468,7 @@ ExpressionNode tensorGenerate() :
 }
 {
     <TENSOR> type = tensorTypeArgument() <LBRACE> generator = expression() <RBRACE>
-    { return new TensorFunctionNode(new Generate(type, new GeneratorLambdaFunctionNode(type, generator).asIntegerListToDoubleOperator())); }
+    { return new TensorFunctionNode(new Generate(type, new GeneratorLambdaFunctionNode(type, generator).asLongListToDoubleOperator())); }
 }
 
 ExpressionNode tensorRange() :
@@ -700,7 +718,7 @@ String identifier() :
     Function func;
 }
 {
-    name = tensorFunctionName() { return name; }            |
+    LOOKAHEAD(2) name = tensorFunctionName() { return name; }            |
     func = unaryFunctionName()  { return func.toString(); } |
     func = binaryFunctionName() { return func.toString(); } |
     <IF>                        { return token.image; }     |
@@ -753,11 +771,25 @@ List<String> tagCommaLeadingList() :
 ConstantNode constantPrimitive() :
 {
     String sign = "";
+    String value;
 }
 {
     ( <SUB> { sign = "-";} ) ?
-    ( <INTEGER> | <FLOAT> | <STRING> )
-    { return new ConstantNode(Value.parse(sign + token.image),sign + token.image); }
+    ( <INTEGER> { value = token.image; } |
+      <FLOAT> { value = token.image; } |
+      value = stringPath() )
+    { return new ConstantNode(Value.parse(sign + value),sign + value); }
+}
+
+// Strings separated by "/"
+String stringPath() :
+{
+    StringBuilder b = new StringBuilder();
+}
+{
+    <STRING> { b.append(token.image); }
+    ( LOOKAHEAD(2) <DIV> <STRING> { b.append("/").append(token.image); } ) *
+    { return b.toString(); }
 }
 
 Value primitiveValue() :

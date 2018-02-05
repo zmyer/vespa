@@ -3,6 +3,7 @@ package com.yahoo.tensor.evaluation;
 
 import com.google.common.annotations.Beta;
 import com.yahoo.tensor.Tensor;
+import com.yahoo.tensor.TensorType;
 
 import java.util.HashMap;
 
@@ -18,7 +19,14 @@ public class MapEvaluationContext implements EvaluationContext {
 
     public void put(String name, Tensor tensor) { bindings.put(name, tensor); }
 
-    /** Returns the tensor bound to this name, or null if none */
-    public Tensor get(String name) { return bindings.get(name); }
+    @Override
+    public TensorType getType(String name) {
+        Tensor tensor = bindings.get(name);
+        if (tensor == null) return null;
+        return tensor.type();
+    }
+
+    @Override
+    public Tensor getTensor(String name) { return bindings.get(name); }
 
 }

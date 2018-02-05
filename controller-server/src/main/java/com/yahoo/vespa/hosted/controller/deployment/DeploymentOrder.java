@@ -1,23 +1,29 @@
+// Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.vespa.hosted.controller.deployment;
 
 import com.yahoo.config.application.api.DeploymentSpec;
 import com.yahoo.vespa.hosted.controller.Application;
 import com.yahoo.vespa.hosted.controller.Controller;
-import com.yahoo.vespa.hosted.controller.application.Change;
+import com.yahoo.vespa.hosted.controller.LockedApplication;
+import com.yahoo.vespa.hosted.controller.api.integration.zone.ZoneId;
+import com.yahoo.vespa.hosted.controller.application.Deployment;
+import com.yahoo.vespa.hosted.controller.application.DeploymentJobs;
 import com.yahoo.vespa.hosted.controller.application.DeploymentJobs.JobType;
 import com.yahoo.vespa.hosted.controller.application.JobStatus;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
 
+import static java.util.Comparator.comparingInt;
 import static java.util.stream.Collectors.collectingAndThen;
+import static java.util.stream.Collectors.toList;
 
 /**
  * This class determines the order of deployments according to an application's deployment spec.
@@ -38,13 +44,14 @@ public class DeploymentOrder {
     }
 
     /** Returns a list of jobs to trigger after the given job */
-    public List<JobType> nextAfter(JobType job, Application application) {
-        if (!application.deploying().isPresent()) { // Change was cancelled
+    // TODO: This does too much - should just tell us the order, as advertised
+    public List<JobType> nextAfter(JobType job, LockedApplication application) {
+        if ( ! application.change().isPresent()) { // Change was cancelled
             return Collections.emptyList();
         }
 
-        // Always trigger system test after component as deployment spec might not be available yet (e.g. if this is a
-        // new application with no previous deployments)
+        // Always trigger system test after component as deployment spec might not be available yet
+        // (e.g. if this is a new application with no previous deployments)
         if (job == JobType.component) {
             return Collections.singletonList(JobType.systemTest);
         }
@@ -52,7 +59,7 @@ public class DeploymentOrder {
         // At this point we have deployed to system test, so deployment spec is available
         List<DeploymentSpec.Step> deploymentSteps = deploymentSteps(application);
         Optional<DeploymentSpec.Step> currentStep = fromJob(job, application);
-        if (!currentStep.isPresent()) {
+        if ( ! currentStep.isPresent()) {
             return Collections.emptyList();
         }
 
@@ -62,14 +69,9 @@ public class DeploymentOrder {
             return Collections.emptyList();
         }
 
-        // Postpone if step hasn't completed all it's jobs for this change
-        if (!completedSuccessfully(currentStep.get(), application.deploying().get(), application)) {
-            return Collections.emptyList();
-        }
-
         // Postpone next job if delay has not passed yet
         Duration delay = delayAfter(currentStep.get(), application);
-        if (postponeDeployment(delay, job, application)) {
+        if (shouldPostponeDeployment(delay, job, application)) {
             log.info(String.format("Delaying next job after %s of %s by %s", job, application, delay));
             return Collections.emptyList();
         }
@@ -77,44 +79,40 @@ public class DeploymentOrder {
         DeploymentSpec.Step nextStep = deploymentSteps.get(currentIndex + 1);
         return nextStep.zones().stream()
                 .map(this::toJob)
-                .collect(collectingAndThen(Collectors.toList(), Collections::unmodifiableList));
-    }
-
-    /** Returns whether the given job is first in a deployment */
-    public boolean isFirst(JobType job) {
-        return job == JobType.component;
-    }
-
-    /** Returns whether the given job is last in a deployment */
-    public boolean isLast(JobType job, Application application) {
-        List<DeploymentSpec.Step> deploymentSteps = deploymentSteps(application);
-        if (deploymentSteps.isEmpty()) { // Deployment spec not yet available
-            return false;
-        }
-        DeploymentSpec.Step lastStep = deploymentSteps.get(deploymentSteps.size() - 1);
-        Optional<DeploymentSpec.Step> step = fromJob(job, application);
-        // Step may not exist for all jobs, e.g. component
-        return step.map(s -> s.equals(lastStep)).orElse(false);
+                .collect(collectingAndThen(toList(), Collections::unmodifiableList));
     }
 
     /** Returns jobs for given deployment spec, in the order they are declared */
     public List<JobType> jobsFrom(DeploymentSpec deploymentSpec) {
         return deploymentSpec.steps().stream()
                 .flatMap(step -> jobsFrom(step).stream())
-                .collect(Collectors.collectingAndThen(Collectors.toList(), Collections::unmodifiableList));
+                .collect(collectingAndThen(toList(), Collections::unmodifiableList));
+    }
+
+    /** Returns job status sorted according to deployment spec */
+    public List<JobStatus> sortBy(DeploymentSpec deploymentSpec, Collection<JobStatus> jobStatus) {
+        List<DeploymentJobs.JobType> sortedJobs = jobsFrom(deploymentSpec);
+        return jobStatus.stream()
+                .sorted(comparingInt(job -> sortedJobs.indexOf(job.type())))
+                .collect(collectingAndThen(toList(), Collections::unmodifiableList));
+    }
+
+    /** Returns deployments sorted according to declared zones */
+    public List<Deployment> sortBy(List<DeploymentSpec.DeclaredZone> zones, Collection<Deployment> deployments) {
+        List<ZoneId> productionZones = zones.stream()
+                .filter(z -> z.region().isPresent())
+                .map(z -> ZoneId.from(z.environment(), z.region().get()))
+                .collect(toList());
+        return deployments.stream()
+                .sorted(comparingInt(deployment -> productionZones.indexOf(deployment.zone())))
+                .collect(collectingAndThen(toList(), Collections::unmodifiableList));
     }
 
     /** Returns jobs for the given step */
     private List<JobType> jobsFrom(DeploymentSpec.Step step) {
         return step.zones().stream()
                 .map(this::toJob)
-                .collect(Collectors.collectingAndThen(Collectors.toList(), Collections::unmodifiableList));
-    }
-
-    /** Returns whether all jobs have completed successfully for given step */
-    private boolean completedSuccessfully(DeploymentSpec.Step step, Change change, Application application) {
-        return jobsFrom(step).stream()
-                .allMatch(job -> application.deploymentJobs().isSuccessful(change, job));
+                .collect(collectingAndThen(toList(), Collections::unmodifiableList));
     }
 
     /** Resolve deployment step from job */
@@ -129,11 +127,12 @@ public class DeploymentOrder {
 
     /** Resolve job from deployment step */
     private JobType toJob(DeploymentSpec.DeclaredZone zone) {
-        return JobType.from(controller.system(), zone.environment(), zone.region().orElse(null));
+        return JobType.from(controller.system(), zone.environment(), zone.region().orElse(null))
+                .orElseThrow(() -> new IllegalArgumentException("Invalid zone " + zone));
     }
 
     /** Returns whether deployment should be postponed according to delay */
-    private boolean postponeDeployment(Duration delay, JobType job, Application application) {
+    private boolean shouldPostponeDeployment(Duration delay, JobType job, Application application) {
         Optional<Instant> lastSuccess = Optional.ofNullable(application.deploymentJobs().jobStatus().get(job))
                 .flatMap(JobStatus::lastSuccess)
                 .map(JobStatus.JobRun::at);
@@ -143,9 +142,8 @@ public class DeploymentOrder {
     /** Find all steps that deploy to one or more zones */
     private static List<DeploymentSpec.Step> deploymentSteps(Application application) {
         return application.deploymentSpec().steps().stream()
-                .filter(step -> step instanceof DeploymentSpec.DeclaredZone ||
-                                step instanceof DeploymentSpec.ParallelZones)
-                .collect(Collectors.toList());
+                .filter(step -> ! step.zones().isEmpty())
+                .collect(toList());
     }
 
     /** Determines the delay that should pass after the given step */
@@ -158,7 +156,7 @@ public class DeploymentOrder {
         List<DeploymentSpec.Step> remainingSteps = application.deploymentSpec().steps()
                 .subList(stepIndex + 1, application.deploymentSpec().steps().size());
         for (DeploymentSpec.Step s : remainingSteps) {
-            if (!(s instanceof DeploymentSpec.Delay)) {
+            if (! (s instanceof DeploymentSpec.Delay)) {
                 break;
             }
             totalDelay = totalDelay.plus(((DeploymentSpec.Delay) s).duration());

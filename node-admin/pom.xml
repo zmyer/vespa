@@ -9,6 +9,7 @@
         <groupId>com.yahoo.vespa</groupId>
         <artifactId>parent</artifactId>
         <version>6-SNAPSHOT</version>
+        <relativePath>../parent/pom.xml</relativePath>
     </parent>
 
     <artifactId>node-admin</artifactId>
@@ -37,6 +38,18 @@
         <dependency>
             <groupId>com.yahoo.vespa</groupId>
             <artifactId>orchestrator</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.yahoo.vespa</groupId>
+            <artifactId>service-monitor</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.yahoo.vespa</groupId>
+            <artifactId>application-model</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
@@ -73,6 +86,12 @@
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
+        <dependency>
+            <groupId>com.yahoo.vespa</groupId>
+            <artifactId>vespa-athenz</artifactId>
+            <version>${project.version}</version>
+            <scope>compile</scope>
+        </dependency>
 
         <dependency>
             <groupId>org.hamcrest</groupId>
@@ -102,8 +121,12 @@
             <artifactId>mockito-core</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.apache.velocity</groupId>
+            <artifactId>velocity</artifactId>
+            <scope>compile</scope>
+        </dependency>
     </dependencies>
-
     <build>
         <plugins>
             <plugin>

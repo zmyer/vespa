@@ -5,10 +5,11 @@ import com.google.common.base.Strings;
 import com.google.inject.Inject;
 import com.yahoo.cloud.config.ConfigserverConfig;
 
+import java.util.Objects;
 import java.util.Optional;
 
 /**
- * The zone (environment + region) of this runtime.
+ * The zone (environment + region) of this runtime, and some other information.
  * An injected instance of this will return the correct current environment and region.
  * Components can use this to obtain information about which zone they are running in.
  *
@@ -16,11 +17,11 @@ import java.util.Optional;
  */
 public class Zone {
 
-    private final Environment environment;
-    private final RegionName region;
     private final SystemName systemName;
     private final FlavorDefaults flavorDefaults;
     private final Optional<NodeFlavors> nodeFlavors;
+    private final Environment environment;
+    private final RegionName region;
 
     @Inject
     public Zone(ConfigserverConfig configserverConfig, NodeFlavors nodeFlavors) {
@@ -31,19 +32,14 @@ public class Zone {
              nodeFlavors);
     }
 
-    /** Create from environment and region */
+    /** Create from environment and region. Use for testing.  */
     public Zone(Environment environment, RegionName region) {
-        this(SystemName.defaultSystem(), environment, region, "default");
+        this(SystemName.defaultSystem(), environment, region);
     }
 
-    /** Create from system, environment and region */
+    /** Create from system, environment and region. Use for testing. */
     public Zone(SystemName systemName, Environment environment, RegionName region) {
-        this(systemName, environment, region, "default");
-    }
-
-    /** Create from environment and region. Useful for testing. */
-    public Zone(SystemName system, Environment environment, RegionName region, String defaultFlavor) {
-        this(system, environment, region, new FlavorDefaults(defaultFlavor), null);
+        this(systemName, environment, region, new FlavorDefaults("default"), null);
     }
 
     private Zone(SystemName systemName,
@@ -59,10 +55,14 @@ public class Zone {
     }
 
     /** Returns the current environment */
-    public Environment environment() { return environment; }
+    public Environment environment() {
+        return environment;
+    }
 
     /** Returns the current region */
-    public RegionName region() { return region; }
+    public RegionName region() {
+        return region;
+    }
 
     /** Returns the current system */
     public SystemName system() { return systemName; }
@@ -82,19 +82,19 @@ public class Zone {
     public String toString() {
         return "zone " + environment + "." + region;
     }
-    
-    @Override
-    public int hashCode() { return environment().hashCode() + 7 * region.hashCode();}
-    
+
     @Override
     public boolean equals(Object o) {
-        if (o == this) return true;
-        if ( ! (o instanceof Zone)) return false;
-        
-        Zone other = (Zone)o;
-        if ( this.environment() != other.environment()) return false;
-        if ( ! this.region.equals(other.region)) return false;
-        return true;
+        if (this == o) return true;
+        if (!(o instanceof Zone)) return false;
+        Zone zone = (Zone) o;
+        return environment == zone.environment &&
+               Objects.equals(region, zone.region);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(environment, region);
     }
 
     private static class FlavorDefaults {
@@ -151,3 +151,4 @@ public class Zone {
     }
 
 }
+

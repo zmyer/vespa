@@ -8,7 +8,6 @@
 #include <vespa/storage/persistence/persistenceutil.h>
 #include <vespa/storage/common/messagesender.h>
 #include <vespa/storage/common/storagecomponent.h>
-#include <vespa/storageframework/defaultimplementation/memory/memorymanager.h>
 #include <vespa/persistence/spi/persistenceprovider.h>
 #include <vespa/persistence/dummyimpl/dummypersistence.h>
 #include <vespa/document/base/testdocman.h>
@@ -154,7 +153,7 @@ public:
             const document::DocumentId& id,
             const document::FieldValue& updateValue);
 
-    uint16_t getDiskFromBucketDatabaseIfUnset(const document::BucketId&,
+    uint16_t getDiskFromBucketDatabaseIfUnset(const document::Bucket &,
                                               uint16_t disk = 0xffff);
 
     /**
@@ -188,7 +187,7 @@ public:
      *
      * @disk If set, use this disk, otherwise lookup in bucket db.
      */
-    void createTestBucket(const document::BucketId&, uint16_t disk = 0xffff);
+    void createTestBucket(const document::Bucket&, uint16_t disk = 0xffff);
 
     /**
      * Create a new persistence thread.

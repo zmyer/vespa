@@ -14,14 +14,16 @@ import org.w3c.dom.Element;
 
 import java.util.logging.Logger;
 
-
 /**
  * Generates distributor-specific configuration.
  */
-public class DistributorCluster extends AbstractConfigProducer<Distributor>
-        implements StorDistributormanagerConfig.Producer, StorServerConfig.Producer, MetricsmanagerConfig.Producer {
+public class DistributorCluster extends AbstractConfigProducer<Distributor> implements
+        StorDistributormanagerConfig.Producer,
+        StorServerConfig.Producer,
+        MetricsmanagerConfig.Producer {
 
     public static final Logger log = Logger.getLogger(DistributorCluster.class.getPackage().toString());
+
 
     private static class GcOptions {
         public final int interval;

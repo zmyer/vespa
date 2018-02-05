@@ -14,6 +14,8 @@ namespace storage {
 
 namespace distributor {
 
+class DistributorBucketSpaceRepo;
+
 struct DatabaseUpdate {
     enum UpdateFlags {
         CREATE_IF_NONEXISTING = 1,
@@ -29,6 +31,7 @@ class DistributorComponent : public storage::DistributorComponent
 {
 public:
     DistributorComponent(DistributorInterface& distributor,
+                         DistributorBucketSpaceRepo &bucketSpaceRepo,
   		         DistributorComponentRegister& compReg,
 		         const std::string& name);
 
@@ -42,27 +45,27 @@ public:
     BucketOwnership checkOwnershipInPendingAndGivenState(
             const lib::Distribution& distribution,
             const lib::ClusterState& clusterState,
-            const document::BucketId& bucket) const;
+            const document::Bucket &bucket) const;
 
     BucketOwnership checkOwnershipInPendingAndCurrentState(
-            const document::BucketId& bucket) const;
+            const document::Bucket &bucket) const;
 
     bool ownsBucketInState(const lib::Distribution& distribution,
                            const lib::ClusterState& clusterState,
-                           const document::BucketId& bucket) const;
+                           const document::Bucket &bucket) const;
 
     /**
      * Returns true if this distributor owns the given bucket in the
      * given cluster and current distribution config.
      */
     bool ownsBucketInState(const lib::ClusterState& clusterState,
-                           const document::BucketId& bucket) const;
+                           const document::Bucket &bucket) const;
 
     /**
      * Returns true if this distributor owns the given bucket with the current
      * cluster state and distribution config.
      */
-    bool ownsBucketInCurrentState(const document::BucketId&) const;
+    bool ownsBucketInCurrentState(const document::Bucket &bucket) const;
 
     /**
      * Returns a reference to the current system state. Valid until the next
@@ -73,7 +76,7 @@ public:
     /**
      * Returns the ideal nodes for the given bucket.
      */
-    std::vector<uint16_t> getIdealNodes(const document::BucketId& bucketId) const;
+    std::vector<uint16_t> getIdealNodes(const document::Bucket &bucket) const;
 
     /**
       * Returns the slobrok address of the given storage node.
@@ -86,24 +89,17 @@ public:
     bool storageNodeIsUp(uint32_t nodeIndex) const;
 
     /**
-     * Returns the current desired redundancy level.
-     */
-    uint16_t getRedundancy() const;
-
-    /**
      * Verifies that the given command has been received at the
      * correct distributor based on the current system state.
      */
-    bool checkDistribution(
-            api::StorageCommand& cmd,
-            const document::BucketId& bid);
+    bool checkDistribution(api::StorageCommand& cmd, const document::Bucket &bucket);
 
     /**
      * Removes the given bucket copies from the bucket database.
      * If the resulting bucket is empty afterwards, removes the entire
      * bucket entry from the bucket database.
      */
-    void removeNodesFromDB(const document::BucketId& id,
+    void removeNodesFromDB(const document::Bucket &bucket,
                            const std::vector<uint16_t>& nodes);
 
     /**
@@ -111,15 +107,15 @@ public:
      * If the resulting bucket is empty afterwards, removes the entire
      * bucket entry from the bucket database.
      */
-    void removeNodeFromDB(const document::BucketId& id, uint16_t node) {
-        removeNodesFromDB(id, toVector<uint16_t>(node));
+    void removeNodeFromDB(const document::Bucket &bucket, uint16_t node) {
+        removeNodesFromDB(bucket, toVector<uint16_t>(node));
     }
 
     /**
      * Adds the given copies to the bucket database.
      */
     void updateBucketDatabase(
-            const document::BucketId& bid,
+            const document::Bucket &bucket,
             const std::vector<BucketCopy>& changedNodes,
             uint32_t updateFlags = 0);
 
@@ -127,11 +123,11 @@ public:
      * Simple API for the common case of modifying a single node.
      */
     void updateBucketDatabase(
-            const document::BucketId& bid,
+            const document::Bucket &bucket,
             const BucketCopy& changedNode,
             uint32_t updateFlags = 0)
     {
-        updateBucketDatabase(bid,
+        updateBucketDatabase(bucket,
                              toVector<BucketCopy>(changedNode),
                              updateFlags);
     }
@@ -140,8 +136,7 @@ public:
      * Fetch bucket info about the given bucket from the given node.
      * Used when we get BUCKET_NOT_FOUND.
      */
-    void recheckBucketInfo(uint16_t nodeIdx,
-                           const document::BucketId& id);
+    void recheckBucketInfo(uint16_t nodeIdx, const document::Bucket &bucket);
 
     /**
      * Returns the bucket id corresponding to the given document id.
@@ -157,11 +152,8 @@ public:
         return _distributor;
     }
 
-    virtual BucketDatabase& getBucketDatabase() = 0;
-    virtual const BucketDatabase& getBucketDatabase() const = 0;
-    // FIXME this hides the StorageComponent::getDistribution method, which
-    // even has a different signature altogether...!
-    virtual const lib::Distribution& getDistribution() const = 0;
+    DistributorBucketSpaceRepo &getBucketSpaceRepo() { return _bucketSpaceRepo; }
+    const DistributorBucketSpaceRepo &getBucketSpaceRepo() const { return _bucketSpaceRepo; }
 
     /**
      * Finds a bucket that has the same direct parent as the given bucket
@@ -170,13 +162,10 @@ public:
     document::BucketId getSibling(const document::BucketId& bid) const;
 
     /**
-     * Gets a bucket that is split correctly according to other buckets that
-     * are in the bucket database. For instance, if you have a sibling bucket of
-     * the bucket, a similarly split bucket should be created.
+     * Create a bucket that is split correctly according to other buckets that
+     * are in the bucket database.
      */
-    document::BucketId getAppropriateBucket(const document::BucketId& bid);
-
-    BucketDatabase::Entry createAppropriateBucket(const document::BucketId& bid);
+    BucketDatabase::Entry createAppropriateBucket(const document::Bucket &bucket);
 
     /**
      * Returns true if the node is currently initializing.
@@ -186,12 +175,13 @@ public:
 private:
     std::vector<uint16_t> enumerateDownNodes(
             const lib::ClusterState& s,
-            const document::BucketId& bucket,
+            const document::Bucket &bucket,
             const std::vector<BucketCopy>& candidates) const;
     DistributorInterface& _distributor;
 
 protected:
 
+    DistributorBucketSpaceRepo &_bucketSpaceRepo;
     vespalib::Lock _sync;
 };
 

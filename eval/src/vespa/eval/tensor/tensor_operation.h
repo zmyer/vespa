@@ -5,8 +5,7 @@
 #include "direct_tensor_builder.h"
 #include <vespa/eval/tensor/sparse/direct_sparse_tensor_builder.h>
 
-namespace vespalib {
-namespace tensor {
+namespace vespalib::tensor {
 
 /**
  * Base class for an operation over tensors.
@@ -28,17 +27,17 @@ protected:
 public:
     TensorOperation()
         : _builder(),
-          _type(_builder.type()),
+          _type(_builder.fast_type()),
           _cells(_builder.cells())
     {}
     TensorOperation(const eval::ValueType &type)
         : _builder(type),
-          _type(_builder.type()),
+          _type(_builder.fast_type()),
           _cells(_builder.cells())
     {}
     TensorOperation(const eval::ValueType &type, const Cells &cells)
         : _builder(type, cells),
-          _type(_builder.type()),
+          _type(_builder.fast_type()),
           _cells(_builder.cells())
     {}
     Tensor::UP result() {
@@ -46,5 +45,4 @@ public:
     }
 };
 
-} // namespace vespalib::tensor
-} // namespace vespalib
+}

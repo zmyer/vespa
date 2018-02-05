@@ -3,42 +3,77 @@
 #include "dense_dot_product_function.h"
 #include "dense_tensor.h"
 #include "dense_tensor_view.h"
+#include <vespa/eval/eval/operation.h>
 #include <vespa/eval/eval/value.h>
 #include <vespa/eval/tensor/tensor.h>
 
-namespace vespalib {
-namespace tensor {
+namespace vespalib::tensor {
 
 using CellsRef = DenseTensorView::CellsRef;
+using eval::ValueType;
+using eval::TensorFunction;
+using eval::as;
+using eval::Aggr;
+using namespace eval::tensor_function;
+using namespace eval::operation;
 
-DenseDotProductFunction::DenseDotProductFunction(size_t lhsTensorId_, size_t rhsTensorId_)
-    : _lhsTensorId(lhsTensorId_),
-      _rhsTensorId(rhsTensorId_),
+namespace {
+
+CellsRef getCellsRef(const eval::Value &value) {
+    const DenseTensorView &denseTensor = static_cast<const DenseTensorView &>(value);
+    return denseTensor.cellsRef();
+}
+
+void my_op(eval::InterpretedFunction::State &state, uint64_t param) {
+    auto *hw_accelerator = (hwaccelrated::IAccelrated *)(param);
+    DenseTensorView::CellsRef lhsCells = getCellsRef(state.peek(1));
+    DenseTensorView::CellsRef rhsCells = getCellsRef(state.peek(0));
+    size_t numCells = std::min(lhsCells.size(), rhsCells.size());
+    double result = hw_accelerator->dotProduct(lhsCells.cbegin(), rhsCells.cbegin(), numCells);
+    state.pop_pop_push(state.stash.create<eval::DoubleValue>(result));
+}
+
+bool is1dDenseTensor(const ValueType &type) {
+    return (type.is_dense() && (type.dimensions().size() == 1));
+}
+
+bool isDenseDotProduct(const ValueType &res, const ValueType &lhsType, const ValueType &rhsType) {
+    return (res.is_double() &&
+            is1dDenseTensor(lhsType) &&
+            is1dDenseTensor(rhsType) &&
+            (lhsType.dimensions()[0].name == rhsType.dimensions()[0].name));
+}
+
+} // namespace vespalib::tensor::<unnamed>
+
+DenseDotProductFunction::DenseDotProductFunction(const eval::TensorFunction &lhs_in,
+                                                 const eval::TensorFunction &rhs_in)
+    : eval::tensor_function::Op2(eval::ValueType::double_type(), lhs_in, rhs_in),
       _hwAccelerator(hwaccelrated::IAccelrated::getAccelrator())
 {
 }
 
-namespace {
-
-CellsRef
-getCellsRef(const eval::Value &value)
+eval::InterpretedFunction::Instruction
+DenseDotProductFunction::compile_self(Stash &) const
 {
-    const Tensor *tensor = static_cast<const Tensor *>(value.as_tensor());
-    const DenseTensorView *denseTensor = static_cast<const DenseTensorView *>(tensor);
-    return denseTensor->cellsRef();
+    return eval::InterpretedFunction::Instruction(my_op, (uint64_t)(_hwAccelerator.get()));
 }
 
-}
-
-const eval::Value &
-DenseDotProductFunction::eval(const Input &input, Stash &stash) const
+const TensorFunction &
+DenseDotProductFunction::optimize(const eval::TensorFunction &expr, Stash &stash)
 {
-    DenseTensorView::CellsRef lhsCells = getCellsRef(input.get_tensor(_lhsTensorId));
-    DenseTensorView::CellsRef rhsCells = getCellsRef(input.get_tensor(_rhsTensorId));
-    size_t numCells = std::min(lhsCells.size(), rhsCells.size());
-    double result = _hwAccelerator->dotProduct(lhsCells.cbegin(), rhsCells.cbegin(), numCells);
-    return stash.create<eval::DoubleValue>(result);
+    const Reduce *reduce = as<Reduce>(expr);
+    if (reduce && (reduce->aggr() == Aggr::SUM)) {
+        const Join *join = as<Join>(reduce->child());
+        if (join && (join->function() == Mul::f)) {
+            const TensorFunction &lhs = join->lhs();
+            const TensorFunction &rhs = join->rhs();
+            if (isDenseDotProduct(expr.result_type(), lhs.result_type(), rhs.result_type())) {
+                return stash.create<DenseDotProductFunction>(lhs, rhs);
+            }
+        }
+    }
+    return expr;
 }
 
-} // namespace tensor
-} // namespace vespalib
+} // namespace vespalib::tensor

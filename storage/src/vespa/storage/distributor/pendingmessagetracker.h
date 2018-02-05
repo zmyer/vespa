@@ -10,7 +10,6 @@
 #include <vespa/storageapi/messageapi/returncode.h>
 #include <vespa/storageapi/message/bucket.h>
 #include <vespa/vespalib/stllike/hash_set.h>
-#include <vespa/vespalib/util/sync.h>
 #include <boost/multi_index_container.hpp>
 #include <boost/multi_index/identity.hpp>
 #include <boost/multi_index/member.hpp>
@@ -22,6 +21,7 @@
 #include <set>
 #include <unordered_map>
 #include <chrono>
+#include <mutex>
 
 namespace storage {
 namespace distributor {
@@ -64,7 +64,7 @@ public:
     ~PendingMessageTracker();
 
     void insert(const std::shared_ptr<api::StorageMessage>&);
-    document::BucketId reply(const api::StorageReply& reply);
+    document::Bucket reply(const api::StorageReply& reply);
     void reportHtmlStatus(std::ostream&, const framework::HttpUrlPath&) const override;
 
     void print(std::ostream& out, bool verbose, const std::string& indent) const;
@@ -75,7 +75,7 @@ public:
      * Breaks when the checker returns false.
      */
     void checkPendingMessages(uint16_t node,
-                              const document::BucketId& bid,
+                              const document::Bucket &bucket,
                               Checker& checker) const;
 
     /**
@@ -83,7 +83,7 @@ public:
      * and invokes the given checker with the node, message type and priority.
      * Breaks when the checker returns false.
      */
-    void checkPendingMessages(const document::BucketId& bid,
+    void checkPendingMessages(const document::Bucket &bucket,
                               Checker& checker) const;
 
     /**
@@ -91,7 +91,7 @@ public:
      * messageType pending to bucket bid on the given node.
      */
     bool hasPendingMessage(uint16_t node,
-                           const document::BucketId& bid,
+                           const document::Bucket &bucket,
                            uint32_t messageType) const;
 
     /**
@@ -148,7 +148,7 @@ private:
         uint32_t msgType;
         uint32_t priority;
         uint64_t msgId;
-        document::BucketId bucketId;
+        document::Bucket bucket;
         uint16_t nodeIdx;
         vespalib::string msgText;
 
@@ -156,7 +156,7 @@ private:
                      uint32_t msgType,
                      uint32_t priority,
                      uint64_t msgId,
-                     document::BucketId bucketId,
+                     document::Bucket bucket,
                      uint16_t nodeIdx,
                      const vespalib::string & msgText);
     };
@@ -176,8 +176,8 @@ private:
               MessageEntry,
               boost::multi_index::member<MessageEntry, uint16_t,
                                          &MessageEntry::nodeIdx>,
-              boost::multi_index::member<MessageEntry, document::BucketId,
-                                         &MessageEntry::bucketId>,
+              boost::multi_index::member<MessageEntry, document::Bucket,
+                                         &MessageEntry::bucket>,
               boost::multi_index::member<MessageEntry, uint32_t,
                                          &MessageEntry::msgType>
           >
@@ -187,8 +187,8 @@ private:
     struct CompositeBucketMsgNodeKey
         : boost::multi_index::composite_key<
               MessageEntry,
-              boost::multi_index::member<MessageEntry, document::BucketId,
-                                         &MessageEntry::bucketId>,
+              boost::multi_index::member<MessageEntry, document::Bucket,
+                                         &MessageEntry::bucket>,
               boost::multi_index::member<MessageEntry, uint32_t,
                                          &MessageEntry::msgType>,
               boost::multi_index::member<MessageEntry, uint16_t,
@@ -220,7 +220,7 @@ private:
     // Since distributor is currently single-threaded, this will only
     // contend when status page is being accessed. It is, however, required
     // to be present for that exact purpose.
-    vespalib::Lock _lock;
+    mutable std::mutex _lock;
 
     /**
      * Increment latency and operation count stats for the node the message

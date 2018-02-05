@@ -1,0 +1,26 @@
+# Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
+namespace=vespa.hosted.athenz.instanceproviderservice.config
+
+# Athenz domain
+zones{}.domain                            string
+
+# Athenz service name
+zones{}.serviceName                       string
+
+# Secret name of private Key
+zones{}.secretName                        string
+
+# Secret version
+zones{}.secretVersion                     int
+
+# Athenz principal authority header name
+athenzPrincipalHeaderName                 string        default="Athenz-Principal-Auth"
+
+# Athenz ZTS server url
+ztsUrl                                    string
+
+# Certificate DNS suffix
+certDnsSuffix                             string
+
+# Path to Athenz CA JKS trust store
+athenzCaTrustStore                        string

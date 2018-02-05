@@ -4,11 +4,12 @@ package com.yahoo.vespa.hosted.controller.maintenance;
 import com.yahoo.component.AbstractComponent;
 import com.yahoo.jdisc.Metric;
 import com.yahoo.vespa.hosted.controller.Controller;
-import com.yahoo.vespa.hosted.controller.api.integration.Contacts;
-import com.yahoo.vespa.hosted.controller.api.integration.Issues;
-import com.yahoo.vespa.hosted.controller.api.integration.Properties;
+import com.yahoo.vespa.hosted.controller.api.integration.dns.NameService;
+import com.yahoo.vespa.hosted.controller.api.integration.organization.OwnershipIssues;
+import com.yahoo.vespa.hosted.controller.api.integration.organization.DeploymentIssues;
 import com.yahoo.vespa.hosted.controller.api.integration.chef.Chef;
 import com.yahoo.vespa.hosted.controller.maintenance.config.MaintainerConfig;
+import com.yahoo.vespa.hosted.controller.persistence.CuratorDb;
 
 import java.time.Duration;
 
@@ -26,28 +27,38 @@ public class ControllerMaintenance extends AbstractComponent {
     private final DeploymentExpirer deploymentExpirer;
     private final DeploymentIssueReporter deploymentIssueReporter;
     private final MetricsReporter metricsReporter;
-    private final FailureRedeployer failureRedeployer;
     private final OutstandingChangeDeployer outstandingChangeDeployer;
     private final VersionStatusUpdater versionStatusUpdater;
     private final Upgrader upgrader;
-    private final DelayedDeployer delayedDeployer;
+    private final ReadyJobsTrigger readyJobsTrigger;
+    private final ClusterInfoMaintainer clusterInfoMaintainer;
+    private final ClusterUtilizationMaintainer clusterUtilizationMaintainer;
+    private final DeploymentMetricsMaintainer deploymentMetricsMaintainer;
+    private final ApplicationOwnershipConfirmer applicationOwnershipConfirmer;
+    private final DnsMaintainer dnsMaintainer;
 
     @SuppressWarnings("unused") // instantiated by Dependency Injection
-    public ControllerMaintenance(MaintainerConfig maintainerConfig, Controller controller,
+    public ControllerMaintenance(MaintainerConfig maintainerConfig, Controller controller, CuratorDb curator,
                                  JobControl jobControl, Metric metric, Chef chefClient,
-                                 Contacts contactsClient, Properties propertiesClient, Issues issuesClient) {
+                                 DeploymentIssues deploymentIssues, OwnershipIssues ownershipIssues,
+                                 NameService nameService) {
         Duration maintenanceInterval = Duration.ofMinutes(maintainerConfig.intervalMinutes());
         this.jobControl = jobControl;
         deploymentExpirer = new DeploymentExpirer(controller, maintenanceInterval, jobControl);
-        deploymentIssueReporter = new DeploymentIssueReporter(controller, contactsClient, propertiesClient,
-                                                              issuesClient,  maintenanceInterval, jobControl);
+        deploymentIssueReporter = new DeploymentIssueReporter(controller, deploymentIssues, maintenanceInterval, jobControl);
         metricsReporter = new MetricsReporter(controller, metric, chefClient, jobControl, controller.system());
-        failureRedeployer = new FailureRedeployer(controller, maintenanceInterval, jobControl);
         outstandingChangeDeployer = new OutstandingChangeDeployer(controller, maintenanceInterval, jobControl);
         versionStatusUpdater = new VersionStatusUpdater(controller, Duration.ofMinutes(3), jobControl);
-        upgrader = new Upgrader(controller, maintenanceInterval, jobControl);
-        delayedDeployer = new DelayedDeployer(controller, maintenanceInterval, jobControl);
+        upgrader = new Upgrader(controller, maintenanceInterval, jobControl, curator);
+        readyJobsTrigger = new ReadyJobsTrigger(controller, maintenanceInterval, jobControl);
+        clusterInfoMaintainer = new ClusterInfoMaintainer(controller, Duration.ofHours(2), jobControl);
+        clusterUtilizationMaintainer = new ClusterUtilizationMaintainer(controller, Duration.ofHours(2), jobControl);
+        deploymentMetricsMaintainer = new DeploymentMetricsMaintainer(controller, Duration.ofMinutes(10), jobControl);
+        applicationOwnershipConfirmer = new ApplicationOwnershipConfirmer(controller, Duration.ofHours(12), jobControl, ownershipIssues);
+        dnsMaintainer = new DnsMaintainer(controller, Duration.ofHours(12), jobControl, nameService);
     }
+
+    public Upgrader upgrader() { return upgrader; }
     
     /** Returns control of the maintenance jobs of this */
     public JobControl jobControl() { return jobControl; }
@@ -57,11 +68,15 @@ public class ControllerMaintenance extends AbstractComponent {
         deploymentExpirer.deconstruct();
         deploymentIssueReporter.deconstruct();
         metricsReporter.deconstruct();
-        failureRedeployer.deconstruct();
         outstandingChangeDeployer.deconstruct();
         versionStatusUpdater.deconstruct();
         upgrader.deconstruct();
-        delayedDeployer.deconstruct();
+        readyJobsTrigger.deconstruct();
+        clusterUtilizationMaintainer.deconstruct();
+        clusterInfoMaintainer.deconstruct();
+        deploymentMetricsMaintainer.deconstruct();
+        applicationOwnershipConfirmer.deconstruct();
+        dnsMaintainer.deconstruct();
     }
 
 }

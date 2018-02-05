@@ -3,6 +3,7 @@
 #include "visitoroperation.h"
 #include <vespa/storage/storageserver/storagemetricsset.h>
 #include <vespa/storage/distributor/distributor.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
 #include <vespa/storage/distributor/bucketownership.h>
 #include <vespa/storage/distributor/operations/external/visitororder.h>
 #include <vespa/storage/distributor/visitormetricsset.h>
@@ -45,11 +46,13 @@ VisitorOperation::BucketInfo::toString() const
 
 VisitorOperation::VisitorOperation(
         DistributorComponent& owner,
+        DistributorBucketSpace &bucketSpace,
         const api::CreateVisitorCommand::SP& m,
         const Config& config,
         VisitorMetricSet& metrics)
     : Operation(),
       _owner(owner),
+      _bucketSpace(bucketSpace),
       _msg(m),
       _sentReply(false),
       _config(config),
@@ -275,7 +278,8 @@ VisitorOperation::verifyDistributorIsNotDown(const lib::ClusterState& state)
 void
 VisitorOperation::verifyDistributorOwnsBucket(const document::BucketId& bid)
 {
-    BucketOwnership bo(_owner.checkOwnershipInPendingAndCurrentState(bid));
+    document::Bucket bucket(_msg->getBucketSpace(), bid);
+    BucketOwnership bo(_owner.checkOwnershipInPendingAndCurrentState(bucket));
     if (!bo.isOwned()) {
         verifyDistributorIsNotDown(bo.getNonOwnedState());
         std::string systemStateStr = bo.getNonOwnedState().toString();
@@ -457,7 +461,7 @@ bool
 VisitorOperation::expandBucketAll()
 {
     std::vector<BucketDatabase::Entry> entries;
-    _owner.getBucketDatabase().getAll(_superBucket.bid, entries);
+    _bucketSpace.getBucketDatabase().getAll(_superBucket.bid, entries);
     return pickBucketsToVisit(entries);
 }
 
@@ -465,7 +469,7 @@ bool
 VisitorOperation::expandBucketContaining()
 {
     std::vector<BucketDatabase::Entry> entries;
-    _owner.getBucketDatabase().getParents(_superBucket.bid, entries);
+    _bucketSpace.getBucketDatabase().getParents(_superBucket.bid, entries);
     return pickBucketsToVisit(entries);
 }
 
@@ -518,7 +522,7 @@ VisitorOperation::expandBucketContained()
     uint32_t maxBuckets = _msg->getMaxBucketsPerVisitor();
 
     std::unique_ptr<document::BucketId> bid = getBucketIdAndLast(
-            _owner.getBucketDatabase(),
+            _bucketSpace.getBucketDatabase(),
             _superBucket.bid,
             _lastBucket);
 
@@ -535,7 +539,7 @@ VisitorOperation::expandBucketContained()
         _superBucket.subBucketsVisitOrder.push_back(*bid);
         _superBucket.subBuckets[*bid] = BucketInfo();
 
-        bid = getBucketIdAndLast(_owner.getBucketDatabase(),
+        bid = getBucketIdAndLast(_bucketSpace.getBucketDatabase(),
                                  _superBucket.bid,
                                  *bid);
     }
@@ -843,7 +847,7 @@ VisitorOperation::assignBucketsToNodes(NodeToBucketsMap& nodeToBucketsMap)
             continue;
         }
 
-        BucketDatabase::Entry entry(_owner.getBucketDatabase().get(subBucket));
+        BucketDatabase::Entry entry(_bucketSpace.getBucketDatabase().get(subBucket));
         if (!bucketIsValidAndConsistent(entry)) {
             return false;
         }

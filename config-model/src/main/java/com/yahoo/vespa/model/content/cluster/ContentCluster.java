@@ -7,12 +7,11 @@ import com.yahoo.config.model.ConfigModelContext;
 import com.yahoo.config.model.producer.AbstractConfigProducerRoot;
 import com.yahoo.config.provision.ClusterSpec;
 import com.yahoo.config.provision.Environment;
-import com.yahoo.config.provision.RegionName;
-import com.yahoo.config.provision.SystemName;
 import com.yahoo.config.provision.Zone;
 import com.yahoo.vespa.config.content.MessagetyperouteselectorpolicyConfig;
 import com.yahoo.vespa.config.content.FleetcontrollerConfig;
 import com.yahoo.vespa.config.content.StorDistributionConfig;
+import com.yahoo.vespa.config.content.core.BucketspacesConfig;
 import com.yahoo.vespa.config.content.core.StorDistributormanagerConfig;
 import com.yahoo.documentmodel.NewDocumentType;
 import com.yahoo.documentapi.messagebus.protocol.DocumentProtocol;
@@ -59,13 +58,16 @@ public class ContentCluster extends AbstractConfigProducer implements StorDistri
         StorDistributormanagerConfig.Producer,
         FleetcontrollerConfig.Producer,
         MetricsmanagerConfig.Producer,
-        MessagetyperouteselectorpolicyConfig.Producer {
+        MessagetyperouteselectorpolicyConfig.Producer,
+        BucketspacesConfig.Producer {
 
     // TODO: Make private
     private String documentSelection;
     ContentSearchCluster search;
     private final Map<String, NewDocumentType> documentDefinitions;
     private final Set<NewDocumentType> globallyDistributedDocuments;
+    // Experimental flag (TODO: remove when feature is enabled by default)
+    private boolean enableMultipleBucketSpaces = false;
     com.yahoo.vespa.model.content.StorageGroup rootGroup;
     StorageCluster storageNodes;
     DistributorCluster distributorNodes;
@@ -146,6 +148,10 @@ public class ContentCluster extends AbstractConfigProducer implements StorDistri
             ModelElement tuning = contentElement.getChild("tuning");
             if (tuning != null) {
                 setupTuning(c, tuning);
+            }
+            ModelElement experimental = contentElement.getChild("experimental");
+            if (experimental != null) {
+                setupExperimental(c, experimental);
             }
 
             if (context.getParentProducer().getRoot() == null) return c;
@@ -244,6 +250,13 @@ public class ContentCluster extends AbstractConfigProducer implements StorDistri
             }
         }
 
+        private void setupExperimental(ContentCluster cluster, ModelElement experimental) {
+            Boolean enableMultipleBucketSpaces = experimental.childAsBoolean("enable-multiple-bucket-spaces");
+            if (enableMultipleBucketSpaces != null) {
+                cluster.enableMultipleBucketSpaces = enableMultipleBucketSpaces;
+            }
+        }
+
         private void validateGroupSiblings(String cluster, StorageGroup group) {
             HashSet<String> siblings = new HashSet<>();
             for (StorageGroup g : group.getSubgroups()) {
@@ -328,9 +341,11 @@ public class ContentCluster extends AbstractConfigProducer implements StorDistri
         }
 
         private List<HostResource> drawControllerHosts(int count, StorageGroup rootGroup, Collection<ContainerModel> containers) {
-            List<HostResource> hosts = drawContentHostsRecursively(count, rootGroup);
+            List<HostResource> hostsByName = drawContentHostsRecursively(count, false, rootGroup);
+            List<HostResource> hostsByIndex = drawContentHostsRecursively(count, true, rootGroup);
             // if (hosts.size() < count) // supply with containers TODO: Currently disabled due to leading to topology change problems
             //     hosts.addAll(drawContainerHosts(count - hosts.size(), containers, new HashSet<>(hosts)));
+            List<HostResource> hosts = HostResource.pickHosts(hostsByName, hostsByIndex, count, 1);
             if (hosts.size() % 2 == 0) // ZK clusters of even sizes are less available (even in the size=2 case)
                 hosts = hosts.subList(0, hosts.size()-1);
             return hosts;
@@ -357,7 +372,7 @@ public class ContentCluster extends AbstractConfigProducer implements StorDistri
             // have one cluster controller
             List<HostResource> uniqueHostsWithoutClusterController = allHosts.stream()
                     .filter(h -> ! usedHosts.contains(h))
-                    .filter(h -> ! hostHasClusterController(h.getHostName(), allHosts))
+                    .filter(h -> ! hostHasClusterController(h.getHostname(), allHosts))
                     .distinct()
                     .collect(Collectors.toList());
 
@@ -381,7 +396,7 @@ public class ContentCluster extends AbstractConfigProducer implements StorDistri
         /** Returns whether any host having the given hostname has a cluster controller */
         private boolean hostHasClusterController(String hostname, List<HostResource> hosts) {
             for (HostResource host : hosts) {
-                if ( ! host.getHostName().equals(hostname)) continue;
+                if ( ! host.getHostname().equals(hostname)) continue;
 
                 if (hasClusterController(host))
                     return true;
@@ -403,20 +418,24 @@ public class ContentCluster extends AbstractConfigProducer implements StorDistri
          */
         // Note: This method cannot be changed to draw different nodes without ensuring that it will draw nodes
         //       which overlaps with previously drawn nodes as this will prevent rolling upgrade
-        private List<HostResource> drawContentHostsRecursively(int count, StorageGroup group) {
+        private List<HostResource> drawContentHostsRecursively(int count, boolean byIndex, StorageGroup group) {
             Set<HostResource> hosts = new HashSet<>();
             if (group.getNodes().isEmpty()) {
                 int hostsPerSubgroup = (int)Math.ceil((double)count / group.getSubgroups().size());
                 for (StorageGroup subgroup : group.getSubgroups())
-                    hosts.addAll(drawContentHostsRecursively(hostsPerSubgroup, subgroup));
+                    hosts.addAll(drawContentHostsRecursively(hostsPerSubgroup, byIndex, subgroup));
             }
             else {
                 hosts.addAll(group.getNodes().stream()
-                    .filter(node -> ! node.isRetired()) // Avoid retired controllers to avoid surprises on expiry
-                    .map(StorageNode::getHostResource).collect(Collectors.toList()));
+                     .filter(node -> ! node.isRetired()) // Avoid retired controllers to avoid surprises on expiry
+                     .map(StorageNode::getHostResource).collect(Collectors.toList()));
             }
+
             List<HostResource> sortedHosts = new ArrayList<>(hosts);
-            Collections.sort(sortedHosts);
+            if (byIndex)
+                sortedHosts.sort((a, b) -> (a.comparePrimarilyByIndexTo(b)));
+            else // by name
+                Collections.sort(sortedHosts);
             sortedHosts = sortedHosts.subList(0, Math.min(count, hosts.size()));
             return sortedHosts;
         }
@@ -524,6 +543,10 @@ public class ContentCluster extends AbstractConfigProducer implements StorDistri
      */
     public Map<String, NewDocumentType> getDocumentDefinitions() { return documentDefinitions; }
 
+    public boolean isGloballyDistributed(NewDocumentType docType) {
+        return globallyDistributedDocuments.contains(docType);
+    }
+
     public final ContentSearchCluster getSearch() { return search; }
 
     public Redundancy redundancy() { return redundancy; }
@@ -617,7 +640,8 @@ public class ContentCluster extends AbstractConfigProducer implements StorDistri
                 throw new IllegalArgumentException("In indexed content cluster '" + search.getClusterName() + "': Using multi-level dispatch setup is not supported when using hierarchical distribution.");
             }
         }
-        new GlobalDistributionValidator().validate(documentDefinitions, globallyDistributedDocuments, redundancy);
+        new ReservedDocumentTypeNameValidator().validate(documentDefinitions);
+        new GlobalDistributionValidator().validate(documentDefinitions, globallyDistributedDocuments, redundancy, enableMultipleBucketSpaces);
     }
 
     public static Map<String, Integer> METRIC_INDEX_MAP = new TreeMap<>();
@@ -688,5 +712,21 @@ public class ContentCluster extends AbstractConfigProducer implements StorDistri
             }
         }
 
+    }
+
+    private static final String DEFAULT_BUCKET_SPACE = "default";
+    private static final String GLOBAL_BUCKET_SPACE = "global";
+
+    @Override
+    public void getConfig(BucketspacesConfig.Builder builder) {
+        for (NewDocumentType docType : getDocumentDefinitions().values()) {
+            BucketspacesConfig.Documenttype.Builder docTypeBuilder = new BucketspacesConfig.Documenttype.Builder();
+            docTypeBuilder.name(docType.getName());
+            String bucketSpace = ((enableMultipleBucketSpaces && isGloballyDistributed(docType))
+                    ? GLOBAL_BUCKET_SPACE : DEFAULT_BUCKET_SPACE);
+            docTypeBuilder.bucketspace(bucketSpace);
+            builder.documenttype(docTypeBuilder);
+        }
+        builder.enable_multiple_bucket_spaces(enableMultipleBucketSpaces);
     }
 }

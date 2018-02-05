@@ -5,9 +5,12 @@
 #include <vespa/storageapi/message/persistence.h>
 #include <vespa/vdslib/state/nodestate.h>
 #include <vespa/document/fieldvalue/document.h>
+#include <vespa/storage/distributor/distributor_bucket_space.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP(".distributor.callback.doc.get");
+
+using document::BucketSpace;
 
 namespace storage::distributor {
 
@@ -44,10 +47,12 @@ GetOperation::GroupId::operator==(const GroupId& other) const
 }
 
 GetOperation::GetOperation(DistributorComponent& manager,
+                           DistributorBucketSpace &bucketSpace,
                            const std::shared_ptr<api::GetCommand> & msg,
                            PersistenceOperationMetricSet& metric)
     : Operation(),
       _manager(manager),
+      _bucketSpace(bucketSpace),
       _msg(msg),
       _returnCode(api::ReturnCode::OK),
       _doc((document::Document*)NULL),
@@ -98,9 +103,10 @@ GetOperation::sendForChecksum(DistributorMessageSender& sender,
     const int best = findBestUnsentTarget(res);
 
     if (best != -1) {
+        document::Bucket bucket(_msg->getBucket().getBucketSpace(), id);
         std::shared_ptr<api::GetCommand> command(
                 std::make_shared<api::GetCommand>(
-                        id,
+                        bucket,
                         _msg->getDocumentId(),
                         _msg->getFieldSet(),
                         _msg->getBeforeTimestamp()));
@@ -236,7 +242,7 @@ GetOperation::assignTargetNodeGroups()
     document::BucketId bid = bucketIdFactory.getBucketId(_msg->getDocumentId());
 
     std::vector<BucketDatabase::Entry> entries;
-    _manager.getBucketDatabase().getParents(bid, entries);
+    _bucketSpace.getBucketDatabase().getParents(bid, entries);
 
     for (uint32_t j = 0; j < entries.size(); ++j) {
         const BucketDatabase::Entry& e = entries[j];

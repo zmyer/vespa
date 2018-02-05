@@ -2,46 +2,51 @@
 
 #include <vespa/vespalib/testkit/testapp.h>
 
+#include <tests/proton/common/dummydbowner.h>
 #include <vespa/config-imported-fields.h>
 #include <vespa/config-rank-profiles.h>
 #include <vespa/config-summarymap.h>
-#include <vespa/searchsummary/config/config-juniperrc.h>
 #include <vespa/document/base/testdocman.h>
+#include <vespa/fastos/file.h>
 #include <vespa/persistence/conformancetest/conformancetest.h>
+#include <vespa/document/test/make_bucket_space.h>
 #include <vespa/searchcommon/common/schemaconfigurer.h>
+#include <vespa/searchcore/proton/common/hw_info.h>
 #include <vespa/searchcore/proton/matching/querylimiter.h>
+#include <vespa/searchcore/proton/metrics/metricswireservice.h>
 #include <vespa/searchcore/proton/persistenceengine/ipersistenceengineowner.h>
 #include <vespa/searchcore/proton/persistenceengine/persistenceengine.h>
+#include <vespa/searchcore/proton/server/bootstrapconfig.h>
 #include <vespa/searchcore/proton/server/document_db_maintenance_config.h>
 #include <vespa/searchcore/proton/server/documentdb.h>
 #include <vespa/searchcore/proton/server/documentdbconfigmanager.h>
 #include <vespa/searchcore/proton/server/fileconfigmanager.h>
 #include <vespa/searchcore/proton/server/memoryconfigstore.h>
-#include <vespa/searchcore/proton/server/bootstrapconfig.h>
-#include <vespa/searchcore/proton/metrics/metricswireservice.h>
 #include <vespa/searchcore/proton/server/persistencehandlerproxy.h>
 #include <vespa/searchlib/index/dummyfileheadercontext.h>
 #include <vespa/searchlib/transactionlog/translogserver.h>
-#include <tests/proton/common/dummydbowner.h>
+#include <vespa/searchsummary/config/config-juniperrc.h>
+#include <vespa/config-bucketspaces.h>
 #include <vespa/vespalib/io/fileutil.h>
-#include <vespa/searchcore/proton/common/hw_info.h>
-#include <vespa/fastos/file.h>
 
 #include <vespa/log/log.h>
 LOG_SETUP("persistenceconformance_test");
 
 using namespace config;
 using namespace proton;
-using namespace vespa::config::search;
+using namespace cloud::config::filedistribution;
 using namespace vespa::config::search::core;
 using namespace vespa::config::search::summary;
-using namespace cloud::config::filedistribution;
+using namespace vespa::config::search;
+using vespa::config::content::core::BucketspacesConfig;
 
 using std::shared_ptr;
+using document::BucketSpace;
 using document::DocumentType;
 using document::DocumentTypeRepo;
 using document::DocumenttypesConfig;
 using document::TestDocMan;
+using document::test::makeBucketSpace;
 using search::TuneFileDocumentDB;
 using search::index::DummyFileHeaderContext;
 using search::index::Schema;
@@ -128,6 +133,7 @@ public:
                         std::make_shared<TuneFileDocumentDB>(),
                         schema,
                         std::make_shared<DocumentDBMaintenanceConfig>(),
+                        search::LogDocumentStore::Config(),
                         "client",
                         docTypeName.getName()));
     }
@@ -157,7 +163,8 @@ private:
 public:
     DocumentDBFactory(const vespalib::string &baseDir, int tlsListenPort);
     ~DocumentDBFactory();
-    DocumentDB::SP create(const DocTypeName &docType,
+    DocumentDB::SP create(BucketSpace bucketSpace,
+                          const DocTypeName &docType,
                           const ConfigFactory &factory) {
         DocumentDBConfig::SP snapshot = factory.create(docType);
         vespalib::mkdir(_baseDir, false);
@@ -175,7 +182,8 @@ public:
                                                   factory.getTypeRepo(),
                                                   std::make_shared<ProtonConfig>(),
                                                   std::make_shared<FiledistributorrpcConfig>(),
-                                                  tuneFileDocDB));
+                                                  std::make_shared<BucketspacesConfig>(),
+                                                  tuneFileDocDB, HwInfo()));
         mgr.forwardConfig(b);
         mgr.nextGeneration(0);
         return DocumentDB::SP(
@@ -185,15 +193,15 @@ public:
                                _queryLimiter,
                                _clock,
                                docType,
-                               ProtonConfig(),
+                               bucketSpace,
+                               *b->getProtonConfigSP(),
                                const_cast<DocumentDBFactory &>(*this),
                                _summaryExecutor,
                                _summaryExecutor,
-                               NULL,
+                               _tls,
                                _metricsWireService,
                                _fileHeaderContext,
-                               _config_stores.getConfigStore(
-                                       docType.toString()),
+                               _config_stores.getConfigStore(docType.toString()),
                                std::make_shared<vespalib::ThreadStackExecutor>
                                (16, 128 * 1024),
                                HwInfo()));
@@ -224,7 +232,9 @@ public:
     {
         DocTypeVector types = cfgFactory.getDocTypes();
         for (size_t i = 0; i < types.size(); ++i) {
-            DocumentDB::SP docDb = docDbFactory.create(types[i],
+            BucketSpace bucketSpace(makeBucketSpace(types[i].getName()));
+            DocumentDB::SP docDb = docDbFactory.create(bucketSpace,
+                                                       types[i],
                                                        cfgFactory);
             docDb->start();
             docDb->waitForOnlineState();
@@ -316,7 +326,7 @@ public:
             LOG(info, "putHandler(%s)", itr->first.toString().c_str());
             IPersistenceHandler::SP proxy(
                     new PersistenceHandlerProxy(itr->second));
-            putHandler(itr->first, proxy);
+            putHandler(itr->second->getBucketSpace(), itr->first, proxy);
         }
     }
 
@@ -328,7 +338,7 @@ public:
         const DocumentDBMap &docDbs = _docDbRepo->getDocDbs();
         for (DocumentDBMap::const_iterator itr = docDbs.begin();
              itr != docDbs.end(); ++itr) {
-            IPersistenceHandler::SP proxy(removeHandler(itr->first));
+            IPersistenceHandler::SP proxy(removeHandler(itr->second->getBucketSpace(), itr->first));
         }
     }
 
@@ -381,6 +391,7 @@ public:
 
     virtual bool hasPersistence() const override { return true; }
     virtual bool supportsActiveState() const override { return true; }
+    virtual bool supportsBucketSpaces() const override { return true; }
 };
 
 
@@ -580,6 +591,11 @@ TEST_F("require thant testJoinSameSourceBucketsTargetExists() works",
        TestFixture)
 {
     f.test.testJoinSameSourceBucketsTargetExists();
+}
+
+TEST_F("require that multiple bucket spaces works", TestFixture)
+{
+    f.test.testBucketSpaces();
 }
 
 // *** Run all conformance tests, but ignore the results BEGIN ***

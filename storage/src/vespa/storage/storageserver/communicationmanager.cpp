@@ -1,43 +1,42 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
+
 #include "communicationmanager.h"
 #include "fnetlistener.h"
 #include "rpcrequestwrapper.h"
-#include <vespa/storage/config/config-stor-server.h>
-#include <vespa/storage/common/nodestateupdater.h>
-#include <vespa/storageframework/generic/clock/timer.h>
 #include <vespa/documentapi/messagebus/messages/wrongdistributionreply.h>
-#include <vespa/storageapi/message/state.h>
-#include <vespa/messagebus/rpcmessagebus.h>
-#include <vespa/messagebus/network/rpcnetworkparams.h>
 #include <vespa/messagebus/emptyreply.h>
+#include <vespa/messagebus/network/rpcnetworkparams.h>
+#include <vespa/messagebus/rpcmessagebus.h>
+#include <vespa/storage/common/bucket_resolver.h>
+#include <vespa/storage/common/nodestateupdater.h>
+#include <vespa/storage/config/config-stor-server.h>
+#include <vespa/storage/storageserver/configurable_bucket_resolver.h>
+#include <vespa/storageapi/message/state.h>
+#include <vespa/storageframework/generic/clock/timer.h>
 #include <vespa/vespalib/stllike/asciistream.h>
-#include <vespa/vespalib/util/stringfmt.h>
 #include <vespa/vespalib/stllike/hash_map.hpp>
+#include <vespa/vespalib/util/stringfmt.h>
 
 #include <vespa/log/bufferedlogger.h>
+#include <vespa/document/bucket/fixed_bucket_spaces.h>
+
 LOG_SETUP(".communication.manager");
 
 using vespalib::make_string;
+using document::FixedBucketSpaces;
 
 namespace storage {
 
-PriorityQueue::PriorityQueue() :
-    _queue(),
-    _queueMonitor(),
-    _msgCounter(0)
-{ }
+Queue::Queue() = default;
+Queue::~Queue() = default;
 
-PriorityQueue::~PriorityQueue()
-{ }
-
-bool PriorityQueue::getNext(std::shared_ptr<api::StorageMessage>& msg, int timeout)
-{
+bool Queue::getNext(std::shared_ptr<api::StorageMessage>& msg, int timeout) {
     vespalib::MonitorGuard sync(_queueMonitor);
     bool first = true;
     while (true) { // Max twice
         if (!_queue.empty()) {
             LOG(spam, "Picking message from queue");
-            msg = _queue.top().second;
+            msg = std::move(_queue.front());
             _queue.pop();
             return true;
         }
@@ -51,31 +50,18 @@ bool PriorityQueue::getNext(std::shared_ptr<api::StorageMessage>& msg, int timeo
     return false;
 }
 
-void
-PriorityQueue::enqueue(const std::shared_ptr<api::StorageMessage>& msg)
-{
+void Queue::enqueue(std::shared_ptr<api::StorageMessage> msg) {
     vespalib::MonitorGuard sync(_queueMonitor);
-    const uint8_t priority(msg->getType().isReply()
-            ? FIXED_REPLY_PRIORITY
-            : msg->getPriority());
-    Key key(priority, _msgCounter);
-    // We make a simplifying--though reasonable--assumption that we'll never
-    // process more than UINT64_MAX replies before process restart.
-    ++_msgCounter;
-    _queue.push(std::make_pair(key, msg));
+    _queue.emplace(std::move(msg));
     sync.unsafeSignalUnlock();
 }
 
-void
-PriorityQueue::signal()
-{
+void Queue::signal() {
     vespalib::MonitorGuard sync(_queueMonitor);
     sync.unsafeSignalUnlock();
 }
 
-int
-PriorityQueue::size()
-{
+size_t Queue::size() const {
     vespalib::MonitorGuard sync(_queueMonitor);
     return _queue.size();
 }
@@ -93,13 +79,6 @@ StorageTransportContext::StorageTransportContext(std::unique_ptr<RPCRequestWrapp
 { }
 
 StorageTransportContext::~StorageTransportContext() { }
-
-const framework::MemoryAllocationType&
-CommunicationManager::getAllocationType(api::StorageMessage& msg) const
-{
-    return _messageAllocTypes.getType(msg.getType().getId());
-}
-
 
 void
 CommunicationManager::receiveStorageReply(const std::shared_ptr<api::StorageReply>& reply)
@@ -142,8 +121,13 @@ CommunicationManager::handleMessage(std::unique_ptr<mbus::Message> msg)
 
         assert(docMsgPtr.get());
 
-        std::unique_ptr<api::StorageCommand> cmd(
-                _docApiConverter.toStorageAPI(static_cast<documentapi::DocumentMessage&>(*docMsgPtr), _component.getTypeRepo()));
+        std::unique_ptr<api::StorageCommand> cmd;
+        try {
+            cmd = _docApiConverter.toStorageAPI(static_cast<documentapi::DocumentMessage&>(*docMsgPtr), _component.getTypeRepo());
+        } catch (document::UnknownBucketSpaceException& e) {
+            fail_with_unresolvable_bucket_space(std::move(docMsgPtr), e.getMessage());
+            return;
+        }
 
         if (!cmd.get()) {
             LOGBM(warning, "Unsupported message: StorageApi could not convert message of type %d to a storageapi message",
@@ -155,18 +139,19 @@ CommunicationManager::handleMessage(std::unique_ptr<mbus::Message> msg)
         cmd->setTrace(docMsgPtr->getTrace());
         cmd->setTransportContext(std::unique_ptr<api::TransportContext>(new StorageTransportContext(std::move(docMsgPtr))));
 
-        enqueue(std::shared_ptr<api::StorageCommand>(std::move(cmd)));
+        enqueue(std::move(cmd));
     } else if (protocolName == mbusprot::StorageProtocol::NAME) {
         std::unique_ptr<mbusprot::StorageCommand> storMsgPtr(static_cast<mbusprot::StorageCommand*>(msg.release()));
 
         assert(storMsgPtr.get());
 
-        const std::shared_ptr<api::StorageCommand> & cmd = storMsgPtr->getCommand();
+        //TODO: Can it be moved ?
+        std::shared_ptr<api::StorageCommand> cmd = storMsgPtr->getCommand();
         cmd->setTimeout(storMsgPtr->getTimeRemaining());
         cmd->setTrace(storMsgPtr->getTrace());
         cmd->setTransportContext(std::unique_ptr<api::TransportContext>(new StorageTransportContext(std::move(storMsgPtr))));
 
-        enqueue(cmd);
+        enqueue(std::move(cmd));
     } else {
         LOGBM(warning, "Received unsupported message type %d for protocol '%s'",
               msg->getType(), msg->getProtocol().c_str());
@@ -267,6 +252,36 @@ CommunicationManager::handleReply(std::unique_ptr<mbus::Reply> reply)
     }
 }
 
+void CommunicationManager::fail_with_unresolvable_bucket_space(
+        std::unique_ptr<documentapi::DocumentMessage> msg,
+        const vespalib::string& error_message)
+{
+    LOG(debug, "Could not map DocumentAPI message to internal bucket: %s", error_message.c_str());
+    MBUS_TRACE(msg->getTrace(), 6, "Communication manager: Failing message as its document type has no known bucket space mapping");
+    std::unique_ptr<mbus::Reply> reply(new mbus::EmptyReply());
+    reply->addError(mbus::Error(documentapi::DocumentProtocol::ERROR_REJECTED, error_message));
+    msg->swapState(*reply);
+    _metrics.bucketSpaceMappingFailures.inc();
+    _messageBusSession->reply(std::move(reply));
+}
+
+namespace {
+
+struct PlaceHolderBucketResolver : public BucketResolver {
+    virtual document::Bucket bucketFromId(const document::DocumentId &) const override {
+        return document::Bucket(FixedBucketSpaces::default_space(), document::BucketId(0));
+    }
+    virtual document::BucketSpace bucketSpaceFromName(const vespalib::string &) const override {
+        return FixedBucketSpaces::default_space();
+    }
+    virtual vespalib::string nameFromBucketSpace(const document::BucketSpace &bucketSpace) const override {
+        assert(bucketSpace == FixedBucketSpaces::default_space());
+        return FixedBucketSpaces::to_string(bucketSpace);
+    }
+};
+
+}
+
 CommunicationManager::CommunicationManager(StorageComponentRegister& compReg, const config::ConfigUri & configUri)
     : StorageLink("Communication manager"),
       _component(compReg, "communicationmanager"),
@@ -277,8 +292,7 @@ CommunicationManager::CommunicationManager(StorageComponentRegister& compReg, co
       _count(0),
       _configUri(configUri),
       _closed(false),
-      _docApiConverter(configUri),
-      _messageAllocTypes(_component.getMemoryManager())
+      _docApiConverter(configUri, std::make_shared<PlaceHolderBucketResolver>())
 {
     _component.registerMetricUpdateHook(*this, framework::SecondTime(5));
     _component.registerMetric(_metrics);
@@ -310,9 +324,9 @@ CommunicationManager::~CommunicationManager()
         onClose();
     }
 
-    _sourceSession.reset(0);
-    _messageBusSession.reset(0);
-    _mbus.reset(0);
+    _sourceSession.reset();
+    _messageBusSession.reset();
+    _mbus.reset();
 
     // Clear map of sent messages _before_ we delete any visitor threads to
     // avoid any issues where unloading shared libraries causes messages
@@ -326,12 +340,12 @@ CommunicationManager::~CommunicationManager()
 void CommunicationManager::onClose()
 {
     // Avoid getting config during shutdown
-    _configFetcher.reset(0);
+    _configFetcher.reset();
 
     _closed = true;
 
-    if (_mbus.get()) {
-        if (_messageBusSession.get()) {
+    if (_mbus) {
+        if (_messageBusSession) {
             _messageBusSession->close();
         }
     }
@@ -342,11 +356,11 @@ void CommunicationManager::onClose()
 
     // Stopping pumper thread should stop all incoming messages from being
     // processed.
-    if (_thread.get() != 0) {
+    if (_thread) {
         _thread->interrupt();
         _eventQueue.signal();
         _thread->join();
-        _thread.reset(0);
+        _thread.reset();
     }
 
     // Emptying remaining queued messages
@@ -414,7 +428,8 @@ void CommunicationManager::configure(std::unique_ptr<CommunicationManagerConfig>
         _mbus = std::make_unique<mbus::RPCMessageBus>(
                 mbus::ProtocolSet()
                         .add(std::make_shared<documentapi::DocumentProtocol>(*_component.getLoadTypes(), _component.getTypeRepo()))
-                        .add(std::make_shared<mbusprot::StorageProtocol>(_component.getTypeRepo(), *_component.getLoadTypes())),
+                        .add(std::make_shared<mbusprot::StorageProtocol>(_component.getTypeRepo(), *_component.getLoadTypes(),
+                                                                         _component.enableMultipleBucketSpaces())),
                 params,
                 _configUri);
 
@@ -462,35 +477,11 @@ CommunicationManager::process(const std::shared_ptr<api::StorageMessage>& msg)
 }
 
 void
-CommunicationManager::enqueue(const std::shared_ptr<api::StorageMessage> & msg)
+CommunicationManager::enqueue(std::shared_ptr<api::StorageMessage> msg)
 {
-    using MemoryToken = framework::MemoryToken;
-    assert(msg.get());
-
-    const uint32_t memoryFootprint = msg->getMemoryFootprint();
-    MemoryToken::UP token = _component.getMemoryManager().allocate(getAllocationType(*msg), memoryFootprint * 2,
-                                                                   memoryFootprint * 2, msg->getPriority());
-
-    if (token) {
-        msg->setMemoryToken(std::move(token));
-
-        LOG(spam, "Enq storage message %s, priority %d", msg->toString().c_str(), msg->getPriority());
-        _eventQueue.enqueue(msg);
-    } else {
-        _metrics.failedDueToTooLittleMemory.inc();
-        std::ostringstream ost;
-        ost << "Failed to aquire " << (memoryFootprint * 2)
-            << " bytes of memory to handle command of type "
-            << msg->getType() << "\n";
-        LOG(spam, "%s", ost.str().c_str());
-        api::StorageCommand* cmd(dynamic_cast<api::StorageCommand*>(msg.get()));
-
-        if (cmd) {
-            std::shared_ptr<api::StorageReply> reply(cmd->makeReply());
-            reply->setResult(api::ReturnCode(api::ReturnCode::BUSY, ost.str()));
-            sendReply(reply);
-        }
-    }
+    assert(msg);
+    LOG(spam, "Enq storage message %s, priority %d", msg->toString().c_str(), msg->getPriority());
+    _eventQueue.enqueue(std::move(msg));
 }
 
 bool
@@ -751,10 +742,11 @@ CommunicationManager::run(framework::ThreadHandle& thread)
         if (_eventQueue.getNext(msg, 100)) {
             process(msg);
         }
-        for (Protocols::iterator it(_earlierGenerations.begin());
+        std::lock_guard<std::mutex> guard(_earlierGenerationsLock);
+        for (EarlierProtocols::iterator it(_earlierGenerations.begin());
              !_earlierGenerations.empty() &&
              ((it->first + TEN_MINUTES) < _component.getClock().getTimeInSeconds());
-             _earlierGenerations.begin())
+             it = _earlierGenerations.begin())
         {
             _earlierGenerations.erase(it);
         }
@@ -778,12 +770,16 @@ void CommunicationManager::updateMessagebusProtocol(
         const document::DocumentTypeRepo::SP &repo) {
     if (_mbus.get()) {
         framework::SecondTime now(_component.getClock().getTimeInSeconds());
-        mbus::IProtocol::SP newDocumentProtocol(new documentapi::DocumentProtocol( *_component.getLoadTypes(), repo));
+        auto newDocumentProtocol = std::make_shared<documentapi::DocumentProtocol>(*_component.getLoadTypes(), repo);
+        std::lock_guard<std::mutex> guard(_earlierGenerationsLock);
         _earlierGenerations.push_back(std::make_pair(now, _mbus->getMessageBus().putProtocol(newDocumentProtocol)));
-
-        mbus::IProtocol::SP newStorageProtocol(new mbusprot::StorageProtocol(repo, *_component.getLoadTypes()));
+        mbus::IProtocol::SP newStorageProtocol(new mbusprot::StorageProtocol(repo, *_component.getLoadTypes(), _component.enableMultipleBucketSpaces()));
         _earlierGenerations.push_back(std::make_pair(now, _mbus->getMessageBus().putProtocol(newStorageProtocol)));
     }
+}
+
+void CommunicationManager::updateBucketSpacesConfig(const BucketspacesConfig& config) {
+    _docApiConverter.setBucketResolver(ConfigurableBucketResolver::from_config(config));
 }
 
 } // storage

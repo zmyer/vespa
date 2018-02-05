@@ -12,12 +12,15 @@ import java.util.Optional;
  * and to avoid OSGi exporting those classes.
  */
 public interface Docker {
+    /**
+     * Must be called before any other method. May be called more than once.
+     */
+    void start();
+
     interface CreateContainerCommand {
         CreateContainerCommand withLabel(String name, String value);
         CreateContainerCommand withEnvironment(String name, String value);
         CreateContainerCommand withVolume(String path, String volumePath);
-        CreateContainerCommand withMemoryInMb(long megaBytes);
-        CreateContainerCommand withCpuShares(int shares);
         CreateContainerCommand withNetworkMode(String mode);
         CreateContainerCommand withIpAddress(InetAddress address);
         CreateContainerCommand withUlimit(String name, int softLimit, int hardLimit);
@@ -31,6 +34,7 @@ public interface Docker {
 
     CreateContainerCommand createContainerCommand(
             DockerImage dockerImage,
+            ContainerResources containerResources,
             ContainerName containerName,
             String hostName);
 
@@ -39,6 +43,10 @@ public interface Docker {
         Map<String, Object> getCpuStats();
         Map<String, Object> getMemoryStats();
         Map<String, Object> getBlkioStats();
+    }
+
+    default boolean networkNATed() {
+        return false;
     }
 
     Optional<ContainerStats> getContainerStats(ContainerName containerName);
@@ -109,5 +117,5 @@ public interface Docker {
      */
     ProcessResult executeInContainerAsRoot(ContainerName containerName, Long timeoutSeconds, String... command);
 
-
+    String getGlobalIPv6Address(ContainerName name);
 }

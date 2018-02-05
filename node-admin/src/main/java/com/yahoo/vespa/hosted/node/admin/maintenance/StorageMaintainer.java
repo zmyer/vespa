@@ -9,11 +9,11 @@ import com.yahoo.io.IOUtils;
 import com.yahoo.net.HostName;
 import com.yahoo.system.ProcessExecuter;
 import com.yahoo.vespa.hosted.dockerapi.ContainerName;
-import com.yahoo.vespa.hosted.dockerapi.Docker;
 import com.yahoo.vespa.hosted.dockerapi.metrics.CounterWrapper;
 import com.yahoo.vespa.hosted.dockerapi.metrics.Dimensions;
 import com.yahoo.vespa.hosted.dockerapi.metrics.MetricReceiverWrapper;
 import com.yahoo.vespa.hosted.node.admin.ContainerNodeSpec;
+import com.yahoo.vespa.hosted.node.admin.docker.DockerOperations;
 import com.yahoo.vespa.hosted.node.admin.logging.FilebeatConfigProvider;
 import com.yahoo.vespa.hosted.node.admin.util.Environment;
 import com.yahoo.vespa.hosted.node.admin.util.PrefixLogger;
@@ -36,7 +36,6 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.yahoo.vespa.defaults.Defaults.getDefaults;
@@ -49,7 +48,7 @@ public class StorageMaintainer {
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
     private final CounterWrapper numberOfNodeAdminMaintenanceFails;
-    private final Docker docker;
+    private final DockerOperations dockerOperations;
     private final ProcessExecuter processExecuter;
     private final Environment environment;
     private final Clock clock;
@@ -57,8 +56,8 @@ public class StorageMaintainer {
     private Map<ContainerName, MaintenanceThrottler> maintenanceThrottlerByContainerName = new ConcurrentHashMap<>();
 
 
-    public StorageMaintainer(Docker docker, ProcessExecuter processExecuter, MetricReceiverWrapper metricReceiver, Environment environment, Clock clock) {
-        this.docker = docker;
+    public StorageMaintainer(DockerOperations dockerOperations, ProcessExecuter processExecuter, MetricReceiverWrapper metricReceiver, Environment environment, Clock clock) {
+        this.dockerOperations = dockerOperations;
         this.processExecuter = processExecuter;
         this.environment = environment;
         this.clock = clock;
@@ -98,7 +97,7 @@ public class StorageMaintainer {
             vespaSchedule.writeTo(yamasAgentFolder);
             hostLifeSchedule.writeTo(yamasAgentFolder);
             final String[] restartYamasAgent = new String[]{"service", "yamas-agent", "restart"};
-            docker.executeInContainerAsRoot(containerName, restartYamasAgent);
+            dockerOperations.executeCommandInContainerAsRoot(containerName, restartYamasAgent);
         } catch (IOException e) {
             throw new RuntimeException("Failed to write secret-agent schedules for " + containerName, e);
         }
@@ -139,7 +138,7 @@ public class StorageMaintainer {
         Process duCommand = new ProcessBuilder().command(command).start();
         if (!duCommand.waitFor(60, TimeUnit.SECONDS)) {
             duCommand.destroy();
-            throw new RuntimeException("Disk usage command timedout, aborting.");
+            throw new RuntimeException("Disk usage command timed out, aborting.");
         }
         String output = IOUtils.readAll(new InputStreamReader(duCommand.getInputStream()));
         String[] results = output.split("\t");
@@ -307,20 +306,33 @@ public class StorageMaintainer {
 
     /**
      * Runs node-maintainer's SpecVerifier and returns its output
+     * @param nodeSpec Node specification containing the excepted values we want to verify against
+     * @return new combined hardware divergence
      * @throws RuntimeException if exit code != 0
      */
-    public String getHardwareDivergence() {
-        String configServers = environment.getConfigServerHosts().stream()
-                .map(configServer -> "http://" +  configServer + ":" + 4080)
-                .collect(Collectors.joining(","));
-        return executeMaintainer("com.yahoo.vespa.hosted.node.verification.spec.SpecVerifier", configServers);
+    public String getHardwareDivergence(ContainerNodeSpec nodeSpec) {
+        List<String> arguments = new ArrayList<>(Arrays.asList("specification",
+                "--disk", Double.toString(nodeSpec.minDiskAvailableGb),
+                "--memory", Double.toString(nodeSpec.minMainMemoryAvailableGb),
+                "--cpu_cores", Double.toString(nodeSpec.minCpuCores),
+                "--is_ssd", Boolean.toString(nodeSpec.fastDisk),
+                "--ips", String.join(",", nodeSpec.ipAddresses)));
+
+        if (nodeSpec.hardwareDivergence.isPresent()) {
+            arguments.add("--divergence");
+            arguments.add(nodeSpec.hardwareDivergence.get());
+        }
+
+        return executeMaintainer("com.yahoo.vespa.hosted.node.verification.Main", arguments.toArray(new String[0]));
     }
 
 
     private String executeMaintainer(String mainClass, String... args) {
         String[] command = Stream.concat(
-                Stream.of("sudo", "VESPA_HOME=" + getDefaults().vespaHome(),
-                        getDefaults().underVespaHome("libexec/vespa/node-admin/maintenance.sh"), mainClass),
+                Stream.of("sudo",
+                        "VESPA_HOME=" + getDefaults().vespaHome(),
+                        getDefaults().underVespaHome("libexec/vespa/node-admin/maintenance.sh"),
+                        mainClass),
                 Stream.of(args))
                 .toArray(String[]::new);
 
@@ -333,7 +345,7 @@ public class StorageMaintainer {
                         String.format("Maintainer failed to execute command: %s, Exit code: %d, Stdout/stderr: %s",
                                 Arrays.toString(command), result.getFirst(), result.getSecond()));
             }
-            return result.getSecond();
+            return result.getSecond().trim();
         } catch (IOException e) {
             throw new RuntimeException("Failed to execute maintainer", e);
         }

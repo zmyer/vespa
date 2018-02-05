@@ -7,15 +7,12 @@ import com.yahoo.cloud.config.RoutingProviderConfig;
 import com.yahoo.component.ComponentId;
 import com.yahoo.component.ComponentSpecification;
 import com.yahoo.config.FileReference;
-import com.yahoo.config.application.api.DeploymentSpec;
-import com.yahoo.config.docproc.DocprocConfig;
-import com.yahoo.config.docproc.SchemamappingConfig;
 import com.yahoo.config.application.api.ApplicationMetaData;
 import com.yahoo.config.application.api.ComponentInfo;
+import com.yahoo.config.docproc.DocprocConfig;
+import com.yahoo.config.docproc.SchemamappingConfig;
 import com.yahoo.config.model.ApplicationConfigProducerRoot;
 import com.yahoo.config.model.producer.AbstractConfigProducer;
-import com.yahoo.config.model.producer.AbstractConfigProducerRoot;
-import com.yahoo.config.provision.Rotation;
 import com.yahoo.config.provision.Zone;
 import com.yahoo.container.BundlesConfig;
 import com.yahoo.container.ComponentsConfig;
@@ -65,8 +62,8 @@ import com.yahoo.vespa.model.container.component.ConfigProducerGroup;
 import com.yahoo.vespa.model.container.component.DiscBindingsConfigGenerator;
 import com.yahoo.vespa.model.container.component.FileStatusHandlerComponent;
 import com.yahoo.vespa.model.container.component.Handler;
-import com.yahoo.vespa.model.container.component.SimpleComponent;
 import com.yahoo.vespa.model.container.component.Servlet;
+import com.yahoo.vespa.model.container.component.SimpleComponent;
 import com.yahoo.vespa.model.container.component.StatisticsComponent;
 import com.yahoo.vespa.model.container.component.chain.ProcessingHandler;
 import com.yahoo.vespa.model.container.docproc.ContainerDocproc;
@@ -82,11 +79,9 @@ import com.yahoo.vespa.model.content.Content;
 import com.yahoo.vespa.model.search.AbstractSearchCluster;
 import com.yahoo.vespa.model.utils.FileSender;
 import com.yahoo.vespaclient.config.FeederConfig;
-
 import edu.umd.cs.findbugs.annotations.NonNull;
 import edu.umd.cs.findbugs.annotations.Nullable;
 
-import java.io.Reader;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -220,12 +215,12 @@ public final class ContainerCluster
         addSimpleComponent(com.yahoo.concurrent.classlock.ClassLocking.class);
         addSimpleComponent("com.yahoo.jdisc.http.filter.SecurityFilterInvoker");
         addSimpleComponent(SIMPLE_LINGUISTICS_PROVIDER);
-        addSimpleComponent("com.yahoo.container.jdisc.SslKeyStoreFactoryProvider");
         addSimpleComponent("com.yahoo.container.jdisc.SecretStoreProvider");
         addSimpleComponent("com.yahoo.container.jdisc.CertificateStoreProvider");
         addSimpleComponent("com.yahoo.container.jdisc.metric.MetricConsumerProviderProvider");
         addSimpleComponent("com.yahoo.container.jdisc.metric.MetricProvider");
         addSimpleComponent("com.yahoo.container.jdisc.metric.MetricUpdater");
+        addSimpleComponent(com.yahoo.container.jdisc.LoggingRequestHandler.Context.class);
         addSimpleComponent(com.yahoo.metrics.simple.MetricManager.class.getName(), null, MetricProperties.BUNDLE_SYMBOLIC_NAME);
         addSimpleComponent(com.yahoo.metrics.simple.jdisc.JdiscMetricsFactory.class.getName(), null, MetricProperties.BUNDLE_SYMBOLIC_NAME);
         addSimpleComponent("com.yahoo.container.jdisc.state.StateMonitor");
@@ -238,6 +233,9 @@ public final class ContainerCluster
 
     public void setZone(Zone zone) {
         this.zone = zone;
+    }
+    public Zone getZone() {
+        return zone;
     }
 
     public void addMetricStateHandler() {
@@ -381,63 +379,12 @@ public final class ContainerCluster
         container.setClusterName(name);
         container.setProp("clustername", name)
                 .setProp("index", this.containers.size());
-        setRotations(container, getRotations(), getGlobalServiceId(), name);
-        container.setProp("activeRotation", Boolean.toString(getActiveRotation()));
         containers.add(container);
     }
 
     public void addContainers(Collection<Container> containers) {
         for (Container container : containers) {
             addContainer(container);
-        }
-    }
-
-    private Optional<String> getGlobalServiceId() {
-        Optional<DeploymentSpec> deploymentSpec = getDeploymentSpec();
-        if (deploymentSpec.isPresent()) return deploymentSpec.get().globalServiceId();
-        return Optional.empty();
-    }
-
-    private Set<Rotation> getRotations() {
-        return Optional.ofNullable(getRoot())
-                .map(root -> root.getDeployState().getRotations())
-                .orElse(Collections.emptySet());
-    }
-
-    private boolean getActiveRotation() {
-        return Optional.ofNullable(getRoot())
-                .map(root -> root.getDeployState().getProperties().zone())
-                .map(this::zoneHasActiveRotation)
-                .orElse(false);
-    }
-
-    private boolean zoneHasActiveRotation(Zone zone) {
-        Optional<DeploymentSpec> spec = getDeploymentSpec();
-        if (!spec.isPresent()) {
-            return false;
-        }
-        return spec.get().zones().stream()
-                .anyMatch(declaredZone -> declaredZone.deploysTo(zone.environment(), Optional.of(zone.region())) &&
-                                          declaredZone.active());
-    }
-
-    private Optional<DeploymentSpec> getDeploymentSpec() {
-        Optional<DeploymentSpec> deploymentSpec = Optional.empty();
-        AbstractConfigProducerRoot root = getRoot();
-        if (root != null) {
-            final Optional<Reader> deployment = root.getDeployState().getApplicationPackage().getDeployment();
-            if (deployment.isPresent()) {
-                deploymentSpec = Optional.of(DeploymentSpec.fromXml(deployment.get()));
-            }
-        }
-        return deploymentSpec;
-    }
-
-    private void setRotations(Container container, Set<Rotation> rotations, Optional<String> globalServiceId, String containerClusterName) {
-        if ( ! rotations.isEmpty() && globalServiceId.isPresent()) {
-            if (containerClusterName.equals(globalServiceId.get())) {
-                container.setProp("rotations", rotations.stream().map(Rotation::getId).collect(Collectors.joining(",")));
-            }
         }
     }
 
@@ -858,5 +805,4 @@ public final class ContainerCluster
             this.containerCoreMemory = containerCoreMemory;
         }
     }
-
 }

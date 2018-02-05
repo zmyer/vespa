@@ -52,14 +52,14 @@ import java.util.function.Function;
 public interface Tensor {
 
     // ----------------- Accessors
-    
+
     TensorType type();
 
     /** Returns whether this have any cells */
     default boolean isEmpty() { return size() == 0; }
 
     /** Returns the number of cells in this */
-    int size();
+    long size();
 
     /** Returns the value of a cell, or NaN if this cell does not exist/have no value */
     double get(TensorAddress address);
@@ -70,13 +70,13 @@ public interface Tensor {
     /** Returns the values of this in some undefined order */
     Iterator<Double> valueIterator();
 
-    /** 
+    /**
      * Returns an immutable map of the cells of this in no particular order.
-     * This may be expensive for some implementations - avoid when possible 
+     * This may be expensive for some implementations - avoid when possible
      */
     Map<TensorAddress, Double> cells();
 
-    /** 
+    /**
      * Returns the value of this as a double if it has no dimensions and one value
      *
      * @throws IllegalStateException if this does not have zero dimensions and one value
@@ -87,9 +87,9 @@ public interface Tensor {
         if (size() == 0) return Double.NaN;
         return valueIterator().next();
     }
-    
+
     // ----------------- Primitive tensor functions
-    
+
     default Tensor map(DoubleUnaryOperator mapper) {
         return new com.yahoo.tensor.functions.Map(new ConstantTensor(this), mapper).evaluate();
     }
@@ -108,8 +108,12 @@ public interface Tensor {
     }
 
     default Tensor rename(String fromDimension, String toDimension) {
-        return new Rename(new ConstantTensor(this), Collections.singletonList(fromDimension), 
+        return new Rename(new ConstantTensor(this), Collections.singletonList(fromDimension),
                                                     Collections.singletonList(toDimension)).evaluate();
+    }
+
+    default Tensor concat(double argument, String dimension) {
+        return concat(Tensor.Builder.of(TensorType.empty).cell(argument).build(), dimension);
     }
 
     default Tensor concat(Tensor argument, String dimension) {
@@ -119,13 +123,13 @@ public interface Tensor {
     default Tensor rename(List<String> fromDimensions, List<String> toDimensions) {
         return new Rename(new ConstantTensor(this), fromDimensions, toDimensions).evaluate();
     }
-    
-    static Tensor generate(TensorType type, Function<List<Integer>, Double> valueSupplier) {
+
+    static Tensor generate(TensorType type, Function<List<Long>, Double> valueSupplier) {
         return new Generate(type, valueSupplier).evaluate();
     }
-    
+
     // ----------------- Composite tensor functions which have a defined primitive mapping
-    
+
     default Tensor l1Normalize(String dimension) {
         return new L1Normalize(new ConstantTensor(this), dimension).evaluate();
     }
@@ -167,18 +171,34 @@ public interface Tensor {
     default Tensor max(Tensor argument) { return join(argument, (a, b) -> (a > b ? a : b )); }
     default Tensor min(Tensor argument) { return join(argument, (a, b) -> (a < b ? a : b )); }
     default Tensor atan2(Tensor argument) { return join(argument, Math::atan2); }
+    default Tensor pow(Tensor argument) { return join(argument, Math::pow); }
+    default Tensor fmod(Tensor argument) { return join(argument, (a, b) -> ( a % b )); }
+    default Tensor ldexp(Tensor argument) { return join(argument, (a, b) -> ( a * Math.pow(2.0, (int)b) )); }
     default Tensor larger(Tensor argument) { return join(argument, (a, b) -> ( a > b ? 1.0 : 0.0)); }
     default Tensor largerOrEqual(Tensor argument) { return join(argument, (a, b) -> ( a >= b ? 1.0 : 0.0)); }
     default Tensor smaller(Tensor argument) { return join(argument, (a, b) -> ( a < b ? 1.0 : 0.0)); }
     default Tensor smallerOrEqual(Tensor argument) { return join(argument, (a, b) -> ( a <= b ? 1.0 : 0.0)); }
     default Tensor equal(Tensor argument) { return join(argument, (a, b) -> ( a == b ? 1.0 : 0.0)); }
     default Tensor notEqual(Tensor argument) { return join(argument, (a, b) -> ( a != b ? 1.0 : 0.0)); }
+    default Tensor approxEqual(Tensor argument) { return join(argument, (a, b) -> ( approxEquals(a,b) ? 1.0 : 0.0)); }
 
+    default Tensor avg() { return avg(Collections.emptyList()); }
+    default Tensor avg(String dimension) { return avg(Collections.singletonList(dimension)); }
     default Tensor avg(List<String> dimensions) { return reduce(Reduce.Aggregator.avg, dimensions); }
+    default Tensor count() { return count(Collections.emptyList()); }
+    default Tensor count(String dimension) { return count(Collections.singletonList(dimension)); }
     default Tensor count(List<String> dimensions) { return reduce(Reduce.Aggregator.count, dimensions); }
+    default Tensor max() { return max(Collections.emptyList()); }
+    default Tensor max(String dimension) { return max(Collections.singletonList(dimension)); }
     default Tensor max(List<String> dimensions) { return reduce(Reduce.Aggregator.max, dimensions); }
+    default Tensor min() { return min(Collections.emptyList()); }
+    default Tensor min(String dimension) { return min(Collections.singletonList(dimension)); }
     default Tensor min(List<String> dimensions) { return reduce(Reduce.Aggregator.min, dimensions); }
+    default Tensor prod() { return prod(Collections.emptyList()); }
+    default Tensor prod(String dimension) { return prod(Collections.singletonList(dimension)); }
     default Tensor prod(List<String> dimensions) { return reduce(Reduce.Aggregator.prod, dimensions); }
+    default Tensor sum() { return sum(Collections.emptyList()); }
+    default Tensor sum(String dimension) { return sum(Collections.singletonList(dimension)); }
     default Tensor sum(List<String> dimensions) { return reduce(Reduce.Aggregator.sum, dimensions); }
 
     // ----------------- serialization
@@ -217,7 +237,7 @@ public interface Tensor {
             if (cellEntries.isEmpty()) return "{}";
             return "{" + cellEntries.get(0).getValue() +"}";
         }
-        
+
         Collections.sort(cellEntries, java.util.Map.Entry.<TensorAddress, Double>comparingByKey());
 
         StringBuilder b = new StringBuilder("{");
@@ -239,7 +259,7 @@ public interface Tensor {
      */
     boolean equals(Object o);
 
-    /** 
+    /**
      * Implement here to make this work across implementations.
      * Implementations must override equals and call this because this is an interface and cannot override equals.
      */
@@ -249,9 +269,25 @@ public interface Tensor {
         if ( a.size() != b.size()) return false;
         for (Iterator<Cell> aIterator = a.cellIterator(); aIterator.hasNext(); ) {
             Cell aCell = aIterator.next();
-            if ( ! aCell.getValue().equals(b.get(aCell.getKey()))) return false;
+            double aValue = aCell.getValue();
+            double bValue = b.get(aCell.getKey());
+            if (!approxEquals(aValue, bValue, 1e-6)) return false;
         }
         return true;
+    }
+
+    static boolean approxEquals(double x, double y, double tolerance) {
+        return Math.abs(x-y) < tolerance;
+    }
+
+    static boolean approxEquals(double x, double y) {
+        if (y < -1.0 || y > 1.0) {
+            x = Math.nextAfter(x/y, 1.0);
+            y = 1.0;
+        } else {
+            x = Math.nextAfter(x, y);
+        }
+        return x==y;
     }
 
     // ----------------- Factories
@@ -298,13 +334,13 @@ public interface Tensor {
         @Override
         public TensorAddress getKey() { return address; }
 
-        /** 
+        /**
          * Returns the direct index which can be used to locate this cell, or -1 if not available.
          * This is for optimizations mapping between tensors where this is possible without creating a
          * TensorAddress.
          */
-        int getDirectIndex() { return -1; }
-        
+        long getDirectIndex() { return -1; }
+
         @Override
         public Double getValue() { return value; }
 
@@ -337,7 +373,7 @@ public interface Tensor {
             boolean containsIndexed = type.dimensions().stream().anyMatch(d -> d.isIndexed());
             boolean containsMapped = type.dimensions().stream().anyMatch( d ->  ! d.isIndexed());
             if (containsIndexed && containsMapped)
-                throw new IllegalArgumentException("Combining indexed and mapped dimensions is not supported yet");
+                return MixedTensor.Builder.of(type);
             if (containsMapped)
                 return MappedTensor.Builder.of(type);
             else // indexed or empty
@@ -349,7 +385,7 @@ public interface Tensor {
             boolean containsIndexed = type.dimensions().stream().anyMatch(d -> d.isIndexed());
             boolean containsMapped = type.dimensions().stream().anyMatch( d ->  ! d.isIndexed());
             if (containsIndexed && containsMapped)
-                throw new IllegalArgumentException("Combining indexed and mapped dimensions is not supported yet");
+                return MixedTensor.Builder.of(type);
             if (containsMapped)
                 return MappedTensor.Builder.of(type);
             else // indexed or empty
@@ -358,20 +394,20 @@ public interface Tensor {
 
         /** Returns the type this is building */
         TensorType type();
-        
+
         /** Return a cell builder */
         CellBuilder cell();
 
         /** Add a cell */
         Builder cell(TensorAddress address, double value);
-        
-        /** Add a cell */
-        Builder cell(double value, int ... labels);
 
-        /** 
-         * Add a cell 
-         * 
-         * @param cell a cell providing the location at which to add this cell 
+        /** Add a cell */
+        Builder cell(double value, long ... labels);
+
+        /**
+         * Add a cell
+         *
+         * @param cell a cell providing the location at which to add this cell
          * @param value the value to assign to the cell
          */
         default Builder cell(Cell cell, double value) {
@@ -379,12 +415,12 @@ public interface Tensor {
         }
 
         Tensor build();
-        
+
         class CellBuilder {
 
             private final TensorAddress.Builder addressBuilder;
             private final Tensor.Builder tensorBuilder;
-            
+
             CellBuilder(TensorType type, Tensor.Builder tensorBuilder) {
                 addressBuilder = new TensorAddress.Builder(type);
                 this.tensorBuilder = tensorBuilder;
@@ -395,7 +431,7 @@ public interface Tensor {
                 return this;
             }
 
-            public CellBuilder label(String dimension, int label) {
+            public CellBuilder label(String dimension, long label) {
                 return label(dimension, String.valueOf(label));
             }
 
@@ -406,5 +442,5 @@ public interface Tensor {
         }
 
     }
-    
+
 }

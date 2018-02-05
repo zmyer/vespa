@@ -4,18 +4,31 @@
 #include "commit_and_wait_document_retriever.h"
 #include "document_subdb_collection_initializer.h"
 #include "documentsubdbcollection.h"
+#include "i_document_subdb_owner.h"
 #include "maintenancecontroller.h"
 #include "searchabledocsubdb.h"
 
 #include <vespa/searchcore/proton/metrics/documentdb_metrics_collection.h>
 
 using proton::matching::SessionManager;
-using search::index::Schema;
+using search::GrowStrategy;
 using search::SerialNum;
-using vespa::config::search::core::ProtonConfig;
+using search::index::Schema;
 using searchcorespi::IFlushTarget;
 
 namespace proton {
+
+namespace {
+
+GrowStrategy
+makeGrowStrategy(uint32_t docsInitialCapacity,
+                 const DocumentSubDBCollection::ProtonConfig::Grow &growCfg)
+{
+    return GrowStrategy(docsInitialCapacity, growCfg.factor,
+                        growCfg.add, growCfg.multivalueallocfactor);
+}
+
+}
 
 DocumentSubDBCollection::DocumentSubDBCollection(
         IDocumentSubDBOwner &owner,
@@ -35,6 +48,7 @@ DocumentSubDBCollection::DocumentSubDBCollection(
         const ProtonConfig &protonCfg,
         const HwInfo &hwInfo)
     : _subDBs(),
+      _owner(owner),
       _calc(),
       _readySubDbId(0),
       _remSubDbId(1),
@@ -48,9 +62,9 @@ DocumentSubDBCollection::DocumentSubDBCollection(
     const ProtonConfig::Distribution & distCfg = protonCfg.distribution;
     _bucketDB = std::make_shared<BucketDBOwner>();
     _bucketDBHandler.reset(new bucketdb::BucketDBHandler(*_bucketDB));
-    search::GrowStrategy searchableGrowth(growCfg.initial * distCfg.searchablecopies, growCfg.factor, growCfg.add);
-    search::GrowStrategy removedGrowth(std::max(1024l, growCfg.initial/100), growCfg.factor, growCfg.add);
-    search::GrowStrategy notReadyGrowth(growCfg.initial * (distCfg.redundancy - distCfg.searchablecopies), growCfg.factor, growCfg.add);
+    GrowStrategy searchableGrowth = makeGrowStrategy(growCfg.initial * distCfg.searchablecopies, growCfg);
+    GrowStrategy removedGrowth = makeGrowStrategy(std::max(1024l, growCfg.initial/100), growCfg);
+    GrowStrategy notReadyGrowth = makeGrowStrategy(growCfg.initial * (distCfg.redundancy - distCfg.searchablecopies), growCfg);
     size_t attributeGrowNumDocs(growCfg.numdocs);
     size_t numSearcherThreads = protonCfg.numsearcherthreads;
 
@@ -169,17 +183,11 @@ void DocumentSubDBCollection::maintenanceSync(MaintenanceController &mc,
 initializer::InitializerTask::SP
 DocumentSubDBCollection::createInitializer(const DocumentDBConfig &configSnapshot,
                                            SerialNum configSerialNum,
-                                           const ProtonConfig::Summary & protonSummaryCfg,
                                            const ProtonConfig::Index & indexCfg)
 {
-    DocumentSubDbCollectionInitializer::SP task =
-        std::make_shared<DocumentSubDbCollectionInitializer>();
+    DocumentSubDbCollectionInitializer::SP task = std::make_shared<DocumentSubDbCollectionInitializer>();
     for (auto subDb : _subDBs) {
-        DocumentSubDbInitializer::SP
-            subTask(subDb->createInitializer(configSnapshot,
-                                             configSerialNum,
-                                             protonSummaryCfg,
-                                             indexCfg));
+        DocumentSubDbInitializer::SP subTask(subDb->createInitializer(configSnapshot, configSerialNum, indexCfg));
         task->add(subTask);
     }
     return task;
@@ -264,8 +272,7 @@ DocumentSubDBCollection::applyConfig(const DocumentDBConfig &newConfigSnapshot,
     _reprocessingRunner.reset();
     for (auto subDb : _subDBs) {
         IReprocessingTask::List tasks;
-        tasks = subDb->applyConfig(newConfigSnapshot, oldConfigSnapshot,
-                                   serialNum, params, resolver);
+        tasks = subDb->applyConfig(newConfigSnapshot, oldConfigSnapshot, serialNum, params, resolver);
         _reprocessingRunner.addTasks(tasks);
     }
 }
@@ -282,7 +289,7 @@ DocumentSubDBCollection::getFeedView()
     IFeedView::SP newFeedView;
     assert(views.size() >= 1);
     if (views.size() > 1) {
-        return IFeedView::SP(new CombiningFeedView(views, _calc));
+        return IFeedView::SP(new CombiningFeedView(views, _owner.getBucketSpace(), _calc));
     } else {
         assert(views.front() != NULL);
         return views.front();
@@ -311,6 +318,15 @@ DocumentSubDBCollection::close()
 {
     for (auto subDb : _subDBs) {
         subDb->close();
+    }
+}
+
+void
+DocumentSubDBCollection::setBucketStateCalculator(const IBucketStateCalculatorSP &calc)
+{
+    _calc = calc;
+    for (auto subDb : _subDBs) {
+        subDb->setBucketStateCalculator(calc);
     }
 }
 

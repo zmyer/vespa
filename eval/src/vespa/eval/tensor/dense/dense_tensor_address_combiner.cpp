@@ -4,93 +4,58 @@
 #include <vespa/vespalib/util/exceptions.h>
 #include <cassert>
 
-namespace vespalib {
-namespace tensor {
+namespace vespalib::tensor {
 
-using Address = DenseTensorAddressCombiner::Address;
+DenseTensorAddressCombiner::~DenseTensorAddressCombiner() = default;
 
-namespace {
-
-class AddressReader
-{
-private:
-    const Address &_address;
-    size_t _idx;
-
-public:
-    AddressReader(const Address &address)
-        : _address(address),
-          _idx(0)
-    {}
-    size_t nextLabel() {
-        return _address[_idx++];
-    }
-    bool valid() {
-        return _idx < _address.size();
-    }
-};
-
-}
-
-DenseTensorAddressCombiner::~DenseTensorAddressCombiner() { }
-
-DenseTensorAddressCombiner::DenseTensorAddressCombiner(const eval::ValueType &lhs,
+DenseTensorAddressCombiner::DenseTensorAddressCombiner(const eval::ValueType &combined, const eval::ValueType &lhs,
                                                        const eval::ValueType &rhs)
-    : _ops(),
-      _combinedAddress()
+    : _rightAddress(rhs),
+      _combinedAddress(combined),
+      _left(),
+      _commonRight(),
+      _right()
 {
     auto rhsItr = rhs.dimensions().cbegin();
     auto rhsItrEnd = rhs.dimensions().cend();
+    uint32_t numDimensions(0);
     for (const auto &lhsDim : lhs.dimensions()) {
         while ((rhsItr != rhsItrEnd) && (rhsItr->name < lhsDim.name)) {
-            _ops.push_back(AddressOp::RHS);
+            _right.emplace_back(numDimensions++, rhsItr-rhs.dimensions().cbegin());
             ++rhsItr;
         }
         if ((rhsItr != rhsItrEnd) && (rhsItr->name == lhsDim.name)) {
-            _ops.push_back(AddressOp::BOTH);
+            _left.emplace_back(numDimensions, _left.size());
+            _commonRight.emplace_back(numDimensions, rhsItr-rhs.dimensions().cbegin());
+            ++numDimensions;
             ++rhsItr;
         } else {
-            _ops.push_back(AddressOp::LHS);
+            _left.emplace_back(numDimensions++, _left.size());
         }
     }
     while (rhsItr != rhsItrEnd) {
-        _ops.push_back(AddressOp::RHS);
+        _right.emplace_back(numDimensions++, rhsItr-rhs.dimensions().cbegin());
         ++rhsItr;
     }
 }
 
-bool
-DenseTensorAddressCombiner::combine(const CellsIterator &lhsItr,
-                                    const CellsIterator &rhsItr)
+AddressContext::AddressContext(const eval::ValueType &type)
+    : _type(type),
+      _accumulatedSize(_type.dimensions().size()),
+      _address(type.dimensions().size(), 0)
+
 {
-    _combinedAddress.clear();
-    AddressReader lhsReader(lhsItr.address());
-    AddressReader rhsReader(rhsItr.address());
-    for (const auto &op : _ops) {
-        switch (op) {
-        case AddressOp::LHS:
-            _combinedAddress.emplace_back(lhsReader.nextLabel());
-            break;
-        case AddressOp::RHS:
-            _combinedAddress.emplace_back(rhsReader.nextLabel());
-            break;
-        case AddressOp::BOTH:
-            size_t lhsLabel = lhsReader.nextLabel();
-            size_t rhsLabel = rhsReader.nextLabel();
-            if (lhsLabel != rhsLabel) {
-                return false;
-            }
-            _combinedAddress.emplace_back(lhsLabel);
-        }
+    size_t multiplier = 1;
+    for (int32_t i(_address.size() - 1); i >= 0; i--) {
+        _accumulatedSize[i] = multiplier;
+        multiplier *= type.dimensions()[i].size;
     }
-    assert(!lhsReader.valid());
-    assert(!rhsReader.valid());
-    return true;
 }
 
+AddressContext::~AddressContext() = default;
+
 eval::ValueType
-DenseTensorAddressCombiner::combineDimensions(const eval::ValueType &lhs,
-                                              const eval::ValueType &rhs)
+DenseTensorAddressCombiner::combineDimensions(const eval::ValueType &lhs, const eval::ValueType &rhs)
 {
     // NOTE: both lhs and rhs are sorted according to dimension names.
     std::vector<eval::ValueType::Dimension> result;
@@ -99,8 +64,7 @@ DenseTensorAddressCombiner::combineDimensions(const eval::ValueType &lhs,
     while (lhsItr != lhs.dimensions().end() &&
            rhsItr != rhs.dimensions().end()) {
         if (lhsItr->name == rhsItr->name) {
-            result.emplace_back(lhsItr->name,
-                                std::min(lhsItr->size, rhsItr->size));
+            result.emplace_back(lhsItr->name, std::min(lhsItr->size, rhsItr->size));
             ++lhsItr;
             ++rhsItr;
         } else if (lhsItr->name < rhsItr->name) {
@@ -120,5 +84,4 @@ DenseTensorAddressCombiner::combineDimensions(const eval::ValueType &lhs,
             eval::ValueType::tensor_type(std::move(result)));
 }
 
-} // namespace vespalib::tensor
-} // namespace vespalib
+}

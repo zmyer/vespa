@@ -23,6 +23,7 @@ import com.yahoo.config.provision.InstanceName;
 import com.yahoo.config.provision.AllocatedHosts;
 import com.yahoo.config.provision.ProvisionLogger;
 import com.yahoo.config.provision.Provisioner;
+import com.yahoo.config.provision.TenantName;
 import com.yahoo.config.provision.Version;
 import com.yahoo.transaction.NestedTransaction;
 import com.yahoo.vespa.config.server.ApplicationRepository;
@@ -32,7 +33,6 @@ import com.yahoo.vespa.config.server.modelfactory.ModelFactoryRegistry;
 import com.yahoo.vespa.config.server.monitoring.Metrics;
 import com.yahoo.vespa.config.server.session.LocalSession;
 import com.yahoo.vespa.config.server.session.PrepareParams;
-import com.yahoo.vespa.config.server.session.SilentDeployLogger;
 import com.yahoo.vespa.config.server.tenant.Tenant;
 import com.yahoo.vespa.config.server.tenant.Tenants;
 import com.yahoo.vespa.curator.Curator;
@@ -57,10 +57,12 @@ import java.util.Optional;
  */
 public class DeployTester {
 
-    private final Curator curator;
+    private static final TenantName tenantName = TenantName.from("deploytester");
+
     private final Clock clock;
     private final Tenants tenants;
     private final File testApp;
+    private final ApplicationRepository applicationRepository;
 
     private ApplicationId id;
 
@@ -69,24 +71,19 @@ public class DeployTester {
     }
 
     public DeployTester(String appPath, List<ModelFactory> modelFactories) {
-        this(appPath, modelFactories, new ConfigserverConfig(new ConfigserverConfig.Builder()
-                                                                     .configServerDBDir(Files.createTempDir()
-                                                                                             .getAbsolutePath())),
+        this(appPath, modelFactories,
+             new ConfigserverConfig(new ConfigserverConfig.Builder()
+                     .configServerDBDir(Files.createTempDir().getAbsolutePath())
+                     .configDefinitionsDir(Files.createTempDir().getAbsolutePath())),
              Clock.systemUTC());
     }
 
     public DeployTester(String appPath, ConfigserverConfig configserverConfig) {
-        this(appPath,
-             Collections.singletonList(createModelFactory(Clock.systemUTC())),
-             configserverConfig,
-             Clock.systemUTC());
+        this(appPath, Collections.singletonList(createModelFactory(Clock.systemUTC())), configserverConfig, Clock.systemUTC());
     }
 
     public DeployTester(String appPath, ConfigserverConfig configserverConfig, Clock clock) {
-        this(appPath,
-             Collections.singletonList(createModelFactory(clock)),
-             configserverConfig,
-             clock);
+        this(appPath, Collections.singletonList(createModelFactory(clock)), configserverConfig, clock);
     }
 
     public DeployTester(String appPath, List<ModelFactory> modelFactories, ConfigserverConfig configserverConfig) {
@@ -94,21 +91,23 @@ public class DeployTester {
     }
 
     public DeployTester(String appPath, List<ModelFactory> modelFactories, ConfigserverConfig configserverConfig, Clock clock) {
-        Metrics metrics = Metrics.createTestMetrics();
-        this.curator = new MockCurator();
         this.clock = clock;
-        TestComponentRegistry componentRegistry = createComponentRegistry(curator, metrics, modelFactories,
-                                                                          configserverConfig, clock);
+        TestComponentRegistry componentRegistry = createComponentRegistry(new MockCurator(), Metrics.createTestMetrics(),
+                                                                          modelFactories, configserverConfig, clock);
         try {
             this.testApp = new File(appPath);
-            this.tenants = new Tenants(componentRegistry, metrics);
+            this.tenants = new Tenants(componentRegistry, Collections.emptySet());
+            tenants.addTenant(tenantName);
         }
         catch (Exception e) {
             throw new IllegalArgumentException(e);
         }
+        applicationRepository = new ApplicationRepository(tenants, createHostProvisioner(), clock);
     }
 
-    public Tenant tenant() { return tenants.defaultTenant(); }
+    public Tenant tenant() {
+        return tenants.getTenant(tenantName);
+    }
     
     /** Create a model factory for the version of this source*/
     public static ModelFactory createModelFactory(Clock clock) { 
@@ -135,18 +134,15 @@ public class DeployTester {
      */
     public ApplicationId deployApp(String appName, String vespaVersion, Instant now)  {
         Tenant tenant = tenant();
-        LocalSession session = tenant.getSessionFactory().createSession(testApp, appName, new TimeoutBudget(Clock.systemUTC(), Duration.ofSeconds(60)));
+        TimeoutBudget timeoutBudget = new TimeoutBudget(clock, Duration.ofSeconds(60));
         ApplicationId id = ApplicationId.from(tenant.getName(), ApplicationName.from(appName), InstanceName.defaultName());
         PrepareParams.Builder paramsBuilder = new PrepareParams.Builder().applicationId(id);
         if (vespaVersion != null)
             paramsBuilder.vespaVersion(vespaVersion);
-        session.prepare(new SilentDeployLogger(),
-                        paramsBuilder.build(),
-                        Optional.empty(),
-                        tenant.getPath(),
-                        now);
-        session.createActivateTransaction().commit();
-        tenant.getLocalSessionRepo().addSession(session);
+
+        long sessionId = applicationRepository.createSession(tenant, timeoutBudget, testApp, appName);
+        applicationRepository.prepare(tenant, sessionId, paramsBuilder.build(), now);
+        applicationRepository.activate(tenant, sessionId, timeoutBudget, false, false);
         this.id = id;
         return id;
     }
@@ -165,11 +161,11 @@ public class DeployTester {
     }
 
     public Optional<com.yahoo.config.provision.Deployment> redeployFromLocalActive(ApplicationId id) {
-        ApplicationRepository applicationRepository = new ApplicationRepository(tenants,
-                                                                                createHostProvisioner(),
-                                                                                curator,
-                                                                                clock);
         return applicationRepository.deployFromLocalActive(id, Duration.ofSeconds(60));
+    }
+
+    public ApplicationRepository applicationRepository() {
+        return applicationRepository;
     }
 
     private Provisioner createHostProvisioner() {

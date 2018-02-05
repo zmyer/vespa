@@ -97,12 +97,10 @@ public class DeploymentSpecTest {
         StringReader r = new StringReader(
         "<deployment version='1.0'>" +
         "   <test/>" +
-        "   <test/>" +
         "   <staging/>" +
         "   <prod>" +
         "      <region active='false'>us-east1</region>" +
-        "      <region active='false'>us-east1</region>" +
-        "      <delay hours='3' minutes='30'/>" + 
+        "      <delay hours='3' minutes='30'/>" +
         "      <region active='true'>us-west1</region>" +
         "   </prod>" +
         "</deployment>"
@@ -283,16 +281,22 @@ public class DeploymentSpecTest {
         StringReader r = new StringReader(
                 "<deployment>\n" +
                 "  <block-upgrade days='mon,tue' hours='15-16'/>\n" +
-                "  <block-upgrade days='sat' hours='10' time-zone='CET'/>\n" +
+                // version=false is ignored for block-upgrade
+                "  <block-upgrade version='false' days='sat' hours='10' time-zone='CET'/>\n" +
                 "  <prod>\n" +
                 "    <region active='true'>us-west-1</region>\n" +
                 "  </prod>\n" +
                 "</deployment>"
         );
         DeploymentSpec spec = DeploymentSpec.fromXml(r);
-        assertEquals(2, spec.blockUpgrades().size());
-        assertEquals(ZoneId.of("UTC"), spec.blockUpgrades().get(0).zone());
-        assertEquals(ZoneId.of("CET"), spec.blockUpgrades().get(1).zone());
+        assertEquals(2, spec.changeBlocker().size());
+        assertTrue(spec.changeBlocker().get(0).blocksVersions());
+        assertFalse(spec.changeBlocker().get(0).blocksRevisions());
+        assertEquals(ZoneId.of("UTC"), spec.changeBlocker().get(0).window().zone());
+
+        assertTrue(spec.changeBlocker().get(1).blocksVersions());
+        assertFalse(spec.changeBlocker().get(1).blocksRevisions());
+        assertEquals(ZoneId.of("CET"), spec.changeBlocker().get(1).window().zone());
 
         assertTrue(spec.canUpgradeAt(Instant.parse("2017-09-18T14:15:30.00Z")));
         assertFalse(spec.canUpgradeAt(Instant.parse("2017-09-18T15:15:30.00Z")));
@@ -304,4 +308,115 @@ public class DeploymentSpecTest {
         assertTrue(spec.canUpgradeAt(Instant.parse("2017-09-23T10:15:30.00Z")));
     }
 
+    @Test(expected = IllegalArgumentException.class)
+    public void deploymentSpecWithIllegallyOrderedDeploymentSpec1() {
+        StringReader r = new StringReader(
+                "<deployment>\n" +
+                "  <block-change days='sat' hours='10' time-zone='CET'/>\n" +
+                "  <prod>\n" +
+                "    <region active='true'>us-west-1</region>\n" +
+                "  </prod>\n" +
+                "  <block-change days='mon,tue' hours='15-16'/>\n" +
+                "</deployment>"
+        );
+        DeploymentSpec spec = DeploymentSpec.fromXml(r);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void deploymentSpecWithIllegallyOrderedDeploymentSpec2() {
+        StringReader r = new StringReader(
+                "<deployment>\n" +
+                "  <block-change days='sat' hours='10' time-zone='CET'/>\n" +
+                "  <test/>\n" +
+                "  <prod>\n" +
+                "    <region active='true'>us-west-1</region>\n" +
+                "  </prod>\n" +
+                "</deployment>"
+        );
+        DeploymentSpec spec = DeploymentSpec.fromXml(r);
+    }
+
+    @Test
+    public void deploymentSpecWithChangeBlocker() {
+        StringReader r = new StringReader(
+                "<deployment>\n" +
+                "  <block-change revision='false' days='mon,tue' hours='15-16'/>\n" +
+                "  <block-change days='sat' hours='10' time-zone='CET'/>\n" +
+                "  <prod>\n" +
+                "    <region active='true'>us-west-1</region>\n" +
+                "  </prod>\n" +
+                "</deployment>"
+        );
+        DeploymentSpec spec = DeploymentSpec.fromXml(r);
+        assertEquals(2, spec.changeBlocker().size());
+        assertTrue(spec.changeBlocker().get(0).blocksVersions());
+        assertFalse(spec.changeBlocker().get(0).blocksRevisions());
+        assertEquals(ZoneId.of("UTC"), spec.changeBlocker().get(0).window().zone());
+
+        assertTrue(spec.changeBlocker().get(1).blocksVersions());
+        assertTrue(spec.changeBlocker().get(1).blocksRevisions());
+        assertEquals(ZoneId.of("CET"), spec.changeBlocker().get(1).window().zone());
+
+        assertTrue(spec.canUpgradeAt(Instant.parse("2017-09-18T14:15:30.00Z")));
+        assertFalse(spec.canUpgradeAt(Instant.parse("2017-09-18T15:15:30.00Z")));
+        assertFalse(spec.canUpgradeAt(Instant.parse("2017-09-18T16:15:30.00Z")));
+        assertTrue(spec.canUpgradeAt(Instant.parse("2017-09-18T17:15:30.00Z")));
+
+        assertTrue(spec.canUpgradeAt(Instant.parse("2017-09-23T09:15:30.00Z")));
+        assertFalse(spec.canUpgradeAt(Instant.parse("2017-09-23T08:15:30.00Z"))); // 10 in CET
+        assertTrue(spec.canUpgradeAt(Instant.parse("2017-09-23T10:15:30.00Z")));
+    }
+
+    @Test
+    public void athenz_config_is_read_from_deployment() {
+        StringReader r = new StringReader(
+                "<deployment athenz-domain='domain' athenz-service='service'>\n" +
+                "  <prod>\n" +
+                "    <region active='true'>us-west-1</region>\n" +
+                "  </prod>\n" +
+                "</deployment>"
+        );
+        DeploymentSpec spec = DeploymentSpec.fromXml(r);
+        assertEquals(spec.athenzDomain().get().value(), "domain");
+        assertEquals(spec.athenzService(Environment.prod, RegionName.from("us-west-1")).get().value(), "service");
+    }
+
+    @Test
+    public void athenz_service_is_overridden_from_environment() {
+        StringReader r = new StringReader(
+                "<deployment athenz-domain='domain' athenz-service='service'>\n" +
+                "  <test/>\n" +
+                "  <prod athenz-service='prod-service'>\n" +
+                "    <region active='true'>us-west-1</region>\n" +
+                "  </prod>\n" +
+                "</deployment>"
+        );
+        DeploymentSpec spec = DeploymentSpec.fromXml(r);
+        assertEquals(spec.athenzDomain().get().value(), "domain");
+        assertEquals(spec.athenzService(Environment.prod, RegionName.from("us-west-1")).get().value(), "prod-service");
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void it_fails_when_athenz_service_is_not_defined() {
+        StringReader r = new StringReader(
+                "<deployment athenz-domain='domain'>\n" +
+                "  <prod>\n" +
+                "    <region active='true'>us-west-1</region>\n" +
+                "  </prod>\n" +
+                "</deployment>"
+        );
+        DeploymentSpec spec = DeploymentSpec.fromXml(r);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void it_fails_when_athenz_service_is_configured_but_not_athenz_domain() {
+        StringReader r = new StringReader(
+                "<deployment>\n" +
+                "  <prod athenz-service='service'>\n" +
+                "    <region active='true'>us-west-1</region>\n" +
+                "  </prod>\n" +
+                "</deployment>"
+        );
+        DeploymentSpec spec = DeploymentSpec.fromXml(r);
+    }
 }

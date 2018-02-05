@@ -1,19 +1,20 @@
 // Copyright 2017 Yahoo Holdings. Licensed under the terms of the Apache 2.0 license. See LICENSE in the project root.
 package com.yahoo.vespa.model.search;
 
+import com.yahoo.config.FileReference;
+import com.yahoo.config.model.producer.AbstractConfigProducer;
 import com.yahoo.config.model.producer.UserConfigRepo;
 import com.yahoo.prelude.fastsearch.DocumentdbInfoConfig;
-import com.yahoo.vespa.config.search.DispatchConfig;
-import com.yahoo.vespa.config.search.RankProfilesConfig;
+import com.yahoo.search.config.IndexInfoConfig;
 import com.yahoo.searchdefinition.RankingConstant;
 import com.yahoo.vespa.config.search.AttributesConfig;
-import com.yahoo.config.model.producer.AbstractConfigProducer;
-import com.yahoo.config.model.ConfigModelRepo;
-import com.yahoo.search.config.IndexInfoConfig;
+import com.yahoo.vespa.config.search.RankProfilesConfig;
 import com.yahoo.vespa.configdefinition.IlscriptsConfig;
 import com.yahoo.vespa.model.utils.FileSender;
-import com.yahoo.config.FileReference;
-import java.util.*;
+
+import java.util.ArrayList;
+import java.util.LinkedList;
+import java.util.List;
 
 /**
  * Superclass for search clusters.
@@ -21,11 +22,11 @@ import java.util.*;
  * @author Peter Boros
  */
 public abstract class AbstractSearchCluster extends AbstractConfigProducer
-    implements 
+    implements
         DocumentdbInfoConfig.Producer,
         IndexInfoConfig.Producer,
-        IlscriptsConfig.Producer
-{
+        IlscriptsConfig.Producer {
+
     private Double queryTimeout;
     protected String clusterName;
     protected int index;
@@ -36,9 +37,11 @@ public abstract class AbstractSearchCluster extends AbstractConfigProducer
 
     public void prepareToDistributeFiles(List<SearchNode> backends) {
         for (SearchDefinitionSpec sds : localSDS) {
-            for (RankingConstant rc : sds.getSearchDefinition().getSearch().getRankingConstants()) {
-                FileReference reference = FileSender.sendFileToServices(rc.getFileName(), backends);
-                rc.setFileReference(reference.value());
+            for (RankingConstant constant : sds.getSearchDefinition().getSearch().getRankingConstants().values()) {
+                FileReference reference = (constant.getPathType() == RankingConstant.PathType.FILE)
+                        ? FileSender.sendFileToServices(constant.getFileName(), backends)
+                        : FileSender.sendUriToServices(constant.getUri(), backends);
+                constant.setFileReference(reference.value());
             }
         }
     }
@@ -48,16 +51,7 @@ public abstract class AbstractSearchCluster extends AbstractConfigProducer
         public static final IndexingMode REALTIME  = new IndexingMode("REALTIME");
         public static final IndexingMode STREAMING = new IndexingMode("STREAMING");
 
-        public static IndexingMode createIndexingMode(String ixm) {
-            if ("REALTIME".equalsIgnoreCase(ixm)) {
-                return REALTIME;
-            } else if ("STREAMING".equalsIgnoreCase(ixm)) {
-                return STREAMING;
-            }
-            return null;
-        }
-
-        private String name;
+        private final String name;
 
         private IndexingMode(String name) {
             this.name = name;
@@ -71,6 +65,7 @@ public abstract class AbstractSearchCluster extends AbstractConfigProducer
     }
 
     public static final class SearchDefinitionSpec {
+
         private final SearchDefinition searchDefinition;
         private final UserConfigRepo userConfigRepo;
 

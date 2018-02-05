@@ -5,17 +5,22 @@ import com.yahoo.javacc.UnicodeUtilities;
 import com.yahoo.searchlib.rankingexpression.rule.Function;
 import com.yahoo.searchlib.rankingexpression.rule.TruthOperator;
 import com.yahoo.tensor.Tensor;
+import com.yahoo.tensor.TensorAddress;
+import com.yahoo.tensor.TensorType;
 
 /**
  * The result of a ranking expression evaluation.
  * Concrete subclasses of this provides implementations of these methods or throws
  * UnsupportedOperationException if the operation is not supported.
  *
- * @author  bratseth
+ * @author bratseth
  */
 public abstract class Value {
 
     private boolean frozen=false;
+
+    /** Returns the type of this value */
+    public abstract TensorType type();
 
     /** Returns this value as a double, or throws UnsupportedOperationException if it cannot be represented as a double */
     public abstract double asDouble();
@@ -23,6 +28,14 @@ public abstract class Value {
     /** Returns this value as a double value, or throws UnsupportedOperationException if it cannot be represented as a double */
     public DoubleValue asDoubleValue() {
         return new DoubleValue(asDouble());
+    }
+
+    /** Returns this as a tensor value */
+    public abstract Tensor asTensor();
+
+    /** A utility method for wrapping a sdouble in a rank 0 tensor */
+    protected Tensor doubleAsTensor(double value) {
+        return Tensor.Builder.of(TensorType.empty).cell(TensorAddress.of(), value).build();
     }
 
     /** Returns true if this value can return itself as a double, i.e asDoubleValue will return a value and not throw */
@@ -40,6 +53,16 @@ public abstract class Value {
     public abstract Value multiply(Value value);
 
     public abstract Value divide(Value value);
+
+    public abstract Value modulo(Value value);
+
+    public abstract Value and(Value value);
+
+    public abstract Value or(Value value);
+
+    public abstract Value not();
+
+    public abstract Value power(Value value);
 
     /** Perform the comparison specified by the operator between this value and the given value */
     public abstract Value compare(TruthOperator operator, Value value);

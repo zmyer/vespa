@@ -11,6 +11,7 @@ import com.yahoo.vespa.model.AbstractService;
  * @author gjoranv
  */
 public class Logserver extends AbstractService {
+
     private static final long serialVersionUID = 1L;
     private static final String logArchiveDir = "$ROOT/logs/vespa/logarchive";
 
@@ -22,7 +23,6 @@ public class Logserver extends AbstractService {
         portsMeta.on(3).tag("logtp").tag("telnet").tag("replicator");
         setProp("clustertype", "admin");
         setProp("clustername", "admin");
-        monitorService();
     }
 
     /**

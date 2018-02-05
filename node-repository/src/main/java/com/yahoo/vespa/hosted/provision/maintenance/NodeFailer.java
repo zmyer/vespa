@@ -3,13 +3,12 @@ package com.yahoo.vespa.hosted.provision.maintenance;
 
 import com.yahoo.config.provision.Deployer;
 import com.yahoo.config.provision.Deployment;
-import com.yahoo.config.provision.Flavor;
 import com.yahoo.config.provision.HostLivenessTracker;
 import com.yahoo.config.provision.NodeType;
+import com.yahoo.jdisc.Metric;
 import com.yahoo.transaction.Mutex;
-import com.yahoo.vespa.applicationmodel.ApplicationInstance;
-import com.yahoo.vespa.applicationmodel.ServiceCluster;
 import com.yahoo.vespa.applicationmodel.ServiceInstance;
+import com.yahoo.vespa.applicationmodel.ServiceStatus;
 import com.yahoo.vespa.hosted.provision.Node;
 import com.yahoo.vespa.hosted.provision.NodeRepository;
 import com.yahoo.vespa.hosted.provision.node.Agent;
@@ -18,18 +17,20 @@ import com.yahoo.vespa.orchestrator.ApplicationIdNotFoundException;
 import com.yahoo.vespa.orchestrator.Orchestrator;
 import com.yahoo.vespa.orchestrator.status.ApplicationInstanceStatus;
 import com.yahoo.vespa.service.monitor.ServiceMonitor;
-import com.yahoo.vespa.service.monitor.ServiceMonitorStatus;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+
+import static java.util.stream.Collectors.counting;
 
 /**
  * Maintains information in the node repo about when this node last responded to ping
@@ -55,11 +56,12 @@ public class NodeFailer extends Maintainer {
     private final Orchestrator orchestrator;
     private final Instant constructionTime;
     private final ThrottlePolicy throttlePolicy;
+    private final Metric metric;
 
     public NodeFailer(Deployer deployer, HostLivenessTracker hostLivenessTracker,
                       ServiceMonitor serviceMonitor, NodeRepository nodeRepository,
                       Duration downTimeLimit, Clock clock, Orchestrator orchestrator,
-                      ThrottlePolicy throttlePolicy,
+                      ThrottlePolicy throttlePolicy, Metric metric,
                       JobControl jobControl) {
         // check ping status every five minutes, but at least twice as often as the down time limit
         super(nodeRepository, min(downTimeLimit.dividedBy(2), Duration.ofMinutes(5)), jobControl);
@@ -71,22 +73,21 @@ public class NodeFailer extends Maintainer {
         this.orchestrator = orchestrator;
         this.constructionTime = clock.instant();
         this.throttlePolicy = throttlePolicy;
+        this.metric = metric;
     }
 
     @Override
     protected void maintain() {
         // Ready nodes
-        updateNodeLivenessEventsForReadyNodes();
-        for (Node node : readyNodesWhichAreDead()) {
-            // Docker hosts and nodes do not run Vespa services
-            if (node.flavor().getType() == Flavor.Type.DOCKER_CONTAINER || node.type() == NodeType.host) continue;
-            if ( ! throttle(node)) nodeRepository().fail(node.hostname(),
-                                                         Agent.system, "Not receiving config requests from node");
-        }
+        try (Mutex lock = nodeRepository().lockUnallocated()) {
+            updateNodeLivenessEventsForReadyNodes();
 
-        for (Node node : readyNodesWithHardwareFailure())
-            if ( ! throttle(node)) nodeRepository().fail(node.hostname(),
-                                                         Agent.system, "Node has hardware failure");
+            getReadyNodesByFailureReason().forEach((node, reason) -> {
+                if (!throttle(node)) {
+                    nodeRepository().fail(node.hostname(), Agent.system, reason);
+                }
+            });
+        }
 
         // Active nodes
         for (Node node : determineActiveNodeDownStatus()) {
@@ -99,53 +100,55 @@ public class NodeFailer extends Maintainer {
     private void updateNodeLivenessEventsForReadyNodes() {
         // Update node last request events through ZooKeeper to collect request to all config servers.
         // We do this here ("lazily") to avoid writing to zk for each config request.
-        try (Mutex lock = nodeRepository().lockUnallocated()) {
-            for (Node node : nodeRepository().getNodes(Node.State.ready)) {
-                Optional<Instant> lastLocalRequest = hostLivenessTracker.lastRequestFrom(node.hostname());
-                if ( ! lastLocalRequest.isPresent()) continue;
+        for (Node node : nodeRepository().getNodes(Node.State.ready)) {
+            Optional<Instant> lastLocalRequest = hostLivenessTracker.lastRequestFrom(node.hostname());
+            if ( ! lastLocalRequest.isPresent()) continue;
 
-                Optional<History.Event> recordedRequest = node.history().event(History.Event.Type.requested);
-                if ( ! recordedRequest.isPresent() || recordedRequest.get().at().isBefore(lastLocalRequest.get())) {
-                    History updatedHistory = node.history().with(new History.Event(History.Event.Type.requested,
-                                                                                   Agent.system,
-                                                                                   lastLocalRequest.get()));
-                    nodeRepository().write(node.with(updatedHistory));
-                }
+            Optional<History.Event> recordedRequest = node.history().event(History.Event.Type.requested);
+            if ( ! recordedRequest.isPresent() || recordedRequest.get().at().isBefore(lastLocalRequest.get())) {
+                History updatedHistory = node.history().with(new History.Event(History.Event.Type.requested,
+                        Agent.system,
+                        lastLocalRequest.get()));
+                nodeRepository().write(node.with(updatedHistory));
             }
         }
     }
 
-    private List<Node> readyNodesWhichAreDead() {
-        // Allow requests some time to be registered in case all config servers have been down
-        if (constructionTime.isAfter(clock.instant().minus(nodeRequestInterval).minus(nodeRequestInterval) ))
-            return Collections.emptyList();
+    private Map<Node, String> getReadyNodesByFailureReason() {
+        Instant oldestAcceptableRequestTime =
+                // Allow requests some time to be registered in case all config servers have been down
+                constructionTime.isAfter(clock.instant().minus(nodeRequestInterval.multipliedBy(2))) ?
+                        Instant.EPOCH :
 
-        // Nodes are taken as dead if they have not made a config request since this instant.
-        // Add 10 minutes to the down time limit to allow nodes to make a request that infrequently.
-        Instant oldestAcceptableRequestTime = clock.instant().minus(downTimeLimit).minus(nodeRequestInterval);
+                        // Nodes are taken as dead if they have not made a config request since this instant.
+                        // Add 10 minutes to the down time limit to allow nodes to make a request that infrequently.
+                        clock.instant().minus(downTimeLimit).minus(nodeRequestInterval);
 
-        return nodeRepository().getNodes(Node.State.ready).stream()
-                .filter(node -> wasMadeReadyBefore(oldestAcceptableRequestTime, node))
-                .filter(node -> ! hasRecordedRequestAfter(oldestAcceptableRequestTime, node))
-                .collect(Collectors.toList());
+        Map<Node, String> nodesByFailureReason = new HashMap<>();
+        for (Node node : nodeRepository().getNodes(Node.State.ready)) {
+            if (! hasNodeRequestedConfigAfter(node, oldestAcceptableRequestTime)) {
+                nodesByFailureReason.put(node, "Not receiving config requests from node");
+            } else if (node.status().hardwareFailureDescription().isPresent()) {
+                nodesByFailureReason.put(node, "Node has hardware failure");
+            } else if (node.status().hardwareDivergence().isPresent()) {
+                nodesByFailureReason.put(node, "Node has hardware divergence");
+            }
+        }
+        return nodesByFailureReason;
     }
 
-    private boolean wasMadeReadyBefore(Instant instant, Node node) {
+    private boolean hasNodeRequestedConfigAfter(Node node, Instant instant) {
+        return !wasMadeReadyBefore(node, instant) || hasRecordedRequestAfter(node, instant);
+    }
+
+    private boolean wasMadeReadyBefore(Node node, Instant instant) {
         Optional<History.Event> readiedEvent = node.history().event(History.Event.Type.readied);
-        if ( ! readiedEvent.isPresent()) return false;
-        return readiedEvent.get().at().isBefore(instant);
+        return readiedEvent.map(event -> event.at().isBefore(instant)).orElse(false);
     }
 
-    private boolean hasRecordedRequestAfter(Instant instant, Node node) {
+    private boolean hasRecordedRequestAfter(Node node, Instant instant) {
         Optional<History.Event> lastRequest = node.history().event(History.Event.Type.requested);
-        if ( ! lastRequest.isPresent()) return false;
-        return lastRequest.get().at().isAfter(instant);
-    }
-
-    private List<Node> readyNodesWithHardwareFailure() {
-        return nodeRepository().getNodes(Node.State.ready).stream()
-                .filter(node -> node.status().hardwareFailureDescription().isPresent())
-                .collect(Collectors.toList());
+        return lastRequest.map(event -> event.at().isAfter(instant)).orElse(false);
     }
 
     private boolean applicationSuspended(Node node) {
@@ -170,27 +173,39 @@ public class NodeFailer extends Maintainer {
     }
 
     /**
-     * If the node is positively DOWN, and there is no "down" history record, we add it.
-     * If the node is positively UP we remove any "down" history record.
+     * Returns true if the node is considered bad: all monitored services services are down.
+     * If a node remains bad for a long time, the NodeFailer will eventually try to fail the node.
+     */
+    public static boolean badNode(List<ServiceInstance> services) {
+        Map<ServiceStatus, Long> countsByStatus = services.stream()
+                .collect(Collectors.groupingBy(ServiceInstance::serviceStatus, counting()));
+
+        return countsByStatus.getOrDefault(ServiceStatus.UP, 0L) <= 0L &&
+                countsByStatus.getOrDefault(ServiceStatus.DOWN, 0L) > 0L;
+    }
+
+    /**
+     * If the node is down (see badNode()), and there is no "down" history record, we add it.
+     * Otherwise we remove any "down" history record.
      *
-     * @return a list of all nodes which are positively currently in the down state
+     * @return a list of all nodes that should be considered as down
      */
     private List<Node> determineActiveNodeDownStatus() {
         List<Node> downNodes = new ArrayList<>();
-        for (ApplicationInstance<ServiceMonitorStatus> application : serviceMonitor.queryStatusOfAllApplicationInstances().values()) {
-            for (ServiceCluster<ServiceMonitorStatus> cluster : application.serviceClusters()) {
-                for (ServiceInstance<ServiceMonitorStatus> service : cluster.serviceInstances()) {
-                    Optional<Node> node = nodeRepository().getNode(service.hostName().s(), Node.State.active);
-                    if ( ! node.isPresent()) continue; // we also get status from infrastructure nodes, which are not in the repo. TODO: remove when proxy nodes are in node repo everywhere
+        serviceMonitor.getServiceModelSnapshot().getServiceInstancesByHostName()
+                .entrySet().stream().forEach(
+                        entry -> {
+                            Optional<Node> node = nodeRepository().getNode(entry.getKey().s(), Node.State.active);
+                            if (node.isPresent()) {
+                                if (badNode(entry.getValue())) {
+                                    downNodes.add(recordAsDown(node.get()));
+                                } else {
+                                    clearDownRecord(node.get());
+                                }
+                            }
+                        }
+        );
 
-                    if (service.serviceStatus().equals(ServiceMonitorStatus.DOWN))
-                        downNodes.add(recordAsDown(node.get()));
-                    else if (service.serviceStatus().equals(ServiceMonitorStatus.UP))
-                        clearDownRecord(node.get());
-                    // else: we don't know current status; don't take any action until we have positive information
-                }
-            }
-        }
         return downNodes;
     }
 
@@ -262,22 +277,23 @@ public class NodeFailer extends Maintainer {
     private boolean throttle(Node node) {
         if (throttlePolicy == ThrottlePolicy.disabled) return false;
         Instant startOfThrottleWindow = clock.instant().minus(throttlePolicy.throttleWindow);
-        List<Node> nodes = nodeRepository().getNodes().stream()
-                // Do not consider Docker containers when throttling
-                .filter(n -> n.flavor().getType() != Flavor.Type.DOCKER_CONTAINER)
-                .collect(Collectors.toList());
+        List<Node> nodes = nodeRepository().getNodes();
         long recentlyFailedNodes = nodes.stream()
                 .map(n -> n.history().event(History.Event.Type.failed))
                 .filter(Optional::isPresent)
                 .map(Optional::get)
                 .filter(failedEvent -> failedEvent.at().isAfter(startOfThrottleWindow))
                 .count();
-        boolean throttle = recentlyFailedNodes >= Math.max(nodes.size() * throttlePolicy.fractionAllowedToFail,
-                                                           throttlePolicy.minimumAllowedToFail);
+        int allowedFailedNodes = (int) Math.max(nodes.size() * throttlePolicy.fractionAllowedToFail,
+                throttlePolicy.minimumAllowedToFail);
+
+        boolean throttle = allowedFailedNodes < recentlyFailedNodes ||
+                (allowedFailedNodes == recentlyFailedNodes && node.type() != NodeType.host);
         if (throttle) {
             log.info(String.format("Want to fail node %s, but throttling is in effect: %s", node.hostname(),
                                    throttlePolicy.toHumanReadableString()));
         }
+        metric.set("nodeFailThrottling", throttle ? 1 : 0, null);
         return throttle;
     }
 

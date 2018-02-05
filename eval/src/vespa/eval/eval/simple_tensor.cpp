@@ -57,14 +57,14 @@ Address select(const Address &a, const Address &b, const IndexList &selector) {
     return result;
 }
 
-size_t get_dimension_size(const ValueType &type, size_t dim_idx) {
+size_t get_dimension_size(const ValueType &type, ValueType::Dimension::size_type dim_idx) {
     if (dim_idx == ValueType::Dimension::npos) {
         return 1;
     }
     return type.dimensions()[dim_idx].size;
 }
 
-size_t get_dimension_index(const Address &addr, size_t dim_idx) {
+size_t get_dimension_index(const Address &addr, ValueType::Dimension::size_type dim_idx) {
     if (dim_idx == ValueType::Dimension::npos) {
         return 0;
     }
@@ -542,8 +542,18 @@ SimpleTensor::SimpleTensor(const ValueType &type_in, Cells cells_in)
               [](const auto &a, const auto &b){ return (a.address < b.address); });
 }
 
+double
+SimpleTensor::as_double() const
+{
+    double sum = 0.0;
+    for (auto &cell: _cells) {
+        sum += cell.value;
+    }
+    return sum;
+}
+
 std::unique_ptr<SimpleTensor>
-SimpleTensor::map(const std::function<double(double)> &function) const
+SimpleTensor::map(map_fun_t function) const
 {
     Cells cells(_cells);
     for (auto &cell: cells) {
@@ -594,42 +604,19 @@ SimpleTensor::rename(const std::vector<vespalib::string> &from, const std::vecto
 std::unique_ptr<SimpleTensor>
 SimpleTensor::create(const TensorSpec &spec)
 {
-    Builder builder(ValueType::from_spec(spec.type()));
+    ValueType my_type = ValueType::from_spec(spec.type());
+    if (my_type.is_error()) {
+        return std::make_unique<SimpleTensor>();
+    }
+    Builder builder(my_type);
     for (const auto &cell: spec.cells()) {
         builder.set(cell.first, cell.second);
     }
     return builder.build();
 }
 
-bool
-SimpleTensor::equal(const SimpleTensor &a, const SimpleTensor &b)
-{
-    if (a.type() != b.type()) {
-        return false;
-    }
-    TypeAnalyzer type_info(a.type(), b.type());
-    View view_a(a, type_info.overlap_a);
-    View view_b(b, type_info.overlap_b);
-    const CellRef *pos_a = view_a.refs_begin();
-    const CellRef *end_a = view_a.refs_end();
-    const CellRef *pos_b = view_b.refs_begin();
-    const CellRef *end_b = view_b.refs_end();
-    ViewMatcher::CrossCompare cmp(view_a.selector(), view_b.selector());
-    while ((pos_a != end_a) && (pos_b != end_b)) {
-        if (cmp.compare(pos_a->get(), pos_b->get()) != ViewMatcher::CrossCompare::Result::EQUAL) {
-            return false;
-        }
-        if (pos_a->get().value != pos_b->get().value) {
-            return false;
-        }
-        ++pos_a;
-        ++pos_b;
-    }
-    return ((pos_a == end_a) && (pos_b == end_b));
-}
-
 std::unique_ptr<SimpleTensor>
-SimpleTensor::join(const SimpleTensor &a, const SimpleTensor &b, const std::function<double(double,double)> &function)
+SimpleTensor::join(const SimpleTensor &a, const SimpleTensor &b, join_fun_t function)
 {
     ValueType result_type = ValueType::join(a.type(), b.type());
     if (result_type.is_error()) {

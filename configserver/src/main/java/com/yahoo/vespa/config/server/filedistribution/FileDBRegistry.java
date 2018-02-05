@@ -4,31 +4,69 @@ package com.yahoo.vespa.config.server.filedistribution;
 import com.yahoo.config.FileReference;
 import com.yahoo.config.application.api.FileRegistry;
 import com.yahoo.net.HostName;
-import com.yahoo.vespa.filedistribution.FileDistributionManager;
-import com.yahoo.config.model.application.provider.FileReferenceCreator;
+import com.yahoo.text.Utf8;
+import net.jpountz.xxhash.XXHashFactory;
 
-import java.util.*;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * @author tonytv
  */
 public class FileDBRegistry implements FileRegistry {
 
-    private final FileDistributionManager manager;
+    private final AddFileInterface manager;
     private List<Entry> entries = new ArrayList<>();
     private final Map<String, FileReference> fileReferenceCache = new HashMap<>();
 
-    public FileDBRegistry(FileDistributionManager manager) {
+    public FileDBRegistry(AddFileInterface manager) {
         this.manager = manager;
+    }
+
+    public synchronized FileReference addFile(String relativePath, FileReference reference) {
+        Optional<FileReference> cachedReference = Optional.ofNullable(fileReferenceCache.get(relativePath));
+        return cachedReference.orElseGet(() -> {
+            FileReference newRef = manager.addFile(relativePath, reference);
+            entries.add(new Entry(relativePath, newRef));
+            fileReferenceCache.put(relativePath, newRef);
+            return newRef;
+        });
+    }
+
+    public synchronized FileReference addUri(String uri, FileReference reference) {
+        String relativePath = uriToRelativeFile(uri);
+        Optional<FileReference> cachedReference = Optional.ofNullable(fileReferenceCache.get(uri));
+        return cachedReference.orElseGet(() -> {
+            FileReference newRef = manager.addUri(uri, relativePath, reference);
+            entries.add(new Entry(uri, newRef));
+            fileReferenceCache.put(uri, newRef);
+            return newRef;
+        });
     }
 
     @Override
     public synchronized FileReference addFile(String relativePath) {
         Optional<FileReference> cachedReference = Optional.ofNullable(fileReferenceCache.get(relativePath));
         return cachedReference.orElseGet(() -> {
-            FileReference newRef = FileReferenceCreator.create(manager.addFile(relativePath));
+            FileReference newRef = manager.addFile(relativePath);
             entries.add(new Entry(relativePath, newRef));
             fileReferenceCache.put(relativePath, newRef);
+            return newRef;
+        });
+    }
+
+    @Override
+    public synchronized FileReference addUri(String uri) {
+        String relativePath = uriToRelativeFile(uri);
+        Optional<FileReference> cachedReference = Optional.ofNullable(fileReferenceCache.get(uri));
+        return cachedReference.orElseGet(() -> {
+            FileReference newRef = manager.addUri(uri, relativePath);
+            entries.add(new Entry(uri, newRef));
+            fileReferenceCache.put(uri, newRef);
             return newRef;
         });
     }
@@ -41,6 +79,18 @@ public class FileDBRegistry implements FileRegistry {
     @Override
     public synchronized List<Entry> export() {
         return entries;
+    }
+
+    private static String uriToRelativeFile(String uri) {
+        String relative = "uri/" + String.valueOf(XXHashFactory.nativeInstance().hash64().hash(ByteBuffer.wrap(Utf8.toBytes(uri)), 0));
+        if (uri.endsWith(".json")) {
+            relative += ".json";
+        } else if (uri.endsWith(".json.lz4")) {
+            relative += ".json.lz4";
+        } else if (uri.endsWith(".lz4")) {
+            relative += ".lz4";
+        }
+        return relative;
     }
 
 }

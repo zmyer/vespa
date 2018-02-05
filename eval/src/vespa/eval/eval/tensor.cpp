@@ -2,6 +2,7 @@
 
 #include "tensor.h"
 #include "tensor_engine.h"
+#include "tensor_spec.h"
 
 namespace vespalib {
 namespace eval {
@@ -9,13 +10,15 @@ namespace eval {
 bool
 operator==(const Tensor &lhs, const Tensor &rhs)
 {
-    return ((&lhs.engine() == &rhs.engine()) && lhs.engine().equal(lhs, rhs));
+    auto lhs_spec = lhs.engine().to_spec(lhs);
+    auto rhs_spec = rhs.engine().to_spec(rhs);
+    return (lhs_spec == rhs_spec);
 }
 
 std::ostream &
 operator<<(std::ostream &out, const Tensor &tensor)
 {
-    out << tensor.engine().to_string(tensor);
+    out << tensor.engine().to_spec(tensor).to_string();
     return out;
 }
 

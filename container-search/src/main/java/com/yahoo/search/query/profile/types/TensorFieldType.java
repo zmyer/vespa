@@ -6,8 +6,6 @@ import com.yahoo.search.query.profile.compiled.CompiledQueryProfileRegistry;
 import com.yahoo.tensor.Tensor;
 import com.yahoo.tensor.TensorType;
 
-import java.util.Optional;
-
 /**
  * A tensor field type in a query profile
  *
@@ -15,23 +13,22 @@ import java.util.Optional;
  */
 public class TensorFieldType extends FieldType {
 
-    // TODO: Require tensor type
-    
-    private final Optional<TensorType> type;
+    private final TensorType type;
 
-    /** Creates a tensor field type with optional information about the kind of tensor this will hold */
-    public TensorFieldType(Optional<TensorType> type) {
+    /** Creates a tensor field type with information about the kind of tensor this will hold */
+    public TensorFieldType(TensorType type) {
         this.type = type;
     }
 
-    /** Returns information about the type of tensor this will hold, or empty to allow any kind of tensor */
-    public Optional<TensorType> type() { return type; }
+    /** Returns information about the type of tensor this will hold */
+    @Override
+    public TensorType asTensorType() { return type; }
 
     @Override
     public Class getValueClass() { return Tensor.class; }
 
     @Override
-    public String stringValue() { return "tensor"; }
+    public String stringValue() { return type.toString(); }
 
     @Override
     public String toString() { return "field type " + stringValue(); }
@@ -42,7 +39,7 @@ public class TensorFieldType extends FieldType {
     @Override
     public Object convertFrom(Object o, QueryProfileRegistry registry) {
         if (o instanceof Tensor) return o;
-        if (o instanceof String) return type.isPresent() ? Tensor.from(type.get(), (String)o) : Tensor.from((String)o);
+        if (o instanceof String) return Tensor.from(type, (String)o);
         return null;
     }
 
@@ -52,9 +49,7 @@ public class TensorFieldType extends FieldType {
     }
 
     public static TensorFieldType fromTypeString(String s) {
-        if (s.equals("tensor")) return genericTensorType;
-        return new TensorFieldType(Optional.of(TensorType.fromSpec(s)));
+        return new TensorFieldType(TensorType.fromSpec(s));
     }
-
 
 }
